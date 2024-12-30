@@ -1,0 +1,207 @@
+package AdaptiveReadaheadCache
+
+import (
+	"fmt"
+	"io"
+	"slices"
+	"sync"
+	"time"
+
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
+)
+
+// AdaptiveReadaheadCache reads sequentially ahead based on current read speed
+type AdaptiveReadaheadCache struct {
+	underlyingResource resource.ReadSeekCloseableResource
+	// Over how much time average speed is calculated
+	cacheAvgSpeedTime time.Duration
+	// How far ahead to read in time
+	cacheTime time.Duration
+	// Maximum amount of readahead bytes
+	cacheMaxSize int64
+	// Only readahead, when cache is below this size
+	cacheLowWater int64
+}
+
+func NewAdaptiveReadaheadCache(underlyingResource resource.ReadSeekCloseableResource, cacheAvgSpeedTime, cacheTime time.Duration, cacheMaxSize, cacheLowWater int64) *AdaptiveReadaheadCache {
+	return &AdaptiveReadaheadCache{
+		underlyingResource: underlyingResource,
+		cacheAvgSpeedTime:  cacheAvgSpeedTime,
+		cacheTime:          cacheAvgSpeedTime,
+		cacheMaxSize:       cacheMaxSize,
+		cacheLowWater:      cacheLowWater,
+	}
+}
+
+type AdaptiveReadaheadCacheReader struct {
+	resource         *AdaptiveReadaheadCache
+	underlyingReader io.ReadSeekCloser
+	index            int64
+	readHistory      []readHistoryEntry
+	cache            []byte
+	mutex            sync.Mutex
+}
+
+type readHistoryEntry struct {
+	bytesRead int64
+	timestamp time.Time
+}
+
+func (r *AdaptiveReadaheadCache) Open() (io.ReadSeekCloser, error) {
+	underlyingReader, err := r.underlyingResource.Open()
+	if err != nil {
+		return nil, err
+	}
+
+	return &AdaptiveReadaheadCacheReader{
+		resource:         r,
+		underlyingReader: underlyingReader,
+		readHistory:      make([]readHistoryEntry, 0, int(r.cacheAvgSpeedTime.Seconds())),
+		cache:            make([]byte, 0, r.cacheLowWater),
+	}, err
+}
+
+func (r *AdaptiveReadaheadCache) Size() (int64, error) {
+	return r.underlyingResource.Size()
+}
+
+func (r *AdaptiveReadaheadCacheReader) Close() (err error) {
+	return r.underlyingReader.Close()
+}
+
+func (r *AdaptiveReadaheadCacheReader) Seek(offset int64, whence int) (newIndex int64, err error) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	newIndex, err = r.underlyingReader.Seek(offset, whence)
+	if err != nil {
+		return -1, err
+	}
+
+	// Check if cache still satisfies cacheMinSize
+	indexDelta := newIndex - r.index
+	if indexDelta > 0 {
+		if int64(len(r.cache))-indexDelta > 0 {
+			// Cut cache to size if part is reuseable
+			r.cache = r.cache[indexDelta:]
+		}
+	} else {
+		// Flush
+		r.flushCache()
+	}
+	go r.readahead()
+
+	r.index = newIndex
+	return
+}
+
+func (r *AdaptiveReadaheadCacheReader) flushCache() {
+	r.readHistory = r.readHistory[:0]
+	r.cache = r.cache[len(r.cache):]
+}
+
+func (r *AdaptiveReadaheadCacheReader) Read(p []byte) (n int, err error) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	// Try to fulfill the read request from the cache
+	n = copy(p, r.cache)
+	//r.cache = r.cache[n:]
+	r.cache = slices.Delete(r.cache, 0, n)
+	r.index += int64(n)
+
+	// Read from underlying resource if there was a cache miss
+	if n < len(p) {
+		var m int
+		m, err = r.underlyingReader.Read(p[n:])
+
+		r.index += int64(m)
+		n += m
+	}
+
+	r.recordRead(int64(n))
+
+	// Trigger readahead asynchronously
+	go r.readahead()
+
+	return n, err
+}
+
+func (r *AdaptiveReadaheadCacheReader) recordRead(bytesRead int64) {
+	now := time.Now()
+	r.readHistory = append(r.readHistory, readHistoryEntry{bytesRead, now})
+
+	// Remove old entries from history
+	cutoff := now.Add(-r.resource.cacheAvgSpeedTime)
+
+	var firstValidIndex int
+	for i, entry := range r.readHistory {
+		if entry.timestamp.After(cutoff) {
+			firstValidIndex = i
+			break
+		}
+	}
+
+	// Reslice to remove all items before firstValidIndex
+	r.readHistory = r.readHistory[firstValidIndex:]
+}
+
+func (r *AdaptiveReadaheadCacheReader) avgSpeed() float64 {
+	var totalBytes int64
+	var earliest, latest time.Time
+
+	if len(r.readHistory) > 0 {
+		earliest = r.readHistory[0].timestamp
+		latest = r.readHistory[len(r.readHistory)-1].timestamp
+
+		for _, entry := range r.readHistory {
+			totalBytes += entry.bytesRead
+		}
+
+		duration := latest.Sub(earliest)
+		durationSecs := duration.Seconds()
+		if duration > 0 {
+			speed := float64(totalBytes) / durationSecs
+			return speed
+		}
+	}
+
+	return 0
+}
+
+func (r *AdaptiveReadaheadCacheReader) readahead() error {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	avgSpeed := r.avgSpeed()
+	readaheadAmount := int64(avgSpeed * r.resource.cacheTime.Seconds())
+
+	if readaheadAmount > r.resource.cacheMaxSize {
+		readaheadAmount = r.resource.cacheMaxSize
+	}
+
+	// Check if the current cache already satisfies the readaheadAmount
+	if readaheadAmount <= int64(len(r.cache)) {
+		return nil
+	}
+
+	// Check if we are above LowWater
+	if r.resource.cacheLowWater < int64(len(r.cache)) {
+		return nil
+	}
+
+	// Get reuseable amount
+	reuseableAmount := len(r.cache)
+
+	// Grow capacity if necessary
+	if cap(r.cache) < int(readaheadAmount) {
+		fmt.Printf("ReadaheadCache | Growing cache %d\t-> %d bytes\n", cap(r.cache), readaheadAmount)
+		r.cache = slices.Grow(r.cache, int(readaheadAmount))
+	}
+
+	// Set to size
+	r.cache = r.cache[:readaheadAmount]
+
+	_, err := io.ReadFull(r.underlyingReader, r.cache[reuseableAmount:])
+	return err
+}
