@@ -18,6 +18,7 @@ type FullCacheResource struct {
 	UnderlyingResource resource.ReadableResource
 	CacheKey           string
 	Cache              cache.CacheInterface[[]byte]
+	cachedSize         int64
 	options            *FullCacheResourceOptions
 }
 
@@ -42,6 +43,7 @@ func NewFullCacheResource(underlyingResource resource.ReadableResource, cacheKey
 		options:            options,
 		CacheKey:           cacheKey,
 		Cache:              Cache,
+		cachedSize:         -1,
 	}
 }
 
@@ -76,6 +78,11 @@ func (r *FullCacheResource) Size() (int64, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
+	// Check if size is cached
+	if r.cachedSize >= 0 {
+		return r.cachedSize, nil
+	}
+
 	if !r.options.SizeAlwaysFromResource {
 		data, err := r.Cache.Get(context.Background(), r.CacheKey)
 		if err == nil {
@@ -83,7 +90,14 @@ func (r *FullCacheResource) Size() (int64, error) {
 		}
 	}
 
-	return r.UnderlyingResource.Size()
+	// Fetching size from the underlying resource
+	size, err := r.UnderlyingResource.Size()
+	if err != nil {
+		return 0, err
+	}
+
+	r.cachedSize = size
+	return size, nil
 }
 
 func (r *FullCacheResourceReader) Close() (err error) {
@@ -124,9 +138,12 @@ func (r *FullCacheResourceReader) Seek(offset int64, whence int) (int64, error) 
 }
 
 func (r *FullCacheResourceReader) Read(p []byte) (int, error) {
-	n := len(p)
-	if n <= 0 {
-		return 0, nil
+	size, err := r.resource.Size()
+	if err != nil {
+		return 0, err
+	}
+	if r.index >= size {
+		return 0, io.EOF
 	}
 
 	mutexMapMutex.Lock()
@@ -159,14 +176,15 @@ func (r *FullCacheResourceReader) Read(p []byte) (int, error) {
 		r.resource.Cache.Set(r.ctx, r.resource.CacheKey, data)
 	}
 
-	n = copy(p, data[r.index:])
+	n := copy(p, data[r.index:])
+	r.index += int64(n)
 
-	// If we copied less, it means there isnt anything else there
-	if n < len(p) {
+	// Update cachedSize on read
+	r.resource.cachedSize = int64(len(data))
+
+	if int(r.index) >= len(data) {
 		err = io.EOF
 	}
-
-	r.index += int64(n)
 
 	return n, err
 }
