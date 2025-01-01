@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"slices"
 	"sync"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
@@ -21,21 +19,18 @@ const (
 // AdaptiveParallelMergerResource is a Resource type which allows combining multiple Resources as if it was one.
 // It reads underlying sources in parallel and can handle their size to be unknown.
 type AdaptiveParallelMergerResource struct {
-	resources  []resource.ReadSeekCloseableResource
-	minReaders int
+	resources []resource.ReadSeekCloseableResource
 }
 
-func NewAdaptiveParallelMergerResource(resources []resource.ReadSeekCloseableResource, minReaders int) *AdaptiveParallelMergerResource {
+func NewAdaptiveParallelMergerResource(resources []resource.ReadSeekCloseableResource) *AdaptiveParallelMergerResource {
 	return &AdaptiveParallelMergerResource{
-		resources:  resources,
-		minReaders: minReaders,
+		resources: resources,
 	}
 }
 
 type AdaptiveParallelMergerResourceReader struct {
 	resource *AdaptiveParallelMergerResource
 	readers  []io.ReadSeekCloser
-	mutexes  []sync.Mutex
 	// Position in data
 	index int64
 	// Active reader index
@@ -54,17 +49,9 @@ func (r *AdaptiveParallelMergerResource) Open() (reader io.ReadSeekCloser, err e
 		}
 	}
 
-	// TODO: DEBUG
-	f, err := os.OpenFile("../../.testfiles/test1-files/c77a091729ff4f02bc2c33da12cabe5c.part01.rar", os.O_RDONLY, os.ModePerm)
-	file = f
-	if err != nil {
-		panic(err)
-	}
-
 	reader = &AdaptiveParallelMergerResourceReader{
 		resource:        r,
 		readers:         readers,
-		mutexes:         make([]sync.Mutex, len(r.resources)),
 		index:           0,
 		readerIndex:     0,
 		readerByteIndex: 0,
@@ -99,12 +86,10 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 	}
 
 	expectedTotalRead := 0
-	actualTotalRead := 0
 
-	readResponseCh := make(chan *readResponse)
-	defer close(readResponseCh)
-
-	readResponses := make([]readResponse, 0, 1)
+	readResponses := make([]*readResponse, 0, 1)
+	readResponsesLock := &sync.Mutex{}
+	readResponsesCond := sync.NewCond(readResponsesLock)
 
 	readCtx, readCtxDone := context.WithCancel(context.Background())
 	defer readCtxDone()
@@ -113,174 +98,123 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 	// Which local index this reader and thus readResponse has
 	readIndex := 0
 	activeReaders := 0
-	currMinReaders := r.resource.minReaders
 
-	debug := 0
+	// Start readers
+	for expectedTotalRead < len(p) && r.readerIndex < len(r.readers) {
+		requiredRead := len(p) - expectedTotalRead
 
-	for actualTotalRead < len(p) {
-		// Start readers
-		//for (actualTotalRead+expectedTotalRead < len(p) || currMinReaders-(len(readResponses)+activeReaders) > 0) && r.readerIndex < len(r.readers) {
-		for actualTotalRead+expectedTotalRead < len(p) && r.readerIndex < len(r.readers) {
-			requiredRead := len(p) - actualTotalRead - expectedTotalRead
-
-			resourceSize, err := r.resource.resources[r.readerIndex].Size()
-			if err != nil {
-				return 0, err
-			}
-
-			resourceSizeLeft := int(resourceSize - r.readerByteIndex)
-			// When size changed after first read, byteIndex can be behind size and the reader is thus exausted
-			if resourceSizeLeft < 0 {
-				r.readerIndex++
-				r.readerByteIndex = 0
-				continue
-			}
-
-			// Expect either full resource or part up to whatever is expected to be needed at this point
-			expectedRead := resourceSizeLeft
-			if requiredRead < expectedRead {
-				expectedRead = requiredRead
-			}
-
-			localReadIndex := readIndex
-			readerIndex := r.readerIndex
-
-			activeReaders++
-			//go r.readWithReader(r.readerIndex, readResponseCh, expectedRead)
-
-			fmt.Printf("%p\t\t[%d] %d \tRead %d bytes\n", r, localReadIndex, readerIndex, expectedRead)
-			group.Go(func() (err error) {
-				r.readWithReader(readCtx, localReadIndex, readerIndex, readResponseCh, expectedRead)
-				return
-			})
-
-			readIndex++
-
-			if expectedRead < resourceSizeLeft {
-				r.readerByteIndex += int64(expectedRead)
-			} else {
-				r.readerIndex++
-				r.readerByteIndex = 0
-			}
-
-			expectedTotalRead += expectedRead
+		resourceSize, err := r.resource.resources[r.readerIndex].Size()
+		if err != nil {
+			return 0, err
 		}
 
-		if debug == 0 {
-			fmt.Printf("ActiveReaders=%d\tfor %.2f MiB\n", activeReaders, float32(len(p))/1024/1024)
-			debug++
+		resourceSizeLeft := int(resourceSize - r.readerByteIndex)
+
+		// Expect either full resource or part up to whatever is expected to be needed at this point
+		expectedRead := resourceSizeLeft
+		if requiredRead < expectedRead {
+			expectedRead = requiredRead
 		}
 
-		// Wait for read responses
-		response := <-readResponseCh
+		localReadIndex := readIndex
+		readerIndex := r.readerIndex
+
+		readResponses = append(readResponses, nil) // Reserve space
+
+		activeReaders++
+
+		// TODO: This only reads up to max. resourceSize, but if thats reported too small, we are missing data; We need to handle this e.g. reading until EOF or len(p)
+		group.Go(func() (err error) {
+			/*select {
+			case <-readCtx.Done():
+				return nil
+			default:
+			}*/
+
+			buf := make([]byte, expectedRead)
+			n, err := r.readers[readerIndex].Read(buf)
+
+			readResponses[localReadIndex] = &readResponse{
+				index:       localReadIndex,
+				readerIndex: readerIndex,
+				buffer:      buf,
+				n:           n,
+				err:         err,
+			}
+			readResponsesCond.Signal() // Signal that a response is ready
+			return
+		})
+
+		readIndex++
+
+		if expectedRead < resourceSizeLeft {
+			r.readerByteIndex += int64(expectedRead)
+		} else {
+			r.readerIndex++
+			r.readerByteIndex = 0
+		}
+
+		expectedTotalRead += expectedRead
+	}
+
+	// Process responses
+	for idx := 0; idx < len(readResponses); idx++ {
+		readResponsesLock.Lock()
+		// Wait for next response to be ready
+		for readResponses[idx] == nil {
+			readResponsesCond.Wait()
+		}
+		response := readResponses[idx]
+		readResponsesLock.Unlock()
+
 		activeReaders--
 
 		if response.err != nil && response.err != io.EOF {
 			return 0, response.err
 		}
 
-		readResponses = append(readResponses, *response)
-
-		expectedRead := len(response.buffer)
+		//expectedRead := len(response.buffer)
 		actualRead := response.n
 
-		if expectedRead != actualRead {
-			fmt.Printf("%p\t\t[%d] %d \tExpected %d bytes\t!= Actual %d bytes \t%s\n", r, response.index, response.readerIndex, expectedRead, actualRead, response.err)
-		} else {
-			fmt.Printf("%p\t\t[%d] %d \tExpected %d bytes\t== Actual %d bytes \t%s\n", r, response.index, response.readerIndex, expectedRead, actualRead, response.err)
-		}
-		if expectedRead != actualRead {
-			// Increase minReaders
-			currMinReaders++
-
-			// In case reader is still current reader and hit EOF, we need to advance
-			if response.readerIndex == r.readerIndex && response.err == io.EOF {
-				r.readerIndex++
-				r.readerByteIndex = 0
-			}
-		}
-
-		expectedTotalRead -= expectedRead
-		actualTotalRead += actualRead
-
-		// If no more readers can be started and all are done, consider operation finished
-		if activeReaders == 0 && r.readerIndex >= len(r.readers) {
-			break
-		}
-	}
-	// Cancel whatever is left
-	readCtxDone()
-
-	return finalizeRead(r, p, readResponses)
-}
-
-type readerCopyAction struct {
-	expected int64
-	actual   int64
-}
-
-func finalizeRead(r *AdaptiveParallelMergerResourceReader, p []byte, readResponses []readResponse) (int, error) {
-	// Sort
-	slices.SortFunc(readResponses, func(a, b readResponse) int {
-		return a.index - b.index
-	})
-
-	// Copy data to p
-	totalRead := 0
-	perReader := make([]readerCopyAction, len(readResponses))
-	for _, response := range readResponses {
+		// Copy data to p
 		if totalRead < len(p) {
-			// Copy offset into p, and max what we have as data
-			copied := copy(p[totalRead:], response.buffer[:response.n])
+			copied := copy(p[totalRead:], response.buffer[:actualRead])
 			totalRead += copied
-
-			// TODO: DEBUG
-			checkErr := r.checkData(response.buffer[:response.n])
-			if checkErr != nil {
-				fmt.Println("Error")
-			}
-
 			r.index += int64(copied)
 			r.readerIndex = response.readerIndex
 
-			perReader[r.readerIndex-readResponses[0].readerIndex].actual += int64(copied)
-			perReader[r.readerIndex-readResponses[0].readerIndex].expected += int64(response.n)
+			if copied < actualRead {
+				// When not all was copied, we filled p, the rest is too much
+				r.readerByteIndex += int64(copied)
+				fmt.Printf("%p\tRead too far, seeking %d\tto %d\n", r, response.readerIndex, r.readerByteIndex)
+				r.readers[response.readerIndex].Seek(r.readerByteIndex, io.SeekStart)
+			}
+		} else {
+			// Filled p, anymore is too much
+			fmt.Printf("%p\tRead too far, seeking %d\tto %d\n", r, response.readerIndex, 0)
+			r.readers[response.readerIndex].Seek(0, io.SeekStart)
 		}
 	}
-	for readerIndexOffset, copyAction := range perReader {
-		readerIndex := readerIndexOffset + readResponses[0].readerIndex
-		//readerIndex := readerIndexOffset + len(readResponses) + 1
-		if copyAction.actual != copyAction.expected {
-			fmt.Printf("Read Reader %d\ttoo far, seeking to %d\n", readerIndex, copyAction.actual)
-			r.readers[readerIndex].Seek(copyAction.actual, io.SeekStart)
 
-			r.readerByteIndex = copyAction.actual
+	// Cancel if any work is left
+	//readCtxDone()
+	// Wait for all goroutines to finish, this should never be the case, but as good practise included
+	group.Wait()
+
+	if len(readResponses) > 0 {
+		lastReadResponse := readResponses[len(readResponses)-1]
+		// When last response was from last reader in batch and hit EOF, we need to advance readers
+		if lastReadResponse.err == io.EOF {
+			r.readerIndex++
+			r.readerByteIndex = 0
+		}
+		// When last response was from last actual reader
+		if lastReadResponse.readerIndex == len(r.readers)-1 && lastReadResponse.err != nil {
+			err = lastReadResponse.err
 		}
 	}
 
-	if r.readerIndex == len(r.readers)-1 && len(readResponses) > 0 {
-		return totalRead, readResponses[len(readResponses)-1].err
-	}
-	return totalRead, nil
-}
-
-func (r *AdaptiveParallelMergerResourceReader) readWithReader(ctx context.Context, index, readerIndex int, responseCh chan *readResponse, readAmount int) {
-	// TODO: Check if reserving buffer should be pooled to save memory alloc overhead
-	buf := make([]byte, readAmount)
-	// Read from underlying reader into slice
-	n, err := r.readers[readerIndex].Read(buf)
-	select {
-	case <-ctx.Done():
-		return
-	default:
-	}
-	responseCh <- &readResponse{
-		index:       index,
-		readerIndex: readerIndex,
-		buffer:      buf,
-		n:           n,
-		err:         err,
-	}
+	return totalRead, err
 }
 
 func (mrmr *AdaptiveParallelMergerResourceReader) Close() (err error) {
@@ -361,36 +295,3 @@ func discardBytes(reader io.Reader, amountToDiscard int64) (totalDiscarded int64
 
 	return
 }
-
-// TODO: ###### DEBUG ######
-var file io.Reader
-
-func (r *AdaptiveParallelMergerResourceReader) checkData(buffer []byte) error {
-	a := buffer
-
-	b := make([]byte, len(a))
-	n, _ := file.Read(b)
-
-	if n != len(a) {
-		return errors.New("length mismatch")
-	}
-
-	if err := compare(a, b); err != nil {
-		return errors.New("Comparison failed: " + err.Error())
-	}
-	return nil
-}
-
-func compare(a, b []byte) error {
-	if len(a) != len(b) {
-		return errors.New("length mismatch")
-	}
-	for i := 0; i < len(a); i++ {
-		if a[i] != b[i] {
-			return fmt.Errorf("mismatch at %d: %s != %s", i, a[i:i+16], b[i:i+16])
-		}
-	}
-	return nil
-}
-
-// TODO: ###### DEBUG ######
