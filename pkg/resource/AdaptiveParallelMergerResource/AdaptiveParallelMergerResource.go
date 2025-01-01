@@ -123,22 +123,43 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 
 		activeReaders++
 
-		// TODO: This only reads up to max. resourceSize, but if thats reported too small, we are missing data; We need to handle this e.g. reading until EOF or len(p)
-		group.Go(func() (err error) {
-			/*select {
-			case <-readCtx.Done():
-				return nil
-			default:
-			}*/
-
+		group.Go(func() (_ error) {
 			buf := make([]byte, expectedRead)
-			n, err := r.readers[readerIndex].Read(buf)
+			totalN, n := 0, 0
+			var err error
+			for {
+				// Check if job is cancelled while before next read
+				select {
+				case <-readCtx.Done():
+					return nil
+				default:
+				}
+
+				n, err = r.readers[readerIndex].Read(buf[totalN:])
+				totalN += n
+
+				// Part reads dont require EOF
+				if expectedRead < resourceSizeLeft {
+					break
+				}
+
+				// When there is no EOF yet and we are below the total read request
+				if err == nil && totalN < len(p) {
+					if totalN == len(buf) {
+						// When we read our buffer full, increase read request by 10%; n < len(buf)-totalN might indicate we did hit EOF, but will only be returned at next read
+						expectedRead = int(float32(expectedRead) * 1.1)
+						buf = append(buf, make([]byte, expectedRead-totalN)...)
+					}
+				} else {
+					break
+				}
+			}
 
 			readResponses[localReadIndex] = &readResponse{
 				index:       localReadIndex,
 				readerIndex: readerIndex,
 				buffer:      buf,
-				n:           n,
+				n:           totalN,
 				err:         err,
 			}
 			readResponsesCond.Signal() // Signal that a response is ready
