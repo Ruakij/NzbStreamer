@@ -10,17 +10,34 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/webdav"
+	"github.com/emersion/go-webdav"
 )
 
 var (
 	ErrReadOnlyFilesystem = fmt.Errorf("read-only filesystem")
-	ErrFileNotFound       = fmt.Errorf("file not found")
+	ErrFileNotFound       = os.ErrNotExist
 )
 
+type Node struct {
+	File     *simpleFile
+	Parent   *Node
+	Children map[string]*Node
+}
+
 type FS struct {
-	files map[string]*simpleFile
-	mu    sync.RWMutex
+	root *Node
+	mu   sync.RWMutex
+}
+
+// simpleFile now also implements os.FileInfo
+type simpleFile struct {
+	node     *Node
+	fs       *FS
+	openable Openable
+	size     int64
+	modTime  time.Time
+	name     string
+	isDir    bool
 }
 
 type Openable interface {
@@ -29,176 +46,243 @@ type Openable interface {
 }
 
 func NewFS() *FS {
-	files := make(map[string]*simpleFile)
+	root := &Node{
+		File:     &simpleFile{name: "/", isDir: true},
+		Children: make(map[string]*Node),
+	}
+	root.File.node = root
 
-	return &FS{
-		files: files,
+	fs := &FS{root: root}
+	root.File.fs = fs
+	return fs
+}
+
+// AddFile adds a new file node to the filesystem, creating necessary directories.
+func (fs *FS) AddFile(path, filename string, modTime time.Time, openable Openable) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	fullPath := filepath.Clean(filepath.Join(path, filename))
+	dirPath := filepath.Dir(fullPath)
+	parentNode, err := fs.ensurePath(dirPath, modTime)
+	if err != nil {
+		return err
+	}
+
+	if _, exists := parentNode.Children[filename]; exists {
+		return fmt.Errorf("file %s already exists", fullPath)
+	}
+
+	newNode := &Node{
+		Parent:   parentNode,
+		Children: make(map[string]*Node),
+	}
+	newNode.File = &simpleFile{
+		fs:       fs,
+		node:     newNode,
+		openable: openable,
+		modTime:  modTime,
+		name:     filename,
+		isDir:    false,
+	}
+	parentNode.Children[filename] = newNode
+	return nil
+}
+
+// RemoveFile removes a file node from the filesystem and cleans up empty directories.
+func (fs *FS) RemoveFile(path string) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	node, err := fs.pathWalker(path)
+	if err != nil {
+		return err
+	}
+
+	delete(node.Parent.Children, node.File.name)
+	fs.cleanupEmptyDirs(node.Parent)
+	return nil
+}
+
+// pathWalker starts from the root and uses relativePathWalker to traverse the tree.
+func (fs *FS) pathWalker(path string) (*Node, error) {
+	return fs.relativePathWalker(fs.root, path)
+}
+
+// relativePathWalker allows traversal starting at a given node and a relative path.
+func (fs *FS) relativePathWalker(startNode *Node, path string) (*Node, error) {
+	if path == "" || path == "/" {
+		return startNode, nil
+	}
+
+	segments := strings.Split(strings.TrimLeft(path, "/"), "/")
+	current := startNode
+	for _, segment := range segments {
+		next, exists := current.Children[segment]
+		if !exists {
+			return nil, ErrFileNotFound
+		}
+		current = next
+	}
+	return current, nil
+}
+
+// ensurePath ensures that the given directory path exists, creating directories as necessary.
+func (fs *FS) ensurePath(dirPath string, modTime time.Time) (*Node, error) {
+	if dirPath == "/" {
+		return fs.root, nil
+	}
+
+	segments := strings.Split(strings.Trim(dirPath, "/"), "/")
+	current := fs.root
+	for _, segment := range segments {
+		if _, exists := current.Children[segment]; !exists {
+			newNode := &Node{
+				Parent:   current,
+				Children: make(map[string]*Node),
+			}
+			newNode.File = &simpleFile{
+				fs:      fs,
+				node:    newNode,
+				name:    segment,
+				isDir:   true,
+				modTime: modTime,
+			}
+			current.Children[segment] = newNode
+		}
+		current = current.Children[segment]
+	}
+	return current, nil
+}
+
+// cleanupEmptyDirs recursively removes empty directories up the tree.
+func (fs *FS) cleanupEmptyDirs(node *Node) {
+	if node == nil || node == fs.root {
+		return
+	}
+
+	if len(node.Children) == 0 && node.File.isDir {
+		parent := node.Parent
+		delete(parent.Children, node.File.name)
+		fs.cleanupEmptyDirs(parent)
 	}
 }
 
-func (fs *FS) Mkdir(ctx context.Context, name string, perm os.FileMode) error {
+func (fs *FS) Mkdir(ctx context.Context, name string) error {
 	return ErrReadOnlyFilesystem
 }
 
-func (fs *FS) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
+// Implement Open from the interface (adjusted to match the signature)
+func (fs *FS) Open(ctx context.Context, name string) (io.ReadCloser, error) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
-	if simpleFile, exists := fs.files[name]; exists {
-		if simpleFile.isDir {
-			return &simpleFileReader{
-				simpleFile: simpleFile,
-				fs:         fs,
-			}, nil
-		}
+	fmt.Printf("Open\t%s\n", name)
 
-		reader, err := simpleFile.openable.Open()
+	node, err := fs.pathWalker(name)
+	if err != nil {
+		return nil, err
+	}
+
+	fileReader := &simpleFileReader{
+		simpleFile: node.File,
+		node:       node,
+		fs:         fs,
+	}
+
+	if !node.File.isDir {
+		reader, err := node.File.openable.Open()
 		if err != nil {
 			return nil, err
 		}
-
-		fileReader := &simpleFileReader{
-			simpleFile: simpleFile,
-			reader:     reader,
-			fs:         fs,
-		}
-		return fileReader, nil
+		fileReader.reader = reader
 	}
-
-	if fs.isDir(name) {
-		// Return a directory without opening a reader
-		return &simpleFileReader{
-			simpleFile: &simpleFile{name: name, isDir: true},
-			fs:         fs,
-		}, nil
-	}
-
-	return nil, ErrFileNotFound
+	return fileReader, nil
 }
 
-func (fs *FS) RemoveAll(ctx context.Context, name string) error {
-	return ErrReadOnlyFilesystem
-}
-
-func (fs *FS) Rename(ctx context.Context, oldName, newName string) error {
-	return ErrReadOnlyFilesystem
-}
-
-func (fs *FS) Stat(ctx context.Context, name string) (os.FileInfo, error) {
+// Implement Stat from the interface
+func (fs *FS) Stat(ctx context.Context, name string) (*webdav.FileInfo, error) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
 	fmt.Printf("Stat\t%s\n", name)
 
-	if f, exists := fs.files[name]; exists {
-		return f, nil
-	}
-
-	if fs.isDir(name) {
-		return &simpleFile{name: name, isDir: true}, nil
-	}
-
-	return nil, ErrFileNotFound
-}
-
-func (fs *FS) AddFile(path, filename string, openable Openable) error {
-	fullPath := filepath.Join(path, filename)
-
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
-	// Add necessary directories
-	fs.addDirectory(path)
-
-	size, err := openable.Size()
+	node, err := fs.pathWalker(name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// Add the actual file
-	fs.files[fullPath] = &simpleFile{
-		openable: openable,
-		size:     size,
-		modTime:  time.Now(),
-		name:     fullPath,
-		isDir:    false,
-	}
-
-	return nil
+	return &webdav.FileInfo{
+		Path:     name,
+		Size:     node.File.Size(),
+		ModTime:  node.File.ModTime(),
+		IsDir:    node.File.IsDir(),
+		MIMEType: "application/octet-stream",
+	}, nil
 }
 
-func (fs *FS) RemoveFile(path string) error {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
+// Implement ReadDir from the interface
+func (fs *FS) ReadDir(ctx context.Context, name string, recursive bool) ([]webdav.FileInfo, error) {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
 
-	if _, exists := fs.files[path]; !exists {
-		return ErrFileNotFound
+	node, err := fs.pathWalker(name)
+	if err != nil {
+		return nil, err
 	}
 
-	delete(fs.files, path)
-
-	// Remove empty directories
-	// Walk up the directory structure and remove any empty directories
-	dir := filepath.Dir(path)
-	for dir != "." && dir != string(filepath.Separator) {
-		if fs.isDirectoryEmpty(dir) {
-			delete(fs.files, dir)
-			dir = filepath.Dir(dir)
-		} else {
-			break
-		}
+	if !node.File.isDir {
+		return nil, fmt.Errorf("%s is not a directory", node.File.name)
 	}
 
-	return nil
-}
+	var entries []webdav.FileInfo
+	for _, childNode := range node.Children {
+		entries = append(entries, webdav.FileInfo{
+			Path:    filepath.Join(name, childNode.File.Name()),
+			Size:    childNode.File.Size(),
+			ModTime: childNode.File.ModTime(),
+			IsDir:   childNode.File.IsDir(),
+		})
 
-func (fs *FS) addDirectory(path string) {
-	// Ensure all directories in the path exist
-	currentPath := ""
-	for _, dir := range strings.Split(path, string(filepath.Separator)) {
-		if dir == "" {
-			continue
-		}
-		currentPath = filepath.Join(currentPath, dir)
-		if _, exists := fs.files[currentPath]; !exists {
-			fs.files[currentPath] = &simpleFile{
-				isDir: true,
-				name:  currentPath,
+		if recursive && childNode.File.isDir {
+			childEntries, err := fs.ReadDir(ctx, filepath.Join(name, childNode.File.Name()), true)
+			if err != nil {
+				return nil, err
 			}
+			entries = append(entries, childEntries...)
 		}
 	}
+	return entries, nil
 }
 
-func (fs *FS) isDirectoryEmpty(path string) bool {
-	for p, file := range fs.files {
-		if file.isDir {
-			continue
-		}
-		if strings.HasPrefix(p, filepath.Join(path, string(filepath.Separator))) {
-			return false
-		}
-	}
-	return true
+// Implement Create from the interface — note that it's read-only, hence no-op
+func (fs *FS) Create(ctx context.Context, name string, body io.ReadCloser) (*webdav.FileInfo, bool, error) {
+	return nil, false, ErrReadOnlyFilesystem
 }
 
-func (fs *FS) isDir(path string) bool {
-	if !strings.HasSuffix(path, "/") {
-		path += "/"
-	}
-	if path == "/" {
-		return true
-	}
-	for filePath := range fs.files {
-		if strings.HasPrefix(filePath, path) {
-			return true
-		}
-	}
-	return false
+// Implement RemoveAll from the interface as no-op because it's read-only
+func (fs *FS) RemoveAll(ctx context.Context, name string) error {
+	return ErrReadOnlyFilesystem
 }
 
+// Implement Copy from the interface as no-op because it's read-only
+func (fs *FS) Copy(ctx context.Context, name, dest string, options *webdav.CopyOptions) (bool, error) {
+	return false, ErrReadOnlyFilesystem
+}
+
+// Implement Move from the interface as no-op because it's read-only
+func (fs *FS) Move(ctx context.Context, name, dest string, options *webdav.MoveOptions) (bool, error) {
+	return false, ErrReadOnlyFilesystem
+}
+
+// AddFile and RemoveFile remain unchanged
+// pathWalker, relativePathWalker, ensurePath remain unchanged
+
+// Implement simpleFileReader to accommodate new functionality
 type simpleFileReader struct {
 	simpleFile *simpleFile
 	reader     io.ReadSeekCloser
+	node       *Node
 	fs         *FS
 }
 
@@ -241,34 +325,14 @@ func (sf *simpleFileReader) Readdir(count int) ([]os.FileInfo, error) {
 	sf.fs.mu.RLock()
 	defer sf.fs.mu.RUnlock()
 
-	if !sf.simpleFile.IsDir() {
-		return nil, fmt.Errorf("%s is not a directory", sf.simpleFile.Name())
+	if !sf.simpleFile.isDir {
+		return nil, fmt.Errorf("%s is not a directory", sf.simpleFile.name)
 	}
 
-	prefix := sf.simpleFile.Name()
-	if !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
-	}
+	var entries []os.FileInfo
 
-	entries := make([]os.FileInfo, 0)
-	seen := make(map[string]struct{})
-
-	for filePath, f := range sf.fs.files {
-		if strings.HasPrefix(filePath, prefix) {
-			relPath := strings.TrimPrefix(filePath, prefix)
-			if parts := strings.SplitN(relPath, "/", 2); len(parts) == 1 {
-				// This entry is in the current directory
-				name := parts[0]
-				if _, exists := seen[name]; !exists {
-					seen[name] = struct{}{}
-					entry := &simpleFile{
-						name:  filepath.Join(prefix, name),
-						isDir: f.isDir,
-					}
-					entries = append(entries, entry)
-				}
-			}
-		}
+	for _, childNode := range sf.node.Children {
+		entries = append(entries, childNode.File)
 	}
 
 	if count > 0 && len(entries) > count {
@@ -281,14 +345,6 @@ func (sf *simpleFileReader) Stat() (os.FileInfo, error) {
 	return sf.simpleFile, nil
 }
 
-type simpleFile struct {
-	openable Openable
-	size     int64
-	modTime  time.Time
-	name     string
-	isDir    bool
-}
-
 func (sf *simpleFile) Name() string {
 	return sf.name
 }
@@ -297,7 +353,8 @@ func (sf *simpleFile) Size() int64 {
 	if sf.isDir {
 		return 0
 	}
-	return sf.size
+	size, _ := sf.openable.Size()
+	return size
 }
 
 func (sf *simpleFile) Mode() os.FileMode {
