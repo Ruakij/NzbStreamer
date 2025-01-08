@@ -62,7 +62,7 @@ const (
 
 var (
 	filesystem   *SimpleWebdavFilesystem.FS = SimpleWebdavFilesystem.NewFS()
-	segmentCache cache.CacheInterface[[]byte]
+	segmentCache *diskCache.Cache
 )
 
 func main() {
@@ -73,7 +73,7 @@ func main() {
 	var err error = nil
 
 	// Setup nntpClient
-	nntpClient := setupNntpClient(usenetHost, usenetPort, usenetTls, usenetUser, usenetPass, usenetMaxConn)
+	nntpClient := nntpClient.SetupNntpClient(usenetHost, usenetPort, usenetTls, usenetUser, usenetPass, usenetMaxConn)
 
 	// Setup cache
 	segmentCache, err = diskCache.NewCache(&diskCache.CacheOptions{
