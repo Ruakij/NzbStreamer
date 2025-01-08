@@ -20,6 +20,12 @@ func prefixErrors(prefix string, errors []EncapsulatedError) []EncapsulatedError
 }
 
 func (nzb *NzbData) CheckPlausability() (warnings []EncapsulatedError, errors []EncapsulatedError) {
+	if nzb.MetaName == "" {
+		errors = append(errors, EncapsulatedError{
+			error: fmt.Errorf("missing Meta.Name"),
+		})
+	}
+
 	for fileIndex, file := range nzb.Files {
 		fileWarnings, fileErrors := file.CheckPlausability()
 		warnings = append(warnings, prefixErrors(fmt.Sprintf("Segment[%d]: ", fileIndex), fileWarnings)...)

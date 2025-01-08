@@ -43,6 +43,13 @@ func ParseNzb(inputStream io.Reader) (*NzbData, error) {
 		}
 	}
 
+	// Handle special meta keys
+	if _, ok := nzb.Meta["Name"]; !ok {
+		// If Name is not set in meta, try to guess it via file
+		nzb.Meta["Name"] = getBaseFilename(nzb.Files[0].Filename)
+	}
+	nzb.MetaName = nzb.Meta["Name"]
+
 	return &nzb, nil
 }
 
@@ -86,4 +93,10 @@ func getRegexMatchOrDefault(match []string, index int, defaultValue string) stri
 		return match[index]
 	}
 	return defaultValue
+}
+
+var filenameExtensionRegexp *regexp.Regexp = regexp.MustCompile(`(\.([\w\-+\[\]()]{1,10}))+$`)
+
+func getBaseFilename(filename string) string {
+	return filenameExtensionRegexp.ReplaceAllString(filename, "")
 }

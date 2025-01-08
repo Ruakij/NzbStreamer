@@ -29,9 +29,10 @@ type Segment struct {
 
 // NzbData represents the parsed NzbData structure.
 type NzbData struct {
-	Meta    map[string]string `xml:"-"`
-	RawMeta []metadataEntry   `xml:"head>meta"`
-	Files   []File            `xml:"file"`
+	Meta     map[string]string `xml:"-"`
+	MetaName string            `xml:"-"`
+	RawMeta  []metadataEntry   `xml:"head>meta"`
+	Files    []File            `xml:"file"`
 }
 
 // Internal XML Metadata entries
