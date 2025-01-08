@@ -25,11 +25,16 @@ type NzbPostResourceReader struct {
 	fetchOnce  sync.Once
 }
 
-func (m *NzbPostResource) Open() (io.Reader, error) {
+func (m *NzbPostResource) Open() (io.ReadCloser, error) {
 	return &NzbPostResourceReader{
 		resource: m,
 		index:    0,
 	}, nil
+}
+
+func (r *NzbPostResourceReader) Close() (err error) {
+	r.dataReader = nil
+	return
 }
 
 func (r *NzbPostResource) Size() (int64, error) {

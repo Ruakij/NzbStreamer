@@ -48,7 +48,7 @@ func BuildFileResourceFromNzbFile(nzbFiles nzbParser.File, cache *diskCache.Cach
 	return AdaptiveParallelMergerResource.NewAdaptiveParallelMergerResource(cachedSegmentResources, 0)
 }
 
-func BuildResourceFromNzbSegment(nzbSegment *nzbParser.Segment, groups string, nntpClient *nntp.Client) resource.ReadableResource {
+func BuildResourceFromNzbSegment(nzbSegment *nzbParser.Segment, groups string, nntpClient *nntp.Client) resource.ReadCloseableResource {
 	return &NzbPostResource.NzbPostResource{
 		Id:         nzbSegment.Id,
 		Group:      groups,

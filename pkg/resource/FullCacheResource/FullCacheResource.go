@@ -15,7 +15,7 @@ var mutexMap map[string]*sync.Mutex = make(map[string]*sync.Mutex)
 
 // FullCacheResource caches underlying Record by fully reading its content into cache
 type FullCacheResource struct {
-	UnderlyingResource resource.ReadableResource
+	UnderlyingResource       resource.ReadCloseableResource
 	CacheKey           string
 	Cache              *diskCache.Cache
 	cachedSize         int64
@@ -29,7 +29,7 @@ type FullCacheResourceOptions struct {
 	SizeAlwaysFromResource bool
 }
 
-func NewFullCacheResource(underlyingResource resource.ReadableResource, cacheKey string, Cache cache.CacheInterface[[]byte], options *FullCacheResourceOptions) *FullCacheResource {
+func NewFullCacheResource(underlyingResource resource.ReadCloseableResource, cacheKey string, Cache *diskCache.Cache, options *FullCacheResourceOptions) *FullCacheResource {
 	// Create cache-keyed mutex if not exists
 	mutexMapMutex.Lock()
 	_, exists := mutexMap[cacheKey]
@@ -49,7 +49,7 @@ func NewFullCacheResource(underlyingResource resource.ReadableResource, cacheKey
 
 type FullCacheResourceReader struct {
 	resource         *FullCacheResource
-	underlyingReader io.Reader
+	underlyingReader io.ReadCloser
 	index            int64
 	ctx              context.Context
 	ctx_cancel       context.CancelFunc
@@ -102,6 +102,9 @@ func (r *FullCacheResource) Size() (int64, error) {
 
 func (r *FullCacheResourceReader) Close() (err error) {
 	r.ctx_cancel()
+	if r.underlyingReader != nil {
+		err = r.underlyingReader.Close()
+	}
 	return
 }
 
@@ -159,6 +162,12 @@ func (r *FullCacheResourceReader) Read(p []byte) (int, error) {
 		if err != nil {
 			return int(n), err
 		}
+		// Free resources, we wont need it anymore
+		if err := r.underlyingReader.Close(); err != nil {
+			return 0, err
+		}
+		r.underlyingReader = nil
+
 		// Size plausability check
 		if r.resource.options.CheckSizeMismatch {
 			size, err := r.resource.Size()
