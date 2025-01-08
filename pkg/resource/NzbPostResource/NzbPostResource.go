@@ -3,7 +3,6 @@ package NzbPostResource
 import (
 	"bytes"
 	"io"
-	"sync"
 
 	"astuart.co/nntp"
 	"github.com/chrisfarms/yenc"
@@ -11,18 +10,18 @@ import (
 
 // NzbPostResource allows reading the post-content from a Newsserver
 type NzbPostResource struct {
-	Id         string
-	Group      string
-	Encoding   string
-	SizeHint   int64
-	NntpClient *nntp.Client
+	Id            string
+	Group         string
+	Encoding      string
+	SizeHint      int64
+	SizeHintExact bool
+	NntpClient    *nntp.Client
 }
 
 type NzbPostResourceReader struct {
 	resource   *NzbPostResource
 	dataReader io.Reader
 	index      int
-	fetchOnce  sync.Once
 }
 
 func (m *NzbPostResource) Open() (io.ReadCloser, error) {
@@ -39,6 +38,10 @@ func (r *NzbPostResourceReader) Close() (err error) {
 
 func (r *NzbPostResource) Size() (int64, error) {
 	return r.SizeHint, nil
+}
+
+func (r *NzbPostResource) IsSizeAccurate() bool {
+	return r.SizeHintExact
 }
 
 func (r *NzbPostResourceReader) Read(p []byte) (n int, err error) {
@@ -72,9 +75,10 @@ func (r *NzbPostResourceReader) loadPostFromServer() (err error) {
 		return
 	}
 
-	// Plausability checks
+	// Update size if differs
 	if part.Size != r.resource.SizeHint {
 		r.resource.SizeHint = part.Size
+		r.resource.SizeHintExact = true
 	}
 
 	r.dataReader = bytes.NewReader(part.Body)

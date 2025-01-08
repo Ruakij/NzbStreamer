@@ -26,3 +26,7 @@ type ReadSeekCloseableResource interface {
 	Open() (io.ReadSeekCloser, error)
 	Size() (int64, error)
 }
+
+type SizeAccurateResource interface {
+	IsSizeAccurate() bool
+}

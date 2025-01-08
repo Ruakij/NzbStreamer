@@ -16,10 +16,12 @@ var mutexMap map[string]*sync.Mutex = make(map[string]*sync.Mutex)
 // FullCacheResource caches underlying Record by fully reading its content into cache
 type FullCacheResource struct {
 	UnderlyingResource       resource.ReadCloseableResource
-	CacheKey           string
-	Cache              *diskCache.Cache
-	cachedSize         int64
-	options            *FullCacheResourceOptions
+	CacheKey                 string
+	Cache                    *diskCache.Cache
+	cachedSize               int64
+	cachedSizeAccurate       bool
+	cachedSizeAccurateCached bool
+	options                  *FullCacheResourceOptions
 }
 
 type FullCacheResourceOptions struct {
@@ -86,7 +88,10 @@ func (r *FullCacheResource) Size() (int64, error) {
 	if !r.options.SizeAlwaysFromResource {
 		exists, header := r.Cache.Exists(r.CacheKey)
 		if exists {
-			return header.Size, nil
+			r.cachedSize = header.Size
+			r.cachedSizeAccurateCached = true
+			r.cachedSizeAccurate = true
+			return r.cachedSize, nil
 		}
 	}
 
@@ -98,6 +103,41 @@ func (r *FullCacheResource) Size() (int64, error) {
 
 	r.cachedSize = size
 	return size, nil
+}
+
+// IsSizeAccurate checks if the underlying reader supports accurate size reporting.
+func (r *FullCacheResource) IsSizeAccurate() bool {
+	mutexMapMutex.Lock()
+	mu, _ := mutexMap[r.CacheKey]
+	mutexMapMutex.Unlock()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	sizeAccurateResource, ok := r.UnderlyingResource.(resource.SizeAccurateResource)
+	if !ok {
+		// If it doesnt support it, default to true
+		return true
+	}
+
+	if r.cachedSizeAccurateCached {
+		return r.cachedSizeAccurate
+	}
+
+	if !r.options.SizeAlwaysFromResource {
+		exists, header := r.Cache.Exists(r.CacheKey)
+		if exists {
+			r.cachedSize = header.Size
+			r.cachedSizeAccurateCached = true
+			r.cachedSizeAccurate = true
+			return r.cachedSizeAccurate
+		}
+	}
+
+	// Get from underlying
+	r.cachedSizeAccurate = sizeAccurateResource.IsSizeAccurate()
+	r.cachedSizeAccurateCached = true
+	return r.cachedSizeAccurate
 }
 
 func (r *FullCacheResourceReader) Close() (err error) {
@@ -195,6 +235,8 @@ func (r *FullCacheResourceReader) Read(p []byte) (int, error) {
 
 	// Update cachedSize on read
 	r.resource.cachedSize = header.Size
+	r.resource.cachedSizeAccurate = true
+	r.resource.cachedSizeAccurateCached = true
 
 	if r.index >= header.Size {
 		err = io.EOF

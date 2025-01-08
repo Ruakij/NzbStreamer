@@ -49,10 +49,18 @@ func BuildFileResourceFromNzbFile(nzbFiles nzbParser.File, cache *diskCache.Cach
 }
 
 func BuildResourceFromNzbSegment(nzbSegment *nzbParser.Segment, groups string, nntpClient *nntp.Client) resource.ReadCloseableResource {
+	// Try to get probable size
+	size := GetProbableKnownSegmentSize(nzbSegment.BytesHint)
+	sizeExact := (size > 0)
+	if !sizeExact {
+		// Otherwise estimate segment-size (if its not a common size, its probably the yEnc-size, which is slightly bigger)
+		size = GetEstimatedSegmentSize(nzbSegment.BytesHint)
+	}
 	return &NzbPostResource.NzbPostResource{
-		Id:         nzbSegment.Id,
-		Group:      groups,
-		SizeHint:   int64(nzbSegment.BytesHint),
-		NntpClient: nntpClient,
+		Id:            nzbSegment.Id,
+		Group:         groups,
+		SizeHint:      int64(size),
+		SizeHintExact: sizeExact,
+		NntpClient:    nntpClient,
 	}
 }
