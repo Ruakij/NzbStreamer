@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-var filenameExtensionRegexp *regexp.Regexp = regexp.MustCompile(`(\.([\w\-+\[\]()]{1,10}))+$`)
-
 // var partNumberRegexp *regexp.Regexp = regexp.MustCompile(`([.\-_][\-_\w]{0,8})?\d{2,4}[\-_]?`)
 var partNumberRegexp *regexp.Regexp = regexp.MustCompile(`([.\-_])?\d{2,4}[\-_]?`)
 
@@ -15,7 +13,7 @@ func GroupPartFilenames(filenames []string) map[string][]string {
 	groupedFiles := make(map[string][]string, 1)
 
 	for _, filename := range filenames {
-		basename := filenameExtensionRegexp.ReplaceAllString(filename, "")
+		basename := GetBaseFilename(filename)
 		extension, _ := strings.CutPrefix(filename, basename)
 
 		extensionWithoutPartNumbers := partNumberRegexp.ReplaceAllString(extension, "")
