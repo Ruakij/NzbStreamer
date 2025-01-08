@@ -162,38 +162,16 @@ func (r *RarFileResourceReader) Seek(offset int64, whence int) (newIndex int64, 
 	}
 
 	// Skip forwards
-	n, err := discardBytes(r.rarReader, int(newIndex-r.index))
+	n, err := io.CopyN(io.Discard, r.rarReader, newIndex-r.index)
 	if err != nil {
 		return 0, err
 	}
-	if n != int(newIndex-r.index) {
+	if n != newIndex-r.index {
 		return 0, io.ErrUnexpectedEOF
 	}
 
 	r.index = newIndex
 	return r.index, nil
-}
-
-func discardBytes(reader io.Reader, amountToDiscard int) (totalDiscarded int, err error) {
-	bufferSize := 1 * 1024 * 1024
-	buf := make([]byte, bufferSize)
-	var n int
-
-	for totalDiscarded < amountToDiscard {
-		bytesToRead := bufferSize
-		if amountToDiscard-totalDiscarded < bufferSize {
-			bytesToRead = amountToDiscard - totalDiscarded
-		}
-
-		n, err = io.ReadFull(reader, buf[:bytesToRead])
-		totalDiscarded += n
-
-		if err != nil {
-			return
-		}
-	}
-
-	return
 }
 
 func SkipToFile(reader *rardecode.Reader, filename string) (fileheader *rardecode.FileHeader, err error) {

@@ -348,7 +348,7 @@ func seekThroughReaders(r *AdaptiveParallelMergerResourceReader, remaining int64
 			}
 		} else {
 			// If current reader size is not accurate, use a utility to discard bytes.
-			consumed, err := discardBytes(currentReader, remainingBytes)
+			consumed, err := io.CopyN(io.Discard, currentReader, remainingBytes)
 			if err != nil && err != io.EOF {
 				return err
 			}
@@ -369,26 +369,4 @@ func seekThroughReaders(r *AdaptiveParallelMergerResourceReader, remaining int64
 	}
 	// If we exit the loop, it means we've processed all readers or there's no more to seek.
 	return nil
-}
-
-func discardBytes(reader io.Reader, amountToDiscard int64) (totalDiscarded int64, err error) {
-	bufferSize := 1 * 1024 * 1024
-	buf := make([]byte, bufferSize)
-	var n int
-
-	for totalDiscarded < amountToDiscard {
-		bytesToRead := bufferSize
-		if amountToDiscard-totalDiscarded < int64(bufferSize) {
-			bytesToRead = int(amountToDiscard - totalDiscarded)
-		}
-
-		n, err = reader.Read(buf[:bytesToRead])
-		totalDiscarded += int64(n)
-
-		if err != nil {
-			return
-		}
-	}
-
-	return
 }
