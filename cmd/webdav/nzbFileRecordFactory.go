@@ -4,16 +4,16 @@ import (
 	"slices"
 
 	"astuart.co/nntp"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskCache"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbParser"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/AdaptiveParallelMergerResource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/FullCacheResource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/NzbPostResource"
-	"github.com/eko/gocache/lib/v4/cache"
 )
 
-func BuildNamedFileResourcesFromNzb(nzbData *nzbParser.NzbData, cache cache.CacheInterface[[]byte], nntpClient *nntp.Client) map[string]resource.ReadSeekCloseableResource {
+func BuildNamedFileResourcesFromNzb(nzbData *nzbParser.NzbData, cache *diskCache.Cache, nntpClient *nntp.Client) map[string]resource.ReadSeekCloseableResource {
 	fileResources := make(map[string]resource.ReadSeekCloseableResource, len(nzbData.Files))
 
 	for _, file := range nzbData.Files {
@@ -23,7 +23,7 @@ func BuildNamedFileResourcesFromNzb(nzbData *nzbParser.NzbData, cache cache.Cach
 	return fileResources
 }
 
-func BuildFileResourceFromNzbFile(nzbFiles nzbParser.File, cache cache.CacheInterface[[]byte], nntpClient *nntp.Client) resource.ReadSeekCloseableResource {
+func BuildFileResourceFromNzbFile(nzbFiles nzbParser.File, cache *diskCache.Cache, nntpClient *nntp.Client) resource.ReadSeekCloseableResource {
 	totalSegments := len(nzbFiles.Segments)
 	cachedSegmentResources := make([]resource.ReadSeekCloseableResource, 0, totalSegments)
 

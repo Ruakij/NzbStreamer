@@ -8,14 +8,12 @@ import (
 
 	"astuart.co/nntp"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/SimpleWebdavFilesystem"
-	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskvGocacheWrapper"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskCache"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/filenameOps"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbParser"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/AdaptiveReadaheadCache"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/RarFileResource"
-	"github.com/eko/gocache/lib/v4/cache"
-	"github.com/peterbourgon/diskv/v3"
 
 	"net/http"
 	_ "net/http/pprof"
@@ -24,9 +22,40 @@ import (
 const (
 	usenetHost    string = ""
 	usenetPort    int    = 563
+	usenetTls     bool   = true
 	usenetUser    string = ""
 	usenetPass    string = ""
 	usenetMaxConn int    = 20
+)
+
+const (
+	webdavAdress string = ":8080"
+)
+
+const (
+	CacheLocation string = "../../.cache"
+	CacheMaxSize  int    = 20 * 1024 * 1024 * 1024
+)
+
+const (
+	// Over how much time average speed is calculated
+	AdaptiveReadaheadCacheAvgSpeedTime time.Duration = 2 * time.Second
+	// How far ahead to read in time
+	AdaptiveReadaheadCacheTime time.Duration = 2 * time.Second
+	// Lowest expected speed					Can help at beginning speeding up
+	AdaptiveReadaheadCacheMinSize int = 512 * 1024
+	// Low-Buffer (When to load more data)		Helps with continous data-flow
+	AdaptiveReadaheadCacheLowBuffer int = 1 * 1024 * 1024
+	// Max expected speed + Low-Buffer			Max speed per iteration
+	AdaptiveReadaheadCacheMaxSize int = 16 * 1024 * 1024
+)
+
+const (
+	FilesystemDisplayExtractedContainers bool = false
+)
+
+const (
+	ReplaceBaseFilenameWithNzbBelowFuzzyThreshold float32 = 0.2
 )
 
 var (
@@ -42,11 +71,13 @@ func main() {
 	var err error = nil
 
 	// Setup nntpClient
-	nntpClient := setupNntpClient(usenetHost, usenetPort, true, usenetUser, usenetPass, usenetMaxConn)
+	nntpClient := setupNntpClient(usenetHost, usenetPort, usenetTls, usenetUser, usenetPass, usenetMaxConn)
 
 	// Setup cache
-	segmentCache, err = diskvGocacheWrapper.NewDiskvCache[[]byte](diskv.Options{
-		BasePath: "../../.cache",
+	segmentCache, err = diskCache.NewCache(&diskCache.CacheOptions{
+		CacheDir:             CacheLocation,
+		MaxSize:              int64(CacheMaxSize),
+		MaxSizeEvictBlocking: false,
 	})
 	if err != nil {
 		panic(err)
@@ -103,7 +134,7 @@ func loadNzbFile(path string) (*nzbParser.NzbData, error) {
 	return nzbData, nil
 }
 
-func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.NzbData, cache cache.CacheInterface[[]byte], nntpClient *nntp.Client) (err error) {
+func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.NzbData, cache *diskCache.Cache, nntpClient *nntp.Client) (err error) {
 	namedFileResources := BuildNamedFileResourcesFromNzb(nzbData, cache, nntpClient)
 
 	/*

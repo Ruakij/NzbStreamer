@@ -6,8 +6,8 @@ import (
 	"io"
 	"sync"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskCache"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
-	"github.com/eko/gocache/lib/v4/cache"
 )
 
 var mutexMapMutex sync.Mutex = sync.Mutex{}
@@ -17,7 +17,7 @@ var mutexMap map[string]*sync.Mutex = make(map[string]*sync.Mutex)
 type FullCacheResource struct {
 	UnderlyingResource resource.ReadableResource
 	CacheKey           string
-	Cache              cache.CacheInterface[[]byte]
+	Cache              *diskCache.Cache
 	cachedSize         int64
 	options            *FullCacheResourceOptions
 }
@@ -84,9 +84,9 @@ func (r *FullCacheResource) Size() (int64, error) {
 	}
 
 	if !r.options.SizeAlwaysFromResource {
-		data, err := r.Cache.Get(context.Background(), r.CacheKey)
-		if err == nil {
-			return int64(len(data)), nil
+		exists, header := r.Cache.Exists(r.CacheKey)
+		if exists {
+			return header.Size, nil
 		}
 	}
 
@@ -153,14 +153,12 @@ func (r *FullCacheResourceReader) Read(p []byte) (int, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	data, err := r.resource.Cache.Get(r.ctx, r.resource.CacheKey)
+	reader, header, err := r.resource.Cache.GetWithReader(r.resource.CacheKey)
 	if err != nil {
-		data, err = io.ReadAll(r.underlyingReader)
+		n, err := r.resource.Cache.SetWithReader(r.resource.CacheKey, r.underlyingReader)
 		if err != nil {
-			return 0, err
+			return int(n), err
 		}
-
-		sizeRead := int64(len(data))
 		// Size plausability check
 		if r.resource.options.CheckSizeMismatch {
 			size, err := r.resource.Size()
@@ -168,21 +166,28 @@ func (r *FullCacheResourceReader) Read(p []byte) (int, error) {
 				return int(size), err
 			}
 
-			if sizeRead != size {
-				return int(size), fmt.Errorf("sizeData=%d and Size()=%d mismatch", sizeRead, size)
+			if n != size {
+				return int(size), fmt.Errorf("sizeData=%d and Size()=%d mismatch", n, size)
 			}
 		}
 
-		r.resource.Cache.Set(r.ctx, r.resource.CacheKey, data)
+		reader, header, _ = r.resource.Cache.GetWithReader(r.resource.CacheKey)
 	}
 
-	n := copy(p, data[r.index:])
+	defer reader.Close()
+
+	_, err = reader.Seek(r.index, io.SeekStart)
+	if err != nil {
+		return 0, err
+	}
+
+	n, err := reader.Read(p)
 	r.index += int64(n)
 
 	// Update cachedSize on read
-	r.resource.cachedSize = int64(len(data))
+	r.resource.cachedSize = header.Size
 
-	if int(r.index) >= len(data) {
+	if r.index >= header.Size {
 		err = io.EOF
 	}
 
