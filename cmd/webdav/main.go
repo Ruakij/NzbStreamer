@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -66,10 +67,6 @@ var (
 )
 
 func main() {
-	go func() {
-		http.ListenAndServe("localhost:6060", nil)
-	}()
-
 	var err error = nil
 
 	// Setup nntpClient
@@ -85,16 +82,37 @@ func main() {
 		panic(err)
 	}
 
-	// Load example nzb
-	nzbData, err := loadNzbFile("../../.testfiles/test1_mod.nzb")
+	nzbWatchFolder := "../../.testfiles/nzbs"
+	files, err := os.ReadDir(nzbWatchFolder)
 	if err != nil {
 		panic(err)
 	}
+	nzbFiles := make([]string, 0, len(files))
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		name := file.Name()
+		if !strings.HasSuffix(name, ".nzb") {
+			continue
+		}
+		p := path.Join(nzbWatchFolder, name)
+		nzbFiles = append(nzbFiles, p)
+	}
 
-	// Add as files
-	err = createResources(filesystem, nzbData, segmentCache, nntpClient)
-	if err != nil {
-		panic(err)
+	fmt.Printf("Loading %d Nzb-Files\n", len(nzbFiles))
+	for _, nzbFile := range nzbFiles {
+		// Load file
+		nzbData, err := loadNzbFile(nzbFile)
+		if err != nil {
+			panic(err)
+		}
+
+		// Add as files
+		err = createResources(filesystem, nzbData, segmentCache, nntpClient)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	// Serve webdav
@@ -158,18 +176,7 @@ func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.N
 			continue
 		}
 
-		for _, filename := range filenames {
-			resource := namedFileResources[filename]
-			// Lowest expected speed					Can help at beginning speeding up
-			minCache := 512 * 1024
-			// Low-Buffer (When to load more data)		Helps with continous data-flow; too low and flow can stutter; too high and more ressources can be wasted
-			lowBuffer := 4 * 1024 * 1024
-			// Max expected speed + Low-Buffer			Max speed per iteration
-			maxCache := 768000*20 + lowBuffer
-			// Add readaheadCache
-			readaheadResource := AdaptiveReadaheadCache.NewAdaptiveReadaheadCache(resource, 1*time.Second, 1*time.Second, minCache, maxCache, lowBuffer)
-			filesystem.AddFile("/", filename, readaheadResource)
-		}
+		extractableContainer := false
 
 		// Special extensions
 		if strings.HasSuffix(groupFilename, ".rar") {
@@ -179,24 +186,42 @@ func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.N
 			}
 
 			resource := RarFileResource.NewRarFileResource(resources, nzbData.Meta[nzbParser.MetaKeyPassword], "")
-			files, err := resource.GetRarFiles(1)
+			fileheaders, err := resource.GetRarFiles(1)
 			if err != nil {
 				return err
 			}
 
-			for _, file := range files {
-				resource := RarFileResource.NewRarFileResource(resources, nzbData.Meta[nzbParser.MetaKeyPassword], file)
-				// Lowest expected speed					Can help at beginning speeding up
-				minCache := 512 * 1024
-				// Low-Buffer (When to load more data)		Helps with continous data-flow
-				lowBuffer := 4 * 1024 * 1024
-				// Max expected speed + Low-Buffer			Max speed per iteration
-				maxCache := 768000*20 + lowBuffer
+			extractableContainer = true
+
+			for _, fileheader := range fileheaders {
+				filename := fileheader.Name
+
+				resource := RarFileResource.NewRarFileResource(resources, nzbData.Meta[nzbParser.MetaKeyPassword], filename)
 
 				// Add readaheadCache
-				readaheadResource := AdaptiveReadaheadCache.NewAdaptiveReadaheadCache(resource, 1*time.Second, 1*time.Second, minCache, maxCache, lowBuffer)
-				filesystem.AddFile("/", "readaheadResource-"+file, readaheadResource)
-				filesystem.AddFile("/", file, resource)
+				readaheadResource := AdaptiveReadaheadCache.NewAdaptiveReadaheadCache(resource, AdaptiveReadaheadCacheAvgSpeedTime, AdaptiveReadaheadCacheTime, AdaptiveReadaheadCacheMinSize, AdaptiveReadaheadCacheMaxSize, AdaptiveReadaheadCacheLowBuffer)
+
+				path := nzbData.Meta["Name"] + "/" + groupFilename
+				if len(fileheaders) == 1 {
+					filename = filenameOps.GetOrDefaultWithExtensionBelowLevensteinSimilarity(filename, nzbData.Meta["Name"], ReplaceBaseFilenameWithNzbBelowFuzzyThreshold)
+				}
+				filesystem.AddFile(path, filename, fileheader.ModificationTime, readaheadResource)
+			}
+		} else if strings.HasSuffix(groupFilename, ".7z") {
+		}
+
+		if !extractableContainer || FilesystemDisplayExtractedContainers {
+			for _, filename := range filenames {
+				resource := namedFileResources[filename]
+
+				// Add readaheadCache
+				readaheadResource := AdaptiveReadaheadCache.NewAdaptiveReadaheadCache(resource, AdaptiveReadaheadCacheAvgSpeedTime, AdaptiveReadaheadCacheTime, AdaptiveReadaheadCacheMinSize, AdaptiveReadaheadCacheMaxSize, AdaptiveReadaheadCacheLowBuffer)
+
+				path := nzbData.Meta["Name"]
+				if len(filenames) == 1 {
+					filename = filenameOps.GetOrDefaultWithExtensionBelowLevensteinSimilarity(filename, nzbData.Meta["Name"], ReplaceBaseFilenameWithNzbBelowFuzzyThreshold)
+				}
+				filesystem.AddFile(path, filename, nzbData.Files[0].ParsedDate, readaheadResource)
 			}
 		}
 	}

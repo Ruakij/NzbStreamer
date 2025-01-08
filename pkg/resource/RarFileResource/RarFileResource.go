@@ -63,7 +63,7 @@ func (m *RarFileResource) Open() (io.ReadSeekCloser, error) {
 	}, nil
 }
 
-func (m *RarFileResource) GetRarFiles(limit int) ([]string, error) {
+func (m *RarFileResource) GetRarFiles(limit int) ([]*rardecode.FileHeader, error) {
 	// Open all
 	openResources := make([]io.Reader, len(m.resources))
 	for i, resource := range m.resources {
@@ -81,17 +81,17 @@ func (m *RarFileResource) GetRarFiles(limit int) ([]string, error) {
 		return nil, err
 	}
 
-	names := make([]string, 0, 1)
+	fileheaders := make([]*rardecode.FileHeader, 0, 1)
 	header, err := rarReader.Next()
 	for err == nil {
-		names = append(names, header.Name)
-		if len(names) >= limit {
-			return names, nil
+		fileheaders = append(fileheaders, header)
+		if len(fileheaders) >= limit {
+			return fileheaders, nil
 		}
 		header, err = rarReader.Next()
 	}
 
-	return names, nil
+	return fileheaders, nil
 }
 
 func (r *RarFileResource) Size() (int64, error) {

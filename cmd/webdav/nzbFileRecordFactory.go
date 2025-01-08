@@ -39,13 +39,13 @@ func BuildFileResourceFromNzbFile(nzbFiles nzbParser.File, cache *diskCache.Cach
 			nzbSegment.Id,
 			cache,
 			&FullCacheResource.FullCacheResourceOptions{
-				SizeAlwaysFromResource: true,
+				SizeAlwaysFromResource: false,
 			},
 		)
 		cachedSegmentResources = append(cachedSegmentResources, cachedSegmentResource)
 	}
 
-	return AdaptiveParallelMergerResource.NewAdaptiveParallelMergerResource(cachedSegmentResources, 0)
+	return AdaptiveParallelMergerResource.NewAdaptiveParallelMergerResource(cachedSegmentResources)
 }
 
 func BuildResourceFromNzbSegment(nzbSegment *nzbParser.Segment, groups string, nntpClient *nntp.Client) resource.ReadCloseableResource {
