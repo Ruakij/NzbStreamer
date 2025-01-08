@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"astuart.co/nntp"
+
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpClient"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/webdav"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/SimpleWebdavFilesystem"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskCache"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/filenameOps"
@@ -15,8 +18,7 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/AdaptiveReadaheadCache"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/RarFileResource"
 
-	"net/http"
-	_ "net/http/pprof"
+	gowebdav "github.com/emersion/go-webdav"
 )
 
 const (
@@ -96,7 +98,9 @@ func main() {
 	}
 
 	// Serve webdav
-	err = setupWebdav(filesystem, ":8080")
+	err = webdav.Listen(webdavAdress, &gowebdav.Handler{
+		FileSystem: filesystem,
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -136,12 +140,6 @@ func loadNzbFile(path string) (*nzbParser.NzbData, error) {
 
 func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.NzbData, cache *diskCache.Cache, nntpClient *nntp.Client) (err error) {
 	namedFileResources := BuildNamedFileResourcesFromNzb(nzbData, cache, nntpClient)
-
-	/*
-		for filename, resource := range namedFileResources {
-			filesystem.AddFile(fmt.Sprintf("/%s/", nzbData.Meta), filename, resource)
-		}
-	*/
 
 	// Extract filenames
 	filenames := make([]string, 0, len(namedFileResources))
