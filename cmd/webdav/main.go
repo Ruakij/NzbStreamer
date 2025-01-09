@@ -192,10 +192,16 @@ func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.N
 
 	// Add to filesystem
 	for groupFilename, filenames := range groupedFilenames {
+		if len(groupedFilenames) == 1 {
+			groupFilename = filenameOps.GetOrDefaultWithExtensionBelowLevensteinSimilarity(groupFilename, nzbData.Meta["Name"], ReplaceBaseFilenameWithNzbBelowFuzzyThreshold)
+		}
+
 		extractableContainer := false
 
 		// Special extensions
-		if strings.HasSuffix(groupFilename, ".rar") {
+		if strings.HasSuffix(groupFilename, ".rar") || strings.HasSuffix(groupFilename, ".r") {
+			extractableContainer = true
+
 			resources := make([]resource.ReadSeekCloseableResource, len(filenames))
 			for i, filename := range filenames {
 				resources[i] = namedFileResources[filename]
@@ -207,8 +213,6 @@ func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.N
 				return err
 			}
 
-			extractableContainer = true
-
 			for _, fileheader := range fileheaders {
 				filename := fileheader.Name
 
@@ -218,6 +222,9 @@ func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.N
 				readaheadResource := AdaptiveReadaheadCache.NewAdaptiveReadaheadCache(resource, AdaptiveReadaheadCacheAvgSpeedTime, AdaptiveReadaheadCacheTime, AdaptiveReadaheadCacheMinSize, AdaptiveReadaheadCacheMaxSize, AdaptiveReadaheadCacheLowBuffer)
 
 				path := nzbData.Meta["Name"] + "/" + groupFilename
+				if len(groupedFilenames) == 1 && !FilesystemDisplayExtractedContainers {
+					path = nzbData.Meta["Name"]
+				}
 				if len(fileheaders) == 1 {
 					filename = filenameOps.GetOrDefaultWithExtensionBelowLevensteinSimilarity(filename, nzbData.Meta["Name"], ReplaceBaseFilenameWithNzbBelowFuzzyThreshold)
 				}
@@ -239,7 +246,7 @@ func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.N
 				return err
 			}
 
-			for path, fileinfo := range files {
+			for filepath, fileinfo := range files {
 				filename := fileinfo.Name()
 
 				resource := SevenzipFileResource.NewSevenzipFileResource(mergedResource, nzbData.Meta[nzbParser.MetaKeyPassword], filename)
@@ -247,7 +254,10 @@ func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.N
 				// Add readaheadCache
 				readaheadResource := AdaptiveReadaheadCache.NewAdaptiveReadaheadCache(resource, AdaptiveReadaheadCacheAvgSpeedTime, AdaptiveReadaheadCacheTime, AdaptiveReadaheadCacheMinSize, AdaptiveReadaheadCacheMaxSize, AdaptiveReadaheadCacheLowBuffer)
 
-				path = nzbData.Meta["Name"] + "/" + groupFilename + "/" + path
+				path := nzbData.Meta["Name"] + "/" + groupFilename + "/" + filepath
+				if len(groupedFilenames) == 1 && !FilesystemDisplayExtractedContainers {
+					path = nzbData.Meta["Name"] + "/" + filepath
+				}
 				if len(files) == 1 {
 					filename = filenameOps.GetOrDefaultWithExtensionBelowLevensteinSimilarity(filename, nzbData.Meta["Name"], ReplaceBaseFilenameWithNzbBelowFuzzyThreshold)
 				}
@@ -262,7 +272,10 @@ func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.N
 				// Add readaheadCache
 				readaheadResource := AdaptiveReadaheadCache.NewAdaptiveReadaheadCache(resource, AdaptiveReadaheadCacheAvgSpeedTime, AdaptiveReadaheadCacheTime, AdaptiveReadaheadCacheMinSize, AdaptiveReadaheadCacheMaxSize, AdaptiveReadaheadCacheLowBuffer)
 
-				path := nzbData.Meta["Name"]
+				path := nzbData.Meta["Name"] + "/" + groupFilename
+				if len(groupedFilenames) == 1 {
+					path = nzbData.Meta["Name"]
+				}
 				if len(filenames) == 1 {
 					filename = filenameOps.GetOrDefaultWithExtensionBelowLevensteinSimilarity(filename, nzbData.Meta["Name"], ReplaceBaseFilenameWithNzbBelowFuzzyThreshold)
 				}
