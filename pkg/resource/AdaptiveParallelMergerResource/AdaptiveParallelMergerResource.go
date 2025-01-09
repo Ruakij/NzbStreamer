@@ -205,6 +205,7 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 		activeReaders--
 
 		if response.err != nil && response.err != io.EOF {
+			// TODO: Early returns cancel the goroutines, but already running ones will complete their work, leaving the readers in an instable state; A solution must be found i.e. Seeking when switching to a new reader or via goroutine and lock to seek affected readers back
 			return 0, response.err
 		}
 
