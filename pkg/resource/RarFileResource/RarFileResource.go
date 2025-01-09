@@ -84,6 +84,10 @@ func (m *RarFileResource) GetRarFiles(limit int) ([]*rardecode.FileHeader, error
 	fileheaders := make([]*rardecode.FileHeader, 0, 1)
 	header, err := rarReader.Next()
 	for err == nil {
+		if header.IsDir {
+			continue
+		}
+
 		fileheaders = append(fileheaders, header)
 		if len(fileheaders) >= limit {
 			return fileheaders, nil
