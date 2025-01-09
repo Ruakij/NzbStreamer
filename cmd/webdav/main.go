@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"astuart.co/nntp"
+	"golang.org/x/exp/maps"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpClient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/webdav"
@@ -16,8 +17,10 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/filenameOps"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbParser"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/AdaptiveParallelMergerResource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/AdaptiveReadaheadCache"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/RarFileResource"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/SevenzipFileResource"
 
 	gowebdav "github.com/emersion/go-webdav"
 )
@@ -208,6 +211,35 @@ func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.N
 				filesystem.AddFile(path, filename, fileheader.ModificationTime, readaheadResource)
 			}
 		} else if strings.HasSuffix(groupFilename, ".7z") {
+			extractableContainer = true
+
+			resources := make([]resource.ReadSeekCloseableResource, len(filenames))
+			for i, filename := range filenames {
+				resources[i] = namedFileResources[filename]
+			}
+
+			mergedResource := AdaptiveParallelMergerResource.NewAdaptiveParallelMergerResource(resources)
+
+			resource := SevenzipFileResource.NewSevenzipFileResource(mergedResource, nzbData.Meta[nzbParser.MetaKeyPassword], "")
+			files, err := resource.GetFiles()
+			if err != nil {
+				return err
+			}
+
+			for path, fileinfo := range files {
+				filename := fileinfo.Name()
+
+				resource := SevenzipFileResource.NewSevenzipFileResource(mergedResource, nzbData.Meta[nzbParser.MetaKeyPassword], filename)
+
+				// Add readaheadCache
+				readaheadResource := AdaptiveReadaheadCache.NewAdaptiveReadaheadCache(resource, AdaptiveReadaheadCacheAvgSpeedTime, AdaptiveReadaheadCacheTime, AdaptiveReadaheadCacheMinSize, AdaptiveReadaheadCacheMaxSize, AdaptiveReadaheadCacheLowBuffer)
+
+				path = nzbData.Meta["Name"] + "/" + groupFilename + "/" + path
+				if len(files) == 1 {
+					filename = filenameOps.GetOrDefaultWithExtensionBelowLevensteinSimilarity(filename, nzbData.Meta["Name"], ReplaceBaseFilenameWithNzbBelowFuzzyThreshold)
+				}
+				filesystem.AddFile(path, filename, fileinfo.ModTime(), readaheadResource)
+			}
 		}
 
 		if !extractableContainer || FilesystemDisplayExtractedContainers {

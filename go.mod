@@ -42,6 +42,7 @@ require (
 require (
 	github.com/Ruakij/rardecode/v2 v2.0.2
 	github.com/andrewstuart/pool v0.0.0-20150425222649-3d2cc9c43044 // indirect
+	github.com/bodgit/sevenzip v1.6.0
 	github.com/emersion/go-webdav v0.6.0
 	github.com/ka-weihe/fast-levenshtein v0.0.0-20201227151214-4c99ee36a1ba
 )
