@@ -3,7 +3,6 @@ package AdaptiveParallelMergerResource
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"sync"
@@ -222,12 +221,10 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 			if copied < actualRead {
 				// When not all was copied, we filled p, the rest is too much
 				r.readerByteIndex += int64(copied)
-				fmt.Printf("%p\tRead too far, seeking %d\tto %d\n", r, response.readerIndex, r.readerByteIndex)
 				r.readers[response.readerIndex].Seek(r.readerByteIndex, io.SeekStart)
 			}
 		} else {
 			// Filled p, anymore is too much
-			fmt.Printf("%p\tRead too far, seeking %d\tto %d\n", r, response.readerIndex, 0)
 			r.readers[response.readerIndex].Seek(0, io.SeekStart)
 		}
 	}

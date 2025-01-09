@@ -205,8 +205,6 @@ func (fs *FS) Stat(ctx context.Context, name string) (*webdav.FileInfo, error) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
-	fmt.Printf("Stat\t%s\n", name)
-
 	node, err := fs.pathWalker(name)
 	if err != nil {
 		return nil, err
