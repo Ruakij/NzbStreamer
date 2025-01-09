@@ -42,7 +42,7 @@ type AdaptiveReadaheadCacheReader struct {
 	index               int64
 	readHistory         []readHistoryEntry
 	cache               *CircularBuffer.CircularBuffer[byte]
-	mutex               sync.Mutex
+	mutex               sync.RWMutex
 }
 
 type readHistoryEntry struct {
@@ -120,9 +120,6 @@ func (r *AdaptiveReadaheadCacheReader) flushCache() {
 }
 
 func (r *AdaptiveReadaheadCacheReader) Read(p []byte) (n int, err error) {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
 	r.recordRead(int64(len(p)))
 	if !r.underlyingReaderEof {
 		go r.readahead()
@@ -132,10 +129,12 @@ func (r *AdaptiveReadaheadCacheReader) Read(p []byte) (n int, err error) {
 	n, _ = r.cache.Read(p)
 	r.index += int64(n)
 
+	r.cache.RLock()
 	if r.underlyingReaderEof && n == 0 {
 		// Underlying reader is closed and we didnt read anything from cache, means we hit the end
 		err = io.EOF
 	}
+	r.cache.RUnlock()
 
 	return
 }
@@ -168,6 +167,9 @@ func (r *AdaptiveReadaheadCacheReader) ReadOld(p []byte) (n int, err error) {
 }
 
 func (r *AdaptiveReadaheadCacheReader) recordRead(bytesRead int64) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
 	now := time.Now()
 	r.readHistory = append(r.readHistory, readHistoryEntry{bytesRead, now})
 
@@ -210,6 +212,9 @@ func (r *AdaptiveReadaheadCacheReader) avgSpeed() float64 {
 }
 
 func (r *AdaptiveReadaheadCacheReader) readahead() error {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
 	avgSpeed := r.avgSpeed()
 	readaheadAmount := int(avgSpeed * r.resource.cacheTime.Seconds())
 

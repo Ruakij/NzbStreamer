@@ -128,6 +128,15 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 
 		activeReaders++
 
+		if expectedRead < resourceSizeLeft {
+			r.readerByteIndex += int64(expectedRead)
+		} else {
+			r.readerIndex++
+			r.readerByteIndex = 0
+		}
+
+		expectedTotalRead += expectedRead
+
 		group.Go(func() (_ error) {
 			// Check if resource supports size accuracy reporting
 			sizeAccurateResource, sizeAccurateResourceOk := r.resource.resources[readerIndex].(resource.SizeAccurateResource)
@@ -182,15 +191,6 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 		})
 
 		readIndex++
-
-		if expectedRead < resourceSizeLeft {
-			r.readerByteIndex += int64(expectedRead)
-		} else {
-			r.readerIndex++
-			r.readerByteIndex = 0
-		}
-
-		expectedTotalRead += expectedRead
 	}
 
 	// Process responses

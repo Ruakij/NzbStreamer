@@ -128,12 +128,12 @@ func (c *Cache) SetWithReader(key string, reader io.Reader) (int64, error) {
 				}
 				c.mu.Unlock()
 			} else {
-				go func() {
+				go func(totalN int64) {
 					c.mu.Lock()
 					// Ensure there is enough space, evict if necessary
-					err = c.maxSizeEvict(totalN)
+					c.maxSizeEvict(totalN)
 					c.mu.Unlock()
-				}()
+				}(totalN)
 			}
 
 			// Write the chunk
