@@ -151,18 +151,24 @@ func (r *FullCacheResourceReader) Close() (err error) {
 func (r *FullCacheResourceReader) Seek(offset int64, whence int) (int64, error) {
 	var newIndex int64
 
-	resourceSize, err := r.resource.Size()
-	if err != nil {
-		return 0, err
-	}
-
 	switch whence {
 	case io.SeekStart:
 		newIndex = offset
 	case io.SeekCurrent:
 		newIndex = r.index + offset
 	case io.SeekEnd:
-		newIndex = resourceSize + offset
+		// If size not accurate, needs to trigger read to get accurate size
+		if !r.resource.IsSizeAccurate() {
+			_, err := io.CopyN(io.Discard, r, 1)
+			if err != nil {
+				return 0, err
+			}
+		}
+		resourceSize, err := r.resource.Size()
+		if err != nil {
+			return 0, err
+		}
+		newIndex = resourceSize - offset
 	default:
 		return 0, resource.ErrInvalidSeek
 	}
@@ -172,7 +178,7 @@ func (r *FullCacheResourceReader) Seek(offset int64, whence int) (int64, error) 
 		return r.index, nil
 	}
 	// Out of range
-	if newIndex < 0 || newIndex > resourceSize {
+	if newIndex < 0 {
 		return 0, resource.ErrInvalidSeek
 	}
 

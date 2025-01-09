@@ -263,11 +263,25 @@ func (r *AdaptiveParallelMergerResourceReader) Seek(offset int64, whence int) (n
 	case io.SeekCurrent:
 		newIndex = r.index + offset
 	case io.SeekEnd:
-		// When seeking from the end, all resources need to be accurate to reliably get to its position
-		if !areResourcesAccurate(r.resource.resources) {
-			return 0, errors.New("Not all resources accurate, cannot SeekEnd")
+		// Seek all to end to get their accurate size
+		var totalSizeMu sync.Mutex
+		var totalSizeGroup errgroup.Group
+		var totalSize int64
+		for _, reader := range r.readers {
+			totalSizeGroup.Go(func() (err error) {
+				size, err := reader.Seek(0, io.SeekEnd)
+
+				totalSizeMu.Lock()
+				if err != nil {
+					return
+				}
+				totalSize += size
+				totalSizeMu.Unlock()
+				return
+			})
 		}
-		totalSize, err := r.resource.Size()
+
+		err := totalSizeGroup.Wait()
 		if err != nil {
 			return 0, err
 		}
@@ -300,9 +314,9 @@ func (r *AdaptiveParallelMergerResourceReader) Seek(offset int64, whence int) (n
 	return newIndex, nil
 }
 
-func areResourcesAccurate(resources []resource.ReadSeekCloseableResource) bool {
-	for _, r := range resources {
-		if sizeAccurateResource, ok := r.(resource.SizeAccurateResource); ok && sizeAccurateResource.IsSizeAccurate() {
+func (r *AdaptiveParallelMergerResource) IsSizeAccurate() bool {
+	for _, re := range r.resources {
+		if sizeAccurateResource, ok := re.(resource.SizeAccurateResource); ok && sizeAccurateResource.IsSizeAccurate() {
 			if !sizeAccurateResource.IsSizeAccurate() {
 				return false
 			}
@@ -315,56 +329,34 @@ func areResourcesAccurate(resources []resource.ReadSeekCloseableResource) bool {
 
 func seekThroughReaders(r *AdaptiveParallelMergerResourceReader, remaining int64) error {
 	// Start iterating over the readers until we've sought through all bytes or run out of readers.
+	// TODO: Parallelize like Read
 	remainingBytes := remaining
 	for r.readerIndex < len(r.readers) && remainingBytes > 0 {
 		currentReader := r.readers[r.readerIndex]
-		currentResource := r.resource.resources[r.readerIndex]
 
-		// Check if the current reader can report an accurate size.
-		if sizeAccurateResource, ok := currentResource.(resource.SizeAccurateResource); ok && sizeAccurateResource.IsSizeAccurate() {
-			// Retrieve the size of the current reader.
-			size, err := currentResource.Size()
-			if err != nil {
+		// Determine size by seeking to the end and capturing the current position.
+		size, err := currentReader.Seek(0, io.SeekEnd)
+		if err != nil {
+			return err
+		}
+
+		// Calculate if the remaining bytes to seek are within the current resource.
+		if r.readerByteIndex+remainingBytes < size {
+			// Seek within the current reader to the needed position.
+			if _, err := currentReader.Seek(r.readerByteIndex+remainingBytes, io.SeekStart); err != nil {
 				return err
 			}
-
-			// Calculate if the remaining bytes to seek are within the current resource.
-			if r.readerByteIndex+remainingBytes < size {
-				// Seek within the current reader to the needed position.
-				if _, err := currentReader.Seek(r.readerByteIndex+remainingBytes, io.SeekStart); err != nil {
-					return err
-				}
-				// Update internal trackers for position and index.
-				r.readerByteIndex += remainingBytes
-				r.index += remainingBytes
-				return nil // Seeking finished.
-			} else {
-				// Adjust remaining bytes since we'll need to jump to the next reader.
-				remainingBytes -= size - r.readerByteIndex
-				r.index += size - r.readerByteIndex
-				// Reset reader position and advance to the next reader.
-				r.readerByteIndex = 0
-				r.readerIndex++
-			}
+			// Update internal trackers for position and index.
+			r.readerByteIndex += remainingBytes
+			r.index += remainingBytes
+			return nil // Seeking finished.
 		} else {
-			// If current reader size is not accurate, use a utility to discard bytes.
-			consumed, err := io.CopyN(io.Discard, currentReader, remainingBytes)
-			if err != nil && err != io.EOF {
-				return err
-			}
-
-			r.index += consumed
-			remainingBytes -= consumed
-
-			// When we read EOF, next reader
-			if err != nil && err == io.EOF {
-				r.readerByteIndex = 0
-				r.readerIndex++
-			} else if remainingBytes == 0 {
-				// When we read all of remainingBytes, thats our new index
-				r.readerByteIndex += consumed
-				return nil // Seeking finished.
-			}
+			// Adjust remaining bytes since we'll need to jump to the next reader.
+			remainingBytes -= size - r.readerByteIndex
+			r.index += size - r.readerByteIndex
+			// Reset reader position and advance to the next reader.
+			r.readerByteIndex = 0
+			r.readerIndex++
 		}
 	}
 	// If we exit the loop, it means we've processed all readers or there's no more to seek.
