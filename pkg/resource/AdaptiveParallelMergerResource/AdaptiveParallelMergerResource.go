@@ -29,8 +29,9 @@ func NewAdaptiveParallelMergerResource(resources []resource.ReadSeekCloseableRes
 }
 
 type AdaptiveParallelMergerResourceReader struct {
-	resource *AdaptiveParallelMergerResource
-	readers  []io.ReadSeekCloser
+	resource    *AdaptiveParallelMergerResource
+	readers     []io.ReadSeekCloser
+	readerGroup errgroup.Group
 	// Position in data
 	index int64
 	// Active reader index
@@ -265,10 +266,9 @@ func (r *AdaptiveParallelMergerResourceReader) Seek(offset int64, whence int) (n
 	case io.SeekEnd:
 		// Seek all to end to get their accurate size
 		var totalSizeMu sync.Mutex
-		var totalSizeGroup errgroup.Group
 		var totalSize int64
 		for _, reader := range r.readers {
-			totalSizeGroup.Go(func() (err error) {
+			r.readerGroup.Go(func() (err error) {
 				size, err := reader.Seek(0, io.SeekEnd)
 
 				totalSizeMu.Lock()
@@ -281,7 +281,7 @@ func (r *AdaptiveParallelMergerResourceReader) Seek(offset int64, whence int) (n
 			})
 		}
 
-		err := totalSizeGroup.Wait()
+		err := r.readerGroup.Wait()
 		if err != nil {
 			return 0, err
 		}
@@ -290,28 +290,37 @@ func (r *AdaptiveParallelMergerResourceReader) Seek(offset int64, whence int) (n
 		return 0, errors.New("invalid whence value")
 	}
 
-	// Try to seek forward or backward based on the new index
-	if newIndex != r.index {
-		if newIndex > r.index {
-			err = seekThroughReaders(r, newIndex-r.index)
-		} else {
-			// Reset all readers when seeking backwards
-			for _, reader := range r.readers {
-				if _, err = reader.Seek(0, io.SeekStart); err != nil {
-					return 0, err
-				}
-			}
-			r.index = 0
-			r.readerIndex = 0
-			r.readerByteIndex = 0
+	if newIndex == r.index {
+		return
+	}
 
-			err = seekThroughReaders(r, newIndex)
+	// Try to seek forward or backward based on the new index
+	if newIndex > r.index {
+		err = seekThroughReaders(r, newIndex-r.index)
+	} else {
+		// TODO: Actually seek back instead of resetting all and seeking forwards
+		// Reset all readers when seeking backwards
+		for _, reader := range r.readers {
+			r.readerGroup.Go(func() (err error) {
+				_, err = reader.Seek(0, io.SeekStart)
+				return
+			})
 		}
+		if err = r.readerGroup.Wait(); err != nil {
+			return 0, err
+		}
+
+		r.index = 0
+		r.readerIndex = 0
+		r.readerByteIndex = 0
+
+		err = seekThroughReaders(r, newIndex)
 	}
+
 	if err != nil {
-		return 0, err
+		return r.index, err
 	}
-	return newIndex, nil
+	return r.index, nil
 }
 
 func (r *AdaptiveParallelMergerResource) IsSizeAccurate() bool {
@@ -327,38 +336,128 @@ func (r *AdaptiveParallelMergerResource) IsSizeAccurate() bool {
 	return true
 }
 
-func seekThroughReaders(r *AdaptiveParallelMergerResourceReader, remaining int64) error {
+type seekResponse struct {
+	index       int
+	readerIndex int
+	expected    int64
+	actual      int64
+	err         error
+}
+
+func seekThroughReaders(r *AdaptiveParallelMergerResourceReader, seekAmount int64) error {
 	// Start iterating over the readers until we've sought through all bytes or run out of readers.
-	// TODO: Parallelize like Read
-	remainingBytes := remaining
-	for r.readerIndex < len(r.readers) && remainingBytes > 0 {
-		currentReader := r.readers[r.readerIndex]
 
-		// Determine size by seeking to the end and capturing the current position.
-		size, err := currentReader.Seek(0, io.SeekEnd)
-		if err != nil {
-			return err
-		}
+	var expectedTotalSeek int64 = 0
+	var totalSeeked int64 = 0
+	responses := make([]*seekResponse, 0, 1)
+	responsesLock := &sync.RWMutex{}
+	responsesCond := sync.NewCond(responsesLock)
 
-		// Calculate if the remaining bytes to seek are within the current resource.
-		if r.readerByteIndex+remainingBytes < size {
-			// Seek within the current reader to the needed position.
-			if _, err := currentReader.Seek(r.readerByteIndex+remainingBytes, io.SeekStart); err != nil {
+	readCtx, readCtxDone := context.WithCancel(context.Background())
+	defer readCtxDone()
+	group, _ := errgroup.WithContext(readCtx)
+
+	index := 0
+	processIndex := 0
+
+	for totalSeeked < seekAmount && r.readerIndex < len(r.readers) && (index == 0 || processIndex <= index) {
+		for totalSeeked+expectedTotalSeek < seekAmount && r.readerIndex < len(r.readers) {
+			reader := r.readers[r.readerIndex]
+			resource := r.resource.resources[r.readerIndex]
+
+			size, err := resource.Size()
+			if err != nil {
 				return err
 			}
-			// Update internal trackers for position and index.
-			r.readerByteIndex += remainingBytes
-			r.index += remainingBytes
-			return nil // Seeking finished.
-		} else {
-			// Adjust remaining bytes since we'll need to jump to the next reader.
-			remainingBytes -= size - r.readerByteIndex
-			r.index += size - r.readerByteIndex
-			// Reset reader position and advance to the next reader.
-			r.readerByteIndex = 0
+
+			expectedSeek := size - r.readerByteIndex
+
+			responsesLock.Lock()
+			responses = append(responses, nil) // Reserve space
+			responsesLock.Unlock()
+
+			// Copy to local stack into goroutine
+			localIndex := index
+			readerIndex := r.readerIndex
+
+			group.Go(func() (err error) {
+				// Determine size by seeking to the end and capturing the current position.
+				size, err := reader.Seek(0, io.SeekEnd)
+
+				responsesLock.RLock()
+				defer responsesLock.RUnlock()
+
+				responses[localIndex] = &seekResponse{
+					index:       localIndex,
+					readerIndex: readerIndex,
+					expected:    expectedSeek,
+					actual:      size,
+					err:         err,
+				}
+				responsesCond.Signal()
+
+				return
+			})
+
+			index++
 			r.readerIndex++
+			r.readerByteIndex = 0
+
+			expectedTotalSeek += expectedSeek
 		}
+
+		// Process responses
+		responsesLock.Lock()
+		// Wait for next response to be ready
+		for responses[processIndex] == nil {
+			responsesCond.Wait()
+		}
+		response := responses[processIndex]
+		responsesLock.Unlock()
+
+		if response.err != nil && response.err != io.EOF {
+			// TODO: Early returns cancel the goroutines, but already running ones will complete their work, leaving the readers in an unknown state; A solution must be found i.e. Seeking when switching to a new reader or via goroutine and lock to seek affected readers back
+			return response.err
+		}
+
+		reader := r.readers[response.readerIndex]
+
+		expectedTotalSeek -= response.expected
+
+		if totalSeeked >= seekAmount {
+			// We already have seeked far enough, this one is too far
+			if _, err := reader.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+		} else {
+			totalSeeked += response.actual
+			readerSeek := totalSeeked - seekAmount
+			if totalSeeked >= seekAmount {
+				totalSeeked = seekAmount
+			}
+
+			r.readerIndex = response.readerIndex
+
+			// Calculate if the remaining bytes to seek are within the current resource.
+			if readerSeek > 0 {
+				// Seek within the current reader to the needed position.
+				if _, err := reader.Seek(readerSeek, io.SeekStart); err != nil {
+					return err
+				}
+				// Update internal trackers for position and index.
+				r.readerByteIndex = readerSeek
+				// Seeking finished, but cant return, need to process the rest
+			}
+		}
+
+		processIndex++
 	}
+
+	// Wait for all goroutines to finish, this should never be the case, but as good practise included
+	group.Wait()
+
+	r.index = totalSeeked
+
 	// If we exit the loop, it means we've processed all readers or there's no more to seek.
 	return nil
 }
