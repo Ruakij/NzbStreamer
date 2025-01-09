@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -159,7 +160,7 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 				if err == nil && totalN < len(p) {
 					if totalN == len(buf) {
 						// When we read our buffer full, increase read request by 10%; n < len(buf)-totalN might indicate we did hit EOF, but will only be returned at next read
-						expectedRead = int(float32(expectedRead) * 1.1)
+						expectedRead = int(math.Ceil(float64(expectedRead) * 1.1))
 						buf = append(buf, make([]byte, expectedRead-totalN)...)
 					}
 				} else {
@@ -278,6 +279,11 @@ func (r *AdaptiveParallelMergerResourceReader) Seek(offset int64, whence int) (n
 				if err != nil {
 					return
 				}
+				// TODO: Inefficient as we might be calling seek of readers up to 4 times!
+				// And back to start
+				if _, err = reader.Seek(0, io.SeekStart); err != nil {
+					return
+				}
 				totalSize.Add(size)
 				return
 			})
@@ -381,6 +387,7 @@ func seekThroughReaders(r *AdaptiveParallelMergerResourceReader, seekAmount int6
 			// Copy to local stack into goroutine
 			localIndex := index
 			readerIndex := r.readerIndex
+			readerByteIndex := r.readerByteIndex
 
 			group.Go(func() (err error) {
 				// Determine size by seeking to the end and capturing the current position.
@@ -391,7 +398,7 @@ func seekThroughReaders(r *AdaptiveParallelMergerResourceReader, seekAmount int6
 					index:       localIndex,
 					readerIndex: readerIndex,
 					expected:    expectedSeek,
-					actual:      size,
+					actual:      size - readerByteIndex,
 					err:         err,
 				}
 				responsesLock.RUnlock()
@@ -432,7 +439,7 @@ func seekThroughReaders(r *AdaptiveParallelMergerResourceReader, seekAmount int6
 			}
 		} else {
 			totalSeeked += response.actual
-			readerSeek := totalSeeked - seekAmount
+			readerSeek := totalSeeked - seekAmount - 1
 			if totalSeeked >= seekAmount {
 				totalSeeked = seekAmount
 			}
@@ -457,7 +464,7 @@ func seekThroughReaders(r *AdaptiveParallelMergerResourceReader, seekAmount int6
 	// Wait for all goroutines to finish, this should never be the case, but as good practise included
 	group.Wait()
 
-	r.index = totalSeeked
+	r.index += totalSeeked
 
 	// If we exit the loop, it means we've processed all readers or there's no more to seek.
 	return nil

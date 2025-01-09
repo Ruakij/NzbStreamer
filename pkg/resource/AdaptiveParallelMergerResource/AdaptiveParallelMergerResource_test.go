@@ -15,7 +15,7 @@ func TestAdaptiveParallelMergerResource(t *testing.T) {
 		&BytesResource.BytesResource{Content: []byte("World")},
 	}
 
-	merger := NewAdaptiveParallelMergerResource(resources, 0)
+	merger := NewAdaptiveParallelMergerResource(resources)
 
 	size, err := merger.Size()
 	if err != nil {
@@ -40,17 +40,28 @@ func TestAdaptiveParallelMergerResource(t *testing.T) {
 		t.Errorf("failed to SeekCurrent with offset=%d, returned seekStartOffset=%d: %v", 1, seekStartOffset, err)
 	}
 
-	_, err = readSeeker.Seek(20, io.SeekStart)
-	if err == nil {
-		t.Errorf("failed to error on SeekStart with offset=%d", 1)
+	seekStartOffset, err = readSeeker.Seek(-5, io.SeekEnd)
+	if err != nil {
+		t.Errorf("failed to SeekEnd with offset=%d: %v", -5, err)
+	}
+	if seekStartOffset != 5 {
+		t.Errorf("failed to SeekEnd with offset=%d, returned seekStartOffset=%d: %v", -5, seekStartOffset, err)
 	}
 
-	seekStartOffset, err = readSeeker.Seek(7, io.SeekEnd)
+	seekStartOffset, err = readSeeker.Seek(-1, io.SeekCurrent)
 	if err != nil {
-		t.Errorf("failed to SeekEnd with offset=%d: %v", 7, err)
+		t.Errorf("failed to SeekCurrent with offset=%d: %v", -1, err)
+	}
+	if seekStartOffset != 4 {
+		t.Errorf("failed to SeekCurrent with offset=%d, returned seekStartOffset=%d: %v", -1, seekStartOffset, err)
+	}
+
+	seekStartOffset, err = readSeeker.Seek(3, io.SeekStart)
+	if err != nil {
+		t.Errorf("failed to SeekStart with offset=%d: %v", 3, err)
 	}
 	if seekStartOffset != 3 {
-		t.Errorf("failed to SeekCurrent with offset=%d, returned seekStartOffset=%d: %v", 1, seekStartOffset, err)
+		t.Errorf("failed to SeekStart with offset=%d, returned seekStartOffset=%d: %v", 3, seekStartOffset, err)
 	}
 
 	buf := new(bytes.Buffer)
