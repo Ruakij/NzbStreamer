@@ -57,8 +57,9 @@ const (
 	AdaptiveReadaheadCacheMaxSize int = 16 * 1024 * 1024
 )
 
-const (
-	FilesystemDisplayExtractedContainers bool = false
+var (
+	FilesystemExcludedExtensions         []string = []string{".par2"}
+	FilesystemDisplayExtractedContainers bool     = false
 )
 
 const (
@@ -169,7 +170,7 @@ func loadNzbFile(path string) (*nzbParser.NzbData, error) {
 	return nzbData, nil
 }
 
-func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.NzbData, cache *diskCache.Cache, nntpClient *nntp.Client) (err error) {
+func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.NzbData, cache *diskCache.Cache, nntpClient *nntp.Client, excludedExtensions []string) (err error) {
 	namedFileResources := BuildNamedFileResourcesFromNzb(nzbData, cache, nntpClient)
 
 	// Extract filenames
@@ -180,15 +181,17 @@ func createResources(filesystem *SimpleWebdavFilesystem.FS, nzbData *nzbParser.N
 
 	// Group
 	groupedFilenames := filenameOps.GroupPartFilenames(filenames)
+	// Filter
+	for _, excluded := range excludedExtensions {
+		maps.DeleteFunc(groupedFilenames, func(groupFilename string, _ []string) bool {
+			return strings.HasSuffix(groupFilename, excluded)
+		})
+	}
 	//  Sort
 	filenameOps.SortGroupedFilenames(groupedFilenames)
 
 	// Add to filesystem
 	for groupFilename, filenames := range groupedFilenames {
-		if strings.HasSuffix(groupFilename, ".par2") {
-			continue
-		}
-
 		extractableContainer := false
 
 		// Special extensions
