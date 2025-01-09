@@ -98,14 +98,6 @@ func (mrmr *MergerResourceReader) Close() (err error) {
 }
 
 func (r *MergerResourceReader) Seek(offset int64, whence int) (newIndex int64, err error) {
-	if offset == 0 {
-		return
-	}
-
-	resourceSize, err := r.resource.Size()
-	if err != nil {
-		return 0, err
-	}
 
 	switch whence {
 	case io.SeekStart:
@@ -113,6 +105,11 @@ func (r *MergerResourceReader) Seek(offset int64, whence int) (newIndex int64, e
 	case io.SeekCurrent:
 		newIndex = r.index + offset
 	case io.SeekEnd:
+		resourceSize, err := r.resource.Size()
+		if err != nil {
+			return 0, err
+		}
+
 		newIndex = resourceSize - offset
 	}
 
@@ -121,21 +118,29 @@ func (r *MergerResourceReader) Seek(offset int64, whence int) (newIndex int64, e
 		return r.index, nil
 	}
 	// Out of range
-	if newIndex < 0 || newIndex > resourceSize {
+	if newIndex < 0 {
 		return 0, resource.ErrInvalidSeek
 	}
 
 	// Find affected sub-reader
 	readerIndex, readerByteIndex, err := r.getReaderIndexAndByteIndexAtByteIndex(newIndex)
 	if err != nil {
-		return
+		if err != io.ErrUnexpectedEOF {
+			return
+		}
+		// Unexpected EOF here just means we couldnt get a reader, because newIndex is behind everything
+		// Set reader to after last
+		err = nil
+		readerIndex = len(r.readers)
 	}
 
-	// Seek to position in reader
-	r.readers[readerIndex].Seek(readerByteIndex, io.SeekStart)
-	// Seek to start for all following readers
-	for i := readerIndex + 1; i < len(r.readers); i++ {
-		r.readers[i].Seek(0, io.SeekStart)
+	if readerIndex < len(r.readers) {
+		// Seek to position in reader
+		r.readers[readerIndex].Seek(readerByteIndex, io.SeekStart)
+		// Seek to start for all following readers
+		for i := readerIndex + 1; i < len(r.readers); i++ {
+			r.readers[i].Seek(0, io.SeekStart)
+		}
 	}
 
 	r.readerIndex = readerIndex
