@@ -56,11 +56,14 @@ func (r *AdaptiveReadaheadCache) Open() (io.ReadSeekCloser, error) {
 		return nil, err
 	}
 
+	cache := CircularBuffer.NewCircularBuffer[byte](int(r.cacheMinSize), int(r.cacheMaxSize))
+	cache.SetReadBlocking(true)
+
 	return &AdaptiveReadaheadCacheReader{
 		resource:         r,
 		underlyingReader: underlyingReader,
 		readHistory:      make([]readHistoryEntry, 0, int(r.cacheAvgSpeedTime.Seconds())),
-		cache:            CircularBuffer.NewCircularBuffer[byte](int(r.cacheMinSize), int(r.cacheMaxSize)),
+		cache:            cache,
 	}, err
 }
 
@@ -120,14 +123,14 @@ func (r *AdaptiveReadaheadCacheReader) Read(p []byte) (n int, err error) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	// Try to fulfill the read request from the cache
-	n, _ = r.cache.Read(p)
-	r.index += int64(n)
-
 	r.recordRead(int64(len(p)))
 	if !r.underlyingReaderEof {
 		go r.readahead()
 	}
+
+	// Try to fulfill the read request from the cache
+	n, _ = r.cache.Read(p)
+	r.index += int64(n)
 
 	if r.underlyingReaderEof && n == 0 {
 		// Underlying reader is closed and we didnt read anything from cache, means we hit the end
@@ -207,9 +210,6 @@ func (r *AdaptiveReadaheadCacheReader) avgSpeed() float64 {
 }
 
 func (r *AdaptiveReadaheadCacheReader) readahead() error {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
 	avgSpeed := r.avgSpeed()
 	readaheadAmount := int(avgSpeed * r.resource.cacheTime.Seconds())
 
@@ -252,7 +252,6 @@ func (r *AdaptiveReadaheadCacheReader) readahead() error {
 	// Directly read into buffer
 	exposedBuffer := r.cache.ExposeWriteSpace()
 	n, err := r.underlyingReader.Read(exposedBuffer)
-	exposedBuffer = exposedBuffer
 	r.cache.CommitWrite(n)
 
 	if err == io.EOF {

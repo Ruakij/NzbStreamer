@@ -185,38 +185,38 @@ func (cb *CircularBuffer[T]) read(p []T, blocking bool) (int, error) {
 	n := len(p)
 	totalRead := 0
 
-	for totalRead < n {
-		if cb.size == 0 {
-			if blocking {
-				cb.canRead.Wait()
-				if cb.size == 0 {
-					return totalRead, errors.New("no data after wakeup")
-				}
-			} else {
-				return totalRead, io.EOF
+	//for totalRead < n {
+	if cb.size == 0 {
+		if blocking {
+			cb.canRead.Wait()
+			if cb.size == 0 {
+				return totalRead, errors.New("no data after wakeup")
 			}
+		} else {
+			return totalRead, io.EOF
 		}
-
-		// Calculate how much we can read in this iteration
-		end := cb.readPos + (n - totalRead)
-		if end > cb.GetCurrCapacity() {
-			end = cb.GetCurrCapacity()
-		}
-		available := end - cb.readPos
-
-		if available > cb.size {
-			available = cb.size
-		}
-
-		// Copy data into p
-		copy(p[totalRead:], cb.buffer[cb.readPos:end])
-		cb.readPos = cb.readPos % cb.GetCurrCapacity()
-		cb.readPos = (cb.readPos + available) % cb.GetCurrCapacity()
-		cb.size -= available
-		totalRead += available
-
-		cb.canWrite.Signal() // Signal that there's space available for writing
 	}
+
+	// Calculate how much we can read in this iteration
+	end := cb.readPos + (n - totalRead)
+	if end > cb.GetCurrCapacity() {
+		end = cb.GetCurrCapacity()
+	}
+	available := end - cb.readPos
+
+	if available > cb.size {
+		available = cb.size
+	}
+
+	// Copy data into p
+	copy(p[totalRead:], cb.buffer[cb.readPos:end])
+	cb.readPos = cb.readPos % cb.GetCurrCapacity()
+	cb.readPos = (cb.readPos + available) % cb.GetCurrCapacity()
+	cb.size -= available
+	totalRead += available
+
+	cb.canWrite.Signal() // Signal that there's space available for writing
+	//}
 
 	return totalRead, nil
 }
