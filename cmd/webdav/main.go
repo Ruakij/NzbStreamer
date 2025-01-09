@@ -9,6 +9,7 @@ import (
 
 	"astuart.co/nntp"
 	"golang.org/x/exp/maps"
+	"golang.org/x/sync/errgroup"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpClient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/webdav"
@@ -104,18 +105,27 @@ func main() {
 	}
 
 	fmt.Printf("Loading %d Nzb-Files\n", len(nzbFiles))
+	var group errgroup.Group
 	for _, nzbFile := range nzbFiles {
-		// Load file
-		nzbData, err := loadNzbFile(nzbFile)
-		if err != nil {
-			panic(err)
-		}
+		group.Go(func() (err error) {
+			// Load file
+			nzbData, err := loadNzbFile(nzbFile)
+			if err != nil {
+				return
+			}
 
-		// Add as files
-		err = createResources(filesystem, nzbData, segmentCache, nntpClient)
-		if err != nil {
-			panic(err)
-		}
+			// Add as files
+			err = createResources(filesystem, nzbData, segmentCache, nntpClient, FilesystemExcludedExtensions)
+			if err != nil {
+				return
+			}
+
+			return
+		})
+	}
+	err = group.Wait()
+	if err != nil {
+		panic(err)
 	}
 
 	// Serve webdav
