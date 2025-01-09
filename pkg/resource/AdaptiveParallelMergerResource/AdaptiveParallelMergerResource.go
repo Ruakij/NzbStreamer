@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 	"golang.org/x/sync/errgroup"
@@ -88,9 +89,9 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 
 	expectedTotalRead := 0
 
-	readResponses := make([]*readResponse, 0, 1)
-	readResponsesLock := &sync.Mutex{}
-	readResponsesCond := sync.NewCond(readResponsesLock)
+	responses := make([]*readResponse, 0, 1)
+	responsesLock := &sync.RWMutex{}
+	responsesCond := sync.NewCond(responsesLock)
 
 	readCtx, readCtxDone := context.WithCancel(context.Background())
 	defer readCtxDone()
@@ -120,7 +121,9 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 		localReadIndex := readIndex
 		readerIndex := r.readerIndex
 
-		readResponses = append(readResponses, nil) // Reserve space
+		responsesLock.Lock()
+		responses = append(responses, nil) // Reserve space
+		responsesLock.Unlock()
 
 		activeReaders++
 
@@ -164,14 +167,16 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 				}
 			}
 
-			readResponses[localReadIndex] = &readResponse{
+			responsesLock.RLock()
+			responses[localReadIndex] = &readResponse{
 				index:       localReadIndex,
 				readerIndex: readerIndex,
 				buffer:      buf,
 				n:           totalN,
 				err:         err,
 			}
-			readResponsesCond.Signal() // Signal that a response is ready
+			responsesLock.RUnlock()
+			responsesCond.Signal() // Signal that a response is ready
 			return
 		})
 
@@ -188,14 +193,14 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 	}
 
 	// Process responses
-	for idx := 0; idx < len(readResponses); idx++ {
-		readResponsesLock.Lock()
+	for idx := 0; idx < len(responses); idx++ {
+		responsesLock.Lock()
 		// Wait for next response to be ready
-		for readResponses[idx] == nil {
-			readResponsesCond.Wait()
+		for responses[idx] == nil {
+			responsesCond.Wait()
 		}
-		response := readResponses[idx]
-		readResponsesLock.Unlock()
+		response := responses[idx]
+		responsesLock.Unlock()
 
 		activeReaders--
 
@@ -231,8 +236,8 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 	// Wait for all goroutines to finish, this should never be the case, but as good practise included
 	group.Wait()
 
-	if len(readResponses) > 0 {
-		lastReadResponse := readResponses[len(readResponses)-1]
+	if len(responses) > 0 {
+		lastReadResponse := responses[len(responses)-1]
 		// When last response was from last reader in batch and hit EOF, we need to advance readers
 		if lastReadResponse.err == io.EOF {
 			r.readerIndex++
@@ -265,18 +270,15 @@ func (r *AdaptiveParallelMergerResourceReader) Seek(offset int64, whence int) (n
 		newIndex = r.index + offset
 	case io.SeekEnd:
 		// Seek all to end to get their accurate size
-		var totalSizeMu sync.Mutex
-		var totalSize int64
+		var totalSize atomic.Int64
 		for _, reader := range r.readers {
 			r.readerGroup.Go(func() (err error) {
 				size, err := reader.Seek(0, io.SeekEnd)
 
-				totalSizeMu.Lock()
 				if err != nil {
 					return
 				}
-				totalSize += size
-				totalSizeMu.Unlock()
+				totalSize.Add(size)
 				return
 			})
 		}
@@ -285,7 +287,7 @@ func (r *AdaptiveParallelMergerResourceReader) Seek(offset int64, whence int) (n
 		if err != nil {
 			return 0, err
 		}
-		newIndex = totalSize + offset
+		newIndex = totalSize.Load() + offset
 	default:
 		return 0, errors.New("invalid whence value")
 	}
@@ -385,8 +387,6 @@ func seekThroughReaders(r *AdaptiveParallelMergerResourceReader, seekAmount int6
 				size, err := reader.Seek(0, io.SeekEnd)
 
 				responsesLock.RLock()
-				defer responsesLock.RUnlock()
-
 				responses[localIndex] = &seekResponse{
 					index:       localIndex,
 					readerIndex: readerIndex,
@@ -394,6 +394,7 @@ func seekThroughReaders(r *AdaptiveParallelMergerResourceReader, seekAmount int6
 					actual:      size,
 					err:         err,
 				}
+				responsesLock.RUnlock()
 				responsesCond.Signal()
 
 				return
