@@ -32,12 +32,12 @@ func (r *BytesResourceReader) Close() error {
 }
 
 func (r *BytesResourceReader) Read(p []byte) (n int, err error) {
-	if len(p) == 0 {
+	if r.index >= int64(len(r.resource.Content)) {
+		err = io.EOF
 		return
 	}
 
-	if r.index >= int64(len(r.resource.Content)) {
-		err = io.EOF
+	if len(p) == 0 {
 		return
 	}
 
@@ -62,8 +62,12 @@ func (r *BytesResourceReader) Seek(offset int64, whence int) (int64, error) {
 		return 0, resource.ErrInvalidSeek
 	}
 
-	if newIndex < 0 || newIndex > resourceSize {
+	if newIndex < 0 {
 		return 0, resource.ErrInvalidSeek
+	}
+
+	if newIndex > resourceSize {
+		newIndex = resourceSize
 	}
 
 	r.index = newIndex
