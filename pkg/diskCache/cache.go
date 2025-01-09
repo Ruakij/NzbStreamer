@@ -82,7 +82,7 @@ func (c *Cache) maxSizeEvict(requiredSpace int64) error {
 	for c.options.MaxSize-c.currentSize < requiredSpace {
 		key := c.options.EvictPolicyHook(c.items)
 		if key == "" {
-			return errors.New("coult not make required space")
+			return errors.New("could not make required space")
 		}
 
 		err := c.removeFile(key)
@@ -109,32 +109,58 @@ func (c *Cache) SetWithReader(key string, reader io.Reader) (int64, error) {
 		}
 	}()
 
-	limit := c.options.MaxSize - c.currentSize
-	if c.options.ItemMaxSize > 0 && limit > c.options.ItemMaxSize {
-		limit = c.options.ItemMaxSize
-	}
+	var totalWritten int64
+	buf := make([]byte, 1024*1024) // 1MB buffer for reading, adjust size as needed
 
-	var limitReader io.Reader
-	if c.options.MaxSize > 0 || c.options.ItemMaxSize > 0 {
-		limitReader = io.LimitReader(reader, limit)
-	} else {
-		limitReader = reader
-	}
+	var totalN int64 = 0
+	for {
+		// Read a chunk
+		n, readErr := reader.Read(buf)
+		totalN += int64(n)
+		if n > 0 {
+			if defaultCacheOptions.MaxSizeEvictBlocking {
+				c.mu.Lock()
+				// Ensure there is enough space, evict if necessary
+				err = c.maxSizeEvict(totalN)
+				if err != nil {
+					c.mu.Unlock()
+					return totalWritten, err
+				}
+				c.mu.Unlock()
+			} else {
+				go func() {
+					c.mu.Lock()
+					// Ensure there is enough space, evict if necessary
+					err = c.maxSizeEvict(totalN)
+					c.mu.Unlock()
+				}()
+			}
 
-	n, err := io.Copy(file, limitReader)
-	if err != nil {
-		return 0, err
+			// Write the chunk
+			nw, writeErr := file.Write(buf[:n])
+			if writeErr != nil {
+				return totalWritten, writeErr
+			}
+			totalWritten += int64(nw)
+		}
+
+		// End of reader, or error
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return totalWritten, readErr
+		}
 	}
 
 	if err := file.Sync(); err != nil {
-		return 0, err
+		return totalWritten, err
 	}
 
-	// Atomic rename
 	finalFilePath := filepath.Join(c.options.CacheDir, key)
 	err = os.Rename(tempFilePath, finalFilePath)
 	if err != nil {
-		return 0, err
+		return totalWritten, err
 	}
 
 	// Successfully updated, update header
@@ -146,15 +172,12 @@ func (c *Cache) SetWithReader(key string, reader io.Reader) (int64, error) {
 			ModTime: time.Now(),
 		}
 	}
-	header.Size = n
+	header.Size = totalWritten
 	c.items[key] = header
+	c.currentSize += totalWritten
 	c.mu.Unlock()
 
-	c.mu.Lock()
-	c.currentSize += n
-	c.mu.Unlock()
-
-	return n, nil
+	return totalWritten, nil
 }
 
 func (c *Cache) Set(key string, data []byte) (int64, error) {
