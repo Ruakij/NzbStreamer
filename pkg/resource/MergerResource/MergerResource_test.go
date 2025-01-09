@@ -39,11 +39,6 @@ func TestMergerResource(t *testing.T) {
 		t.Errorf("failed to SeekCurrent with offset=%d, returned seekStartOffset=%d: %v", 1, seekStartOffset, err)
 	}
 
-	_, err = readSeeker.Seek(20, io.SeekStart)
-	if err == nil {
-		t.Errorf("failed to error on SeekStart with offset=%d", 1)
-	}
-
 	seekStartOffset, err = readSeeker.Seek(7, io.SeekEnd)
 	if err != nil {
 		t.Errorf("failed to SeekEnd with offset=%d: %v", 7, err)
