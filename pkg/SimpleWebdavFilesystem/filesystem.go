@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,12 +211,22 @@ func (fs *FS) Stat(ctx context.Context, name string) (*webdav.FileInfo, error) {
 		return nil, err
 	}
 
+	var mimeType string
+	if !node.File.IsDir() {
+		// Detect MIME type based on file extension
+		ext := strings.ToLower(filepath.Ext(name))
+		mimeType = mime.TypeByExtension(ext)
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+	}
+
 	return &webdav.FileInfo{
 		Path:     name,
 		Size:     node.File.Size(),
 		ModTime:  node.File.ModTime(),
 		IsDir:    node.File.IsDir(),
-		MIMEType: "application/octet-stream",
+		MIMEType: mimeType,
 	}, nil
 }
 
