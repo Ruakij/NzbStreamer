@@ -85,6 +85,14 @@ func (c *Cache) maxSizeEvict(requiredSpace int64) error {
 			return errors.New("could not make required space")
 		}
 
+		header, exists := c.items[key]
+		if !exists {
+			return errors.New("item not found")
+		}
+
+		header.lock.Lock()
+		defer header.lock.Unlock()
+
 		err := c.removeFile(key)
 		if err != nil {
 			return err
@@ -238,6 +246,7 @@ func (c *Cache) GetWithReader(key string) (io.ReadSeekCloser, *CacheItemHeader, 
 
 	file, err := os.Open(filePath)
 	if err != nil {
+		header.lock.RUnlock()
 		return nil, nil, err
 	}
 
