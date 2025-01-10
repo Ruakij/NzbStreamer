@@ -157,15 +157,14 @@ func loadNzbFile(path string) (*nzbParser.NzbData, error) {
 		}
 	}
 	if len(errors) > 0 {
-		var errMsg string
+		var errMsg strings.Builder
 		for i, err := range errors {
-			if i != len(errors)-1 {
-				errMsg += fmt.Sprintf("%v, ", err)
-			} else {
-				errMsg += fmt.Sprintf("%v", err)
+			if i != 0 {
+				errMsg.WriteString(", ")
 			}
+			errMsg.WriteString(fmt.Sprintf("%v", err))
 		}
-		return nil, fmt.Errorf("errors while checking Nzb: %s", errMsg)
+		return nil, fmt.Errorf("errors while checking Nzb: %s", errMsg.String())
 	}
 	return nzbData, nil
 }
