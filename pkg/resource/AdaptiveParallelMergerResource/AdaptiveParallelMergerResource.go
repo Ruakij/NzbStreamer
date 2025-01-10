@@ -32,6 +32,7 @@ func NewAdaptiveParallelMergerResource(resources []resource.ReadSeekCloseableRes
 type AdaptiveParallelMergerResourceReader struct {
 	resource    *AdaptiveParallelMergerResource
 	readers     []io.ReadSeekCloser
+	mutex       sync.RWMutex
 	readerGroup errgroup.Group
 	// Position in data
 	index int64
@@ -87,6 +88,8 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 		return
 	}
 
+	r.mutex.Lock()
+
 	expectedTotalRead := 0
 
 	responses := make([]*readResponse, 0, 1)
@@ -100,6 +103,52 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 	// Which local index this reader and thus readResponse has
 	readIndex := 0
 	activeReaders := 0
+	processIndex := 0
+
+	// Unlock mutex, when group finished
+	// TODO: Maybe its possible to only block affected readers separately not to halt all activity? Might not be that critical though
+	defer func() {
+		// When already everything processed, dont start goroutine
+		if processIndex >= len(responses) {
+			defer r.mutex.Unlock()
+			// group should have finished, in case it hasnt, wait
+			group.Wait()
+			return
+		}
+		go func() {
+			defer r.mutex.Unlock()
+
+			// Function to process responses
+			processResponses := func() {
+				responsesLock.Lock()
+				defer responsesLock.Unlock()
+
+				for processIndex < len(responses) {
+					if responses[processIndex] == nil {
+						processIndex++
+						continue
+					}
+					response := responses[processIndex]
+
+					// Read has concluded, seek back
+					r.readers[response.readerIndex].Seek(0, io.SeekStart)
+
+					// Delete to skip in the next step
+					responses[processIndex] = nil
+					processIndex++
+				}
+			}
+
+			// Process remaining responses
+			processResponses()
+
+			// Wait for group & discard error, we can't raise it here anyways
+			group.Wait()
+
+			// Process remaining responses after waiting for all goroutines to finish
+			processResponses()
+		}()
+	}()
 
 	// Start readers
 	for expectedTotalRead < len(p) && r.readerIndex < len(r.readers) {
@@ -143,11 +192,12 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 			buf := make([]byte, expectedRead)
 			totalN, n := 0, 0
 			var err error
+			var prevNCount int
 			for {
 				// Check if job is cancelled while before next read
 				select {
 				case <-readCtx.Done():
-					return nil
+					break
 				default:
 				}
 
@@ -162,6 +212,17 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 				// Part reads dont require EOF
 				if expectedRead < resourceSizeLeft {
 					break
+				}
+
+				// If we read nothing 3 times consecutively with no error, stop with error
+				if n == 0 && err == nil {
+					if prevNCount >= 3-1 {
+						err = io.ErrNoProgress
+					} else {
+						prevNCount++
+					}
+				} else {
+					prevNCount = 0
 				}
 
 				// When there is no EOF yet and we are below the total read request
@@ -193,19 +254,18 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 	}
 
 	// Process responses
-	for idx := 0; idx < len(responses); idx++ {
+	for processIndex < len(responses) {
 		responsesLock.Lock()
 		// Wait for next response to be ready
-		for responses[idx] == nil {
+		for responses[processIndex] == nil {
 			responsesCond.Wait()
 		}
-		response := responses[idx]
+		response := responses[processIndex]
 		responsesLock.Unlock()
 
 		activeReaders--
 
 		if response.err != nil && response.err != io.EOF {
-			// TODO: Early returns cancel the goroutines, but already running ones will complete their work, leaving the readers in an instable state; A solution must be found i.e. Seeking when switching to a new reader or via goroutine and lock to seek affected readers back
 			return 0, response.err
 		}
 
@@ -219,29 +279,33 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 			r.index += int64(copied)
 			r.readerIndex = response.readerIndex
 
+			// TODO: Also move this into deferred group-finish action to not have to wait for seek?
 			if copied < actualRead {
 				// When not all was copied, we filled p, the rest is too much
 				r.readerByteIndex += int64(copied)
 				r.readers[response.readerIndex].Seek(r.readerByteIndex, io.SeekStart)
 			}
-		} else {
-			// Filled p, anymore is too much
-			r.readers[response.readerIndex].Seek(0, io.SeekStart)
+			// When last processed response hit EOF, advance readers
+			if response.err == io.EOF {
+				r.readerIndex++
+				r.readerByteIndex = 0
+			}
+		}
+
+		processIndex++
+
+		// If we just filled p, we are done
+		if totalRead == len(p) {
+			break
 		}
 	}
 
 	// Cancel if any work is left
-	//readCtxDone()
-	// Wait for all goroutines to finish, this should never be the case, but as good practise included
-	group.Wait()
+	readCtxDone()
 
 	if len(responses) > 0 {
-		lastReadResponse := responses[len(responses)-1]
-		// When last response was from last reader in batch and hit EOF, we need to advance readers
-		if lastReadResponse.err == io.EOF {
-			r.readerIndex++
-			r.readerByteIndex = 0
-		}
+		lastReadResponse := responses[processIndex-1]
+
 		// When last response was from last actual reader
 		if lastReadResponse.readerIndex == len(r.readers)-1 && lastReadResponse.err != nil {
 			err = lastReadResponse.err
@@ -252,6 +316,9 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (totalRead int, er
 }
 
 func (mrmr *AdaptiveParallelMergerResourceReader) Close() (err error) {
+	mrmr.mutex.Lock()
+	defer mrmr.mutex.Unlock()
+
 	for _, reader := range mrmr.readers {
 		err = reader.Close()
 		if err != nil {
@@ -262,6 +329,9 @@ func (mrmr *AdaptiveParallelMergerResourceReader) Close() (err error) {
 }
 
 func (r *AdaptiveParallelMergerResourceReader) Seek(offset int64, whence int) (newIndex int64, err error) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
 	switch whence {
 	case io.SeekStart:
 		newIndex = offset
