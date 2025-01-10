@@ -27,7 +27,8 @@ func (r *BytesResource) Size() (int64, error) {
 }
 
 func (r *BytesResourceReader) Close() error {
-	// No cleanup needed
+	r.resource.Content = nil
+	r.resource = nil
 	return nil
 }
 
