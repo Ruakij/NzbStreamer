@@ -51,7 +51,18 @@ func ParseNzb(inputStream io.Reader) (*NzbData, error) {
 			nzb.Meta["Name"] = nzb.Meta["Title"]
 		} else {
 			// lastly try to guess it via file
-			nzb.Meta["Name"] = getBaseFilename(nzb.Files[0].Filename)
+			// Prefer having a dot in basename
+			for _, file := range nzb.Files {
+				baseFilename := getBaseFilename(file.Filename)
+				if strings.Contains(baseFilename, ".") {
+					nzb.Meta["Name"] = baseFilename
+				}
+			}
+			// Take any if there still no match
+			if _, ok := nzb.Meta["Name"]; !ok {
+				baseFilename := getBaseFilename(nzb.Files[0].Filename)
+				nzb.Meta["Name"] = baseFilename
+			}
 		}
 
 	}
@@ -66,7 +77,8 @@ var subjectRegexPatterns = []*regexp.Regexp{
 	// Normal
 	regexp.MustCompile(`^((?P<Name>.+?) +)?("(?P<Filename>[\w.\-+\[\]() ]+)") *((?P<Encoding>[\w.\-+\[\]()]+) +)?((?P<TotalSizeHint>[0-9]+) +)?(\((?P<SegmentIndexHint>\d+)\/(?P<SegmentCountHint>\d+)\))?$`),
 	// Simple
-	regexp.MustCompile(`^.*?"?(?P<Filename>[\w.\-+\[\]()]{6,})"?.*?$`),
+	regexp.MustCompile(`^.*?"(?P<Filename>[\w.\-+\[\]()]{6,})".*?$`),
+	regexp.MustCompile(`^.*?(?P<Filename>[\w.\-+\[\]()]{6,}).*?$`),
 	// Primitive
 	regexp.MustCompile(`"(?P<Filename>[\w.\-+\[\]() ]+)"`),
 }
@@ -75,8 +87,8 @@ func parseSubject(subject string) (name, filename, encoding string, segmentIndex
 	for _, regex := range subjectRegexPatterns {
 		// Match and check if filename is non-empty
 		match := regex.FindStringSubmatch(subject)
-		if match != nil && getRegexMatchOrDefault(match, regex.SubexpIndex("Filename"), "") != "" {
-
+		filename = getRegexMatchOrDefault(match, regex.SubexpIndex("Filename"), "")
+		if match != nil && strings.Contains(filename, ".") {
 			name = getRegexMatchOrDefault(match, regex.SubexpIndex("Name"), "")
 			filename = getRegexMatchOrDefault(match, regex.SubexpIndex("Filename"), "")
 			encoding = getRegexMatchOrDefault(match, regex.SubexpIndex("Encoding"), "yEnc")
@@ -102,7 +114,7 @@ func getRegexMatchOrDefault(match []string, index int, defaultValue string) stri
 	return defaultValue
 }
 
-var filenameExtensionRegexp *regexp.Regexp = regexp.MustCompile(`(\.([\w\-+\[\]()]{1,10}))?$`)
+var filenameExtensionRegexp *regexp.Regexp = regexp.MustCompile(`(\.([\w\-+\[\]()]{1,6}))?$`)
 
 func getBaseFilename(filename string) string {
 	return filenameExtensionRegexp.ReplaceAllString(filename, "")

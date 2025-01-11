@@ -7,7 +7,7 @@ import (
 )
 
 // var partNumberRegexp *regexp.Regexp = regexp.MustCompile(`([.\-_][\-_\w]{0,8})?\d{2,4}[\-_]?`)
-var partNumberRegexp *regexp.Regexp = regexp.MustCompile(`([.\-_])?\d{2,4}[\-_]?`)
+var partNumberRegexp *regexp.Regexp = regexp.MustCompile(`([.\-_])?\d{1,4}[\-_]?`)
 
 func GroupPartFilenames(filenames []string) map[string][]string {
 	groupedFiles := make(map[string][]string, 1)

@@ -26,10 +26,16 @@ func (nzb *NzbData) CheckPlausability() (warnings []EncapsulatedError, errors []
 		})
 	}
 
+	filenames := make(map[string]struct{})
 	for fileIndex, file := range nzb.Files {
 		fileWarnings, fileErrors := file.CheckPlausability()
-		warnings = append(warnings, prefixErrors(fmt.Sprintf("Segment[%d]: ", fileIndex), fileWarnings)...)
-		errors = append(errors, prefixErrors(fmt.Sprintf("Segment[%d]: ", fileIndex), fileErrors)...)
+		warnings = append(warnings, prefixErrors(fmt.Sprintf("File[%d]: ", fileIndex), fileWarnings)...)
+		errors = append(errors, prefixErrors(fmt.Sprintf("File[%d]: ", fileIndex), fileErrors)...)
+
+		if _, exists := filenames[file.Filename]; exists {
+			errors = append(errors, EncapsulatedError{error: fmt.Errorf("File[%d]: Duplicate filename", fileIndex)})
+		}
+		filenames[file.Filename] = struct{}{}
 	}
 
 	return

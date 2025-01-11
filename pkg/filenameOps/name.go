@@ -6,7 +6,7 @@ import (
 	"github.com/agnivade/levenshtein"
 )
 
-var filenameExtensionRegexp *regexp.Regexp = regexp.MustCompile(`(\.([\w\-+\[\]()]{1,10}))+$`)
+var filenameExtensionRegexp *regexp.Regexp = regexp.MustCompile(`(\.([\w\-+\[\]()]{1,6})){1,2}$`)
 
 func GetBaseFilename(filename string) string {
 	return filenameExtensionRegexp.ReplaceAllString(filename, "")
