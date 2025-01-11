@@ -19,8 +19,6 @@ cloud.google.com/go/storage v1.5.0/go.mod h1:tpKbwo567HUNpVclU5sGELwQWBDZ8gh0Zeo
 dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7gZCb22OMCxBHrMx7a5I7Hp++hsVxbQ4BYO7hU=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
-github.com/Ruakij/rardecode/v2 v2.0.2 h1:AmjJ0DzGSvEAqyMqhavriCGNWmBS4dR7V71jJoDvlis=
-github.com/Ruakij/rardecode/v2 v2.0.2/go.mod h1:LuDYGSrT72pTe8z/Gnz0/2dGx+6U2hhWM+sqAShI0/k=
 github.com/agnivade/levenshtein v1.2.0 h1:U9L4IOT0Y3i0TIlUIDJ7rVUziKi/zPbrJGaFrtYH3SY=
 github.com/agnivade/levenshtein v1.2.0/go.mod h1:QVVI16kDrtSuwcpd0p1+xMC6Z/VfhtCyDIjcwga4/DU=
 github.com/andrewstuart/pool v0.0.0-20150425222649-3d2cc9c43044 h1:eRO7ggsOMC4Wp+BqHT8aSlN4A4Hc5ktRNxMA65wRytg=

@@ -3,8 +3,8 @@ package RarFileResource
 import (
 	"io"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/rardecode"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
-	"github.com/Ruakij/rardecode/v2"
 )
 
 // RarFileResource is a utility type that allows using a byte-slice resource.
@@ -165,12 +165,23 @@ func (r *RarFileResourceReader) Seek(offset int64, whence int) (newIndex int64, 
 		r.index = 0
 	}
 
+	delta := newIndex - r.index
+
 	// Skip forwards
-	n, err := io.CopyN(io.Discard, r.rarReader, newIndex-r.index)
+	var n int
+	var totalN int64
+	buf := make([]byte, 1*1024*1024)
+	for err == nil && totalN < delta {
+		if totalN+int64(len(buf)) > delta {
+			buf = buf[:delta-totalN]
+		}
+		n, err = r.rarReader.Read(buf)
+		totalN += int64(n)
+	}
 	if err != nil {
 		return 0, err
 	}
-	if n != newIndex-r.index {
+	if totalN != newIndex-r.index {
 		return 0, io.ErrUnexpectedEOF
 	}
 

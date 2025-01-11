@@ -27,7 +27,6 @@ require (
 )
 
 require (
-	github.com/Ruakij/rardecode/v2 v2.0.2
 	github.com/agnivade/levenshtein v1.2.0
 	github.com/andrewstuart/pool v0.0.0-20150425222649-3d2cc9c43044 // indirect
 	github.com/bodgit/sevenzip v1.6.0
