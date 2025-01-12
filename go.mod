@@ -31,5 +31,7 @@ require (
 	github.com/andrewstuart/pool v0.0.0-20150425222649-3d2cc9c43044 // indirect
 	github.com/bodgit/sevenzip v1.6.0
 	github.com/emersion/go-webdav v0.6.0
+	github.com/fsnotify/fsnotify v1.8.0
+	github.com/ricochet2200/go-disk-usage/du v0.0.0-20210707232629-ac9918953285
 	github.com/sethvargo/go-envconfig v1.1.0
 )
