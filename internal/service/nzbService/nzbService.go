@@ -12,6 +12,7 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbStore"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/SimpleWebdavFilesystem"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/filenameOps"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbParser"
 	"github.com/agnivade/levenshtein"
 )
@@ -138,10 +139,19 @@ func (s *Service) AddNzb(nzbData *nzbParser.NzbData) (err error) {
 		filesInFolder := countItemsInFolder(filepath, paths)
 		filesByExtension := groupFilesByExtension(filesInFolder)
 		if len(filesByExtension[fileExtension]) == 1 {
+			replacement := nzbData.MetaName
+			if filepath != "" {
+				// When folder fuzzy-checks above nzb-name, prefer it as replacement
+				foldername := path.Base(filepath)
+				folderBase := filenameOps.GetBaseFilename(foldername)
+				if 1-float32(levenshtein.ComputeDistance(folderBase, replacement))/float32(len(replacement)) >= s.filenameReplacementBelowLevensteinRatio {
+					replacement = folderBase
+				}
+			}
 			// Apply Fuzzy-check
 			fileBase := filename[:len(filename)-len(fileExtension)]
-			if 1-float32(levenshtein.ComputeDistance(fileBase, nzbData.MetaName))/float32(len(nzbData.MetaName)) < s.filenameReplacementBelowLevensteinRatio {
-				filename = nzbData.MetaName + fileExtension
+			if 1-float32(levenshtein.ComputeDistance(fileBase, replacement))/float32(len(replacement)) < s.filenameReplacementBelowLevensteinRatio {
+				filename = replacement + fileExtension
 			}
 		}
 
