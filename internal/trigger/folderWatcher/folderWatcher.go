@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbParser"
+	"github.com/fsnotify/fsnotify"
 	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
 )
@@ -37,22 +38,64 @@ func NewFolderWatcher(folder string) *folderWatcher {
 
 func (fw *folderWatcher) Init() {
 	go fw.scanDirectory()
-	go fw.startPeriodicScan(10 * time.Second)
+	err := fw.startFsNotifyScan()
+	if err != nil {
+		slog.Error("Error when setting up FsNotifyScan, continuing with polling", "error", err)
+		fw.startPeriodicScan(15 * time.Second)
+	}
+}
+
+// startFsNotifyScan uses fsnotify to detect changes on disk
+func (fw *folderWatcher) startFsNotifyScan() (err error) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return
+	}
+
+	err = watcher.Add(fw.watchFolder)
+	if err != nil {
+		watcher.Close()
+		return
+	}
+
+	go func() {
+		defer watcher.Close()
+
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Has(fsnotify.Create) {
+					fw.mu.Lock()
+					fw.processedFiles[event.Name] = struct{}{}
+					fw.processFile(event.Name)
+					fw.mu.Unlock()
+				}
+			}
+		}
+	}()
+
+	return
 }
 
 // startPeriodicScan periodically checks the directory for new files
 func (fw *folderWatcher) startPeriodicScan(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 
-	for {
-		select {
-		case <-fw.stopChan:
-			return
-		case <-ticker.C:
-			fw.scanDirectory()
+	go func() {
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-fw.stopChan:
+				return
+			case <-ticker.C:
+				fw.scanDirectory()
+			}
 		}
-	}
+	}()
 }
 
 // scanDirectory scans the directory and processes each .nzb file found
@@ -74,7 +117,7 @@ func (fw *folderWatcher) scanDirectory() {
 			if _, processed := fw.processedFiles[file.Name()]; !processed {
 				fw.processedFiles[file.Name()] = struct{}{}
 				group.Go(func() (err error) {
-					fw.processFile(file.Name())
+					fw.processFile(filepath.Join(fw.watchFolder, file.Name()))
 					return
 				})
 			}
@@ -85,9 +128,7 @@ func (fw *folderWatcher) scanDirectory() {
 }
 
 // processFile triggers the addHooks for the file
-func (fw *folderWatcher) processFile(filename string) {
-	filePath := filepath.Join(fw.watchFolder, filename)
-
+func (fw *folderWatcher) processFile(filePath string) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		slog.Error("Failed to open file", filePath, err)
@@ -97,7 +138,7 @@ func (fw *folderWatcher) processFile(filename string) {
 
 	nzbData, err := nzbParser.ParseNzb(file)
 	if err != nil {
-		slog.Error("Failed to parse nzb", "filename", filename, "err", err)
+		slog.Error("Failed to parse nzb", "filePath", filePath, "err", err)
 		return
 	}
 
@@ -110,7 +151,7 @@ func (fw *folderWatcher) processFile(filename string) {
 			}
 			msg.WriteString(fmt.Sprintf("%v", warn))
 		}
-		slog.Warn("Warnings while checking Nzb", "filename", filename, "msg", msg.String())
+		slog.Warn("Warnings while checking Nzb", "filePath", filePath, "msg", msg.String())
 	}
 	if len(errors) > 0 {
 		var msg strings.Builder
@@ -120,7 +161,7 @@ func (fw *folderWatcher) processFile(filename string) {
 			}
 			msg.WriteString(fmt.Sprintf("%v", err))
 		}
-		slog.Warn("Errors while checking Nzb", "filename", filename, "msg", msg.String())
+		slog.Warn("Errors while checking Nzb", "filePath", filePath, "msg", msg.String())
 		return
 	}
 
@@ -128,14 +169,14 @@ func (fw *folderWatcher) processFile(filename string) {
 	defer fw.wg.Done()
 
 	if len(fw.addHooks) == 0 {
-		slog.Warn("Cannot notify, no listeners found", "filename", filename)
+		slog.Warn("Cannot notify, no listeners found", "filePath", filePath)
 		return
 	}
 
 	for _, hook := range fw.addHooks {
 		err := hook(nzbData)
 		if err != nil {
-			slog.Error("Error executing hook:", err)
+			slog.Error("Error executing hook:", "err", err)
 		}
 	}
 }
