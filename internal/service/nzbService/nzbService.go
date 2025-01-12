@@ -124,6 +124,11 @@ func (s *Service) AddNzb(nzbData *nzbParser.NzbData) (err error) {
 		}
 	}
 
+	if len(files) == 0 {
+		slog.Warn("After blacklist, no files left", "MetaName", nzbData.MetaName)
+		return
+	}
+
 	// Extract paths
 	paths := make([]string, 0, len(files))
 	for path := range files {
@@ -136,7 +141,7 @@ func (s *Service) AddNzb(nzbData *nzbParser.NzbData) (err error) {
 		filepath = filepath[:len(filepath)-len(filename)]
 
 		// If only item with extension in folder
-		filesInFolder := countItemsInFolder(filepath, paths)
+		filesInFolder := listItemsInFolder(filepath, paths)
 		filesByExtension := groupFilesByExtension(filesInFolder)
 		if len(filesByExtension[fileExtension]) == 1 {
 			replacement := nzbData.MetaName
@@ -156,7 +161,7 @@ func (s *Service) AddNzb(nzbData *nzbParser.NzbData) (err error) {
 		}
 
 		// TODO: Flatten
-		//flattendFilepath := s.flattenPath(filepath, paths)
+		filepath = s.flattenPath(filepath, paths)
 
 		err = s.filesystem.AddFile(
 			path.Join(nzbData.MetaName, filepath),
@@ -201,7 +206,7 @@ func (s *Service) flattenPath(file string, files []string) (newFile string) {
 
 		// Count prefix-matching items in paths
 		// If only 1 found, cut folder-prefix so far of path and return new path
-		if len(countItemsInFolder(folderPrefix, files)) == 1 {
+		if len(listItemsInFolder(folderPrefix, files)) == 1 {
 			newFile = file[len(folderPrefix):]
 		}
 	}
@@ -212,7 +217,7 @@ func (s *Service) flattenPath(file string, files []string) (newFile string) {
 	return path.Clean(newFile)
 }
 
-func countItemsInFolder(folder string, files []string) (foundFiles []string) {
+func listItemsInFolder(folder string, files []string) (foundFiles []string) {
 	for _, file := range files {
 		// Match folder
 		if after, found := strings.CutPrefix(file, folder); found {

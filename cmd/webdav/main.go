@@ -4,8 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"slices"
 
-	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpClient"
+	nntp "git.ruekov.eu/ruakij/nzbStreamer/internal/nntpClient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbRecordFactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbStore/stubStore"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/webdav"
@@ -29,8 +30,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Setup logging
+	slog.SetLogLoggerLevel(c.Logging.Level)
+
 	// Setup nntpClient
-	nntpClient := nntpClient.SetupNntpClient(c.Usenet.Host, c.Usenet.Port, c.Usenet.Tls, c.Usenet.User, c.Usenet.Password, c.Usenet.MaxConn)
+	nntpClient := nntp.SetupNntpClient(c.Usenet.Host, c.Usenet.Port, c.Usenet.Tls, c.Usenet.User, c.Usenet.Password, c.Usenet.MaxConn)
+	caps, err := nntpClient.Capabilities()
+	if err != nil {
+		slog.Error("Usenet getting capabilities failed", "err", err)
+		os.Exit(1)
+	}
+	if slices.Contains(caps, "AUTHINFO USER PASS") {
+		slog.Error("Usenet auth failed")
+		os.Exit(1)
+	}
 
 	// Setup cache
 	segmentCache, err := diskCache.NewCache(&diskCache.CacheOptions{

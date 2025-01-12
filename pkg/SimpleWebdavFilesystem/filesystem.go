@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"os"
 	"path/filepath"
@@ -178,8 +179,6 @@ func (fs *FS) Open(ctx context.Context, name string) (io.ReadCloser, error) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
-	fmt.Printf("Open\t%s\n", name)
-
 	node, err := fs.pathWalker(name)
 	if err != nil {
 		return nil, err
@@ -190,6 +189,8 @@ func (fs *FS) Open(ctx context.Context, name string) (io.ReadCloser, error) {
 		node:       node,
 		fs:         fs,
 	}
+
+	slog.Debug("Open", "name", name)
 
 	if !node.File.isDir {
 		reader, err := node.File.openable.Open()
@@ -296,6 +297,7 @@ type simpleFileReader struct {
 }
 
 func (sf *simpleFileReader) Close() error {
+	slog.Debug("Close", "name", sf.simpleFile.name)
 	if sf.reader != nil {
 		return sf.reader.Close()
 	}
@@ -304,7 +306,11 @@ func (sf *simpleFileReader) Close() error {
 
 func (sf *simpleFileReader) Read(p []byte) (n int, err error) {
 	if sf.reader != nil {
-		return sf.reader.Read(p)
+		n, err = sf.reader.Read(p)
+		if err != nil && err != io.EOF {
+			slog.Error("Read error", "name", sf.simpleFile.name, "len(p)", len(p), "err", err)
+		}
+		return
 	}
 	return 0, ErrReadOnlyFilesystem
 }
@@ -319,7 +325,7 @@ func (sf *simpleFileReader) Seek(offset int64, whence int) (int64, error) {
 		return info.Size(), nil
 	}
 
-	fmt.Printf("%s\tSeek(%d, %d)\n", sf.simpleFile.name, offset, whence)
+	slog.Debug("Seek", "name", sf.simpleFile.name, "offset", offset, "whence", whence)
 	if sf.reader != nil {
 		return sf.reader.Seek(offset, whence)
 	}
@@ -333,6 +339,8 @@ func (sf *simpleFileReader) Write(p []byte) (n int, err error) {
 func (sf *simpleFileReader) Readdir(count int) ([]os.FileInfo, error) {
 	sf.fs.mu.RLock()
 	defer sf.fs.mu.RUnlock()
+
+	slog.Debug("Readdir", "name", sf.simpleFile.name)
 
 	if !sf.simpleFile.isDir {
 		return nil, fmt.Errorf("%s is not a directory", sf.simpleFile.name)
@@ -351,6 +359,7 @@ func (sf *simpleFileReader) Readdir(count int) ([]os.FileInfo, error) {
 }
 
 func (sf *simpleFileReader) Stat() (os.FileInfo, error) {
+	slog.Debug("Stat", "name", sf.simpleFile.name)
 	return sf.simpleFile, nil
 }
 
