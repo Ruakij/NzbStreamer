@@ -114,7 +114,7 @@ func getRegexMatchOrDefault(match []string, index int, defaultValue string) stri
 	return defaultValue
 }
 
-var filenameExtensionRegexp *regexp.Regexp = regexp.MustCompile(`(\.([\w\-+\[\]()]{1,6}))?$`)
+var filenameExtensionRegexp *regexp.Regexp = regexp.MustCompile(`(\.([\w\-+\[\]()]{1,8}))?$`)
 
 func getBaseFilename(filename string) string {
 	return filenameExtensionRegexp.ReplaceAllString(filename, "")
