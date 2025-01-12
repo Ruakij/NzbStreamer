@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"regexp"
 	"time"
 )
@@ -10,7 +11,7 @@ type UsenetConfig struct {
 	Port     int    `env:"USENET_PORT, default=563"`
 	Tls      bool   `env:"USENET_TLS, default=true"`
 	User     string `env:"USENET_USER, required"`
-	Password string `env:"USENET_USER, required"`
+	Password string `env:"USENET_PASS, required"`
 	MaxConn  int    `env:"USENET_MAX_CONN, default=20"`
 }
 
@@ -20,7 +21,7 @@ type WebdavConfig struct {
 
 type CacheConfig struct {
 	Path    string `env:"CACHE_PATH, default=.cache"`
-	MaxSize int64  `env:"CACHE_MAX_SIZE, default=-1"`
+	MaxSize int64  `env:"CACHE_MAX_SIZE, default=0"`
 }
 
 type ReadaheadCacheConfig struct {
@@ -40,6 +41,10 @@ type FilesystemConfig struct {
 	FixFilenameThreshold float32         `env:"FILESYSTEM_FIX_FILENAME_THRESHOLD, default=0.2"`
 }
 
+type LoggingConfig struct {
+	Level slog.Level ` env:"LOGLEVEL, default=INFO"`
+}
+
 type Config struct {
 	Usenet         UsenetConfig
 	Webdav         WebdavConfig
@@ -47,4 +52,5 @@ type Config struct {
 	ReadaheadCache ReadaheadCacheConfig
 	Filesystem     FilesystemConfig
 	FolderWatcher  FolderWatcherConfig
+	Logging        LoggingConfig
 }
