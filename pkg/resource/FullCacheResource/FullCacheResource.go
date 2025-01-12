@@ -144,6 +144,7 @@ func (r *FullCacheResourceReader) Close() (err error) {
 	r.ctx_cancel()
 	if r.underlyingReader != nil {
 		err = r.underlyingReader.Close()
+		r.underlyingReader = nil
 	}
 	return
 }

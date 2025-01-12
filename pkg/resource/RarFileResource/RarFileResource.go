@@ -110,9 +110,9 @@ func (r *RarFileResource) Size() (int64, error) {
 	return r.size, nil
 }
 
-func (r *RarFileResourceReader) Close() error {
+func (r *RarFileResourceReader) Close() (err error) {
 	r.rarReader = nil
-	return nil
+	return
 }
 
 func (r *RarFileResourceReader) Read(p []byte) (n int, err error) {

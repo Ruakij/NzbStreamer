@@ -72,10 +72,10 @@ func (r *AdaptiveReadaheadCache) Size() (int64, error) {
 }
 
 func (r *AdaptiveReadaheadCacheReader) Close() (err error) {
-	if err = r.cache.Flush(); err != nil {
+	if err = r.underlyingReader.Close(); err != nil {
 		return
 	}
-	return r.underlyingReader.Close()
+	return r.cache.Flush()
 }
 
 func (r *AdaptiveReadaheadCacheReader) Seek(offset int64, whence int) (newIndex int64, err error) {

@@ -12,11 +12,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	ReadModeNormal   = iota
-	ReadModeAdaptive = iota
-)
-
 // AdaptiveParallelMergerResource is a Resource type which allows combining multiple Resources as if it was one.
 // It reads underlying sources in parallel and can handle their size to be unknown.
 type AdaptiveParallelMergerResource struct {
@@ -321,6 +316,7 @@ func (mrmr *AdaptiveParallelMergerResourceReader) Close() (err error) {
 
 	for _, reader := range mrmr.readers {
 		err = reader.Close()
+		reader = nil
 		if err != nil {
 			return
 		}

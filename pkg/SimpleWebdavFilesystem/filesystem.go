@@ -296,12 +296,13 @@ type simpleFileReader struct {
 	fs         *FS
 }
 
-func (sf *simpleFileReader) Close() error {
+func (sf *simpleFileReader) Close() (err error) {
 	slog.Debug("Close", "name", sf.simpleFile.name)
 	if sf.reader != nil {
-		return sf.reader.Close()
+		err = sf.reader.Close()
+		sf.reader = nil
 	}
-	return nil
+	return err
 }
 
 func (sf *simpleFileReader) Read(p []byte) (n int, err error) {
