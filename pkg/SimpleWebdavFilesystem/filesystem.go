@@ -117,7 +117,7 @@ func (fs *FS) relativePathWalker(startNode *Node, path string) (*Node, error) {
 		return startNode, nil
 	}
 
-	segments := strings.Split(strings.TrimLeft(path, "/"), "/")
+	segments := strings.Split(strings.Trim(path, "/"), "/")
 	current := startNode
 	for _, segment := range segments {
 		next, exists := current.Children[segment]
