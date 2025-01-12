@@ -109,7 +109,10 @@ func (s *Service) AddNzb(nzbData *nzbParser.NzbData) (err error) {
 	s.nzbFiledata[nzbData.MetaName] = nzbData
 	s.mutex.Unlock()
 
-	files := s.factory.BuildSegmentStackFromNzbData(nzbData)
+	files, err := s.factory.BuildSegmentStackFromNzbData(nzbData)
+	if err != nil {
+		return
+	}
 
 	// Blacklist
 	for path := range files {

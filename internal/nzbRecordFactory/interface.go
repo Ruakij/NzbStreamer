@@ -6,5 +6,5 @@ import (
 )
 
 type Factory interface {
-	BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData) map[string]SimpleWebdavFilesystem.Openable
+	BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData) (map[string]SimpleWebdavFilesystem.Openable, error)
 }

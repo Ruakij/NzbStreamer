@@ -52,7 +52,7 @@ func (f *NzbFileFactory) SetAdaptiveReadaheadCacheSettings(adaptiveReadaheadCach
 	f.adaptiveReadaheadCacheMaxSize = adaptiveReadaheadCacheMaxSize
 }
 
-func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData) map[string]SimpleWebdavFilesystem.Openable {
+func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData) (files map[string]SimpleWebdavFilesystem.Openable, err error) {
 	// Build nzbFiles -> rawFiles
 	rawFiles := make(map[string]resource.ReadSeekCloseableResource, len(nzbData.Files))
 	for _, file := range nzbData.Files {
@@ -71,7 +71,7 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData
 	filenameOps.SortGroupedFilenames(groupedFilenames)
 
 	// Assemble structure
-	files := make(map[string]SimpleWebdavFilesystem.Openable, len(filenames))
+	files = make(map[string]SimpleWebdavFilesystem.Openable, len(filenames))
 	for groupFilename, filenames := range groupedFilenames {
 		groupedFiles := make([]resource.ReadSeekCloseableResource, len(filenames))
 		for i, filename := range filenames {
@@ -83,17 +83,16 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData
 
 		// Process special files
 		var specialFiles map[string]SimpleWebdavFilesystem.Openable
-		var err error
 		extension := path.Ext(groupFilename)
 		switch extension {
 		case ".rar", ".r":
 			specialFiles, err = f.BuildRarFileFromFileResource(groupedFiles, nzbData.Meta["Password"])
-		case ".7z", ".z":
+		case ".7z", ".z", ".zip":
 			specialFiles, err = f.Build7zFileFromFileResource(groupedFiles, nzbData.Meta["Password"])
 			if err != nil && extension == ".z" { // Fallback in case its actually a zip
 				//specialFiles, err = f.BuildZipFileFromFileResource(groupedFiles, nzbData.Meta["Password"])
 			}
-		case ".zip": // TODO: Implement zip
+			//case ".zip": // TODO: Implement zip?
 			//specialFiles, err = f.BuildZipFileFromFileResource(groupedFiles, nzbData.Meta["Password"])
 		}
 		if len(specialFiles) > 0 {
@@ -102,7 +101,7 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData
 			}
 		}
 		if err != nil {
-			// TODO: How to handle? Return or skip?
+			return
 		}
 	}
 
@@ -120,7 +119,7 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData
 		}
 	}
 
-	return files
+	return
 }
 
 func (f *NzbFileFactory) BuildNamedFileResourcesFromNzb(nzbData *nzbParser.NzbData) map[string]resource.ReadSeekCloseableResource {
