@@ -101,6 +101,8 @@ func (s *Service) Init() (err error) {
 
 // Add parsed nzb-data
 func (s *Service) AddNzb(nzbData *nzbParser.NzbData) (err error) {
+	slog.Debug("Adding nzb", "MetaName", nzbData.MetaName)
+
 	s.mutex.Lock()
 	if _, exists := s.nzbFiledata[nzbData.MetaName]; exists {
 		s.mutex.Unlock()
