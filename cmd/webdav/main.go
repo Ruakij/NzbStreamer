@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"slices"
 
 	nntp "git.ruekov.eu/ruakij/nzbStreamer/internal/nntpClient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbRecordFactory"
@@ -34,14 +33,9 @@ func main() {
 	slog.SetLogLoggerLevel(c.Logging.Level)
 
 	// Setup nntpClient
-	nntpClient := nntp.SetupNntpClient(c.Usenet.Host, c.Usenet.Port, c.Usenet.Tls, c.Usenet.User, c.Usenet.Password, c.Usenet.MaxConn)
-	caps, err := nntpClient.Capabilities()
+	nntpClient, err := nntp.SetupNntpClient(c.Usenet.Host, c.Usenet.Port, c.Usenet.Tls, c.Usenet.User, c.Usenet.Password, c.Usenet.MaxConn)
 	if err != nil {
-		slog.Error("Usenet getting capabilities failed", "err", err)
-		os.Exit(1)
-	}
-	if slices.Contains(caps, "AUTHINFO USER PASS") {
-		slog.Error("Usenet auth failed")
+		slog.Error("Setup Usenet-Client failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -52,7 +46,8 @@ func main() {
 		MaxSizeEvictBlocking: false,
 	})
 	if err != nil {
-		panic(err)
+		slog.Error("Cache creation failed", "error", err)
+		os.Exit(1)
 	}
 
 	filesystem := SimpleWebdavFilesystem.NewFS()
