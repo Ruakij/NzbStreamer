@@ -82,9 +82,13 @@ func (r *AdaptiveReadaheadCacheReader) Seek(offset int64, whence int) (newIndex 
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	newIndex, err = r.underlyingReader.Seek(offset, whence)
-	if err != nil {
-		return -1, err
+	switch whence {
+	case io.SeekStart:
+		newIndex = offset
+	case io.SeekCurrent:
+		newIndex = r.index + offset
+	case io.SeekEnd:
+		newIndex = -1
 	}
 
 	// Seek to same pos we are at
@@ -92,14 +96,21 @@ func (r *AdaptiveReadaheadCacheReader) Seek(offset int64, whence int) (newIndex 
 		return r.index, nil
 	}
 
+	newIndex, err = r.underlyingReader.Seek(offset, whence)
+	if err != nil {
+		return -1, err
+	}
+
 	// Seek cache if seeking is forwards and within bounds
 	indexDelta := newIndex - r.index
 	if indexDelta > 0 {
-		if int64(r.cache.GetSize())-indexDelta > 0 {
+		if int64(r.cache.GetSize()) > indexDelta {
 			_, err = r.cache.Seek(offset, whence)
 			if err != nil {
 				return
 			}
+		} else {
+			r.flushCache()
 		}
 	} else {
 		// Otherwise flush cache
@@ -246,7 +257,11 @@ func (r *AdaptiveReadaheadCacheReader) readahead() error {
 
 	// If buffer is too small, but it can grow
 	if r.cache.GetCurrFree() < int(readaheadAmount) && r.cache.GetCurrCapacity() < r.cache.GetMaxCapacity() {
-		r.cache.Resize(int(readaheadAmount))
+		resizeTarget := r.cache.GetSize() + int(readaheadAmount)
+		if resizeTarget > r.cache.GetMaxCapacity() {
+			resizeTarget = r.cache.GetMaxCapacity()
+		}
+		r.cache.Resize(resizeTarget)
 	}
 
 	// Check if buffer has any space
