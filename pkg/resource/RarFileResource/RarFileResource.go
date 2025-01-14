@@ -102,6 +102,20 @@ func (m *RarFileResource) GetRarFiles(limit int) ([]*rardecode.FileHeader, error
 }
 
 func (r *RarFileResource) Size() (int64, error) {
+	// If not filename specified, return total packed-size
+	if r.filename == "" {
+		var totalSize int64
+		for _, resource := range r.resources {
+			size, err := resource.Size()
+			if err != nil {
+				return 0, nil
+			}
+			totalSize += size
+		}
+		return totalSize, nil
+	}
+
+	// If size unset, open reader for first time
 	if r.size < 0 {
 		reader, err := r.Open()
 		if err != nil {
