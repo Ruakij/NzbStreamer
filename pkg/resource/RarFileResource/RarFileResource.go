@@ -5,6 +5,7 @@ import (
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/rardecode"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
+	"golang.org/x/sync/errgroup"
 )
 
 // RarFileResource is a utility type that allows using a byte-slice resource.
@@ -169,6 +170,29 @@ func (r *RarFileResourceReader) Seek(offset int64, whence int) (newIndex int64, 
 	// We cannot actually seek, so seeking backwards is specially not natively supported
 	if newIndex < r.index {
 		// Just reopen the reader
+		group := errgroup.Group{}
+		for i, reader := range r.openResources {
+			readerIndex := i
+			localReader := reader
+			group.Go(func() (err error) {
+				// Check if reader implements seeker
+				if seeker, ok := localReader.(io.Seeker); ok {
+					_, err = seeker.Seek(0, io.SeekStart)
+				} else {
+					// If it doesnt, reopen resource
+					r.openResources[readerIndex], err = r.resource.resources[readerIndex].Open()
+					if err != nil {
+						return
+					}
+				}
+				return
+			})
+		}
+		err := group.Wait()
+		if err != nil {
+			return 0, err
+		}
+
 		r.rarReader, err = rardecode.NewMultiReader(r.openResources)
 		if err != nil {
 			return 0, err
