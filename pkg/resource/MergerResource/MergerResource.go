@@ -150,9 +150,12 @@ func (r *MergerResourceReader) Seek(offset int64, whence int) (newIndex int64, e
 
 func (mrmr *MergerResourceReader) getReaderIndexAndByteIndexAtByteIndex(index int64) (int, int64, error) {
 	var byteIndex int64 = 0
-	for readerIndex := range mrmr.readers {
-		resource := mrmr.resource.resources[readerIndex]
-		size, err := resource.Size()
+	for readerIndex, reader := range mrmr.readers {
+		size, err := reader.Seek(0, io.SeekEnd)
+		if err != nil {
+			return 0, 0, err
+		}
+		_, err = reader.Seek(mrmr.readerByteIndex, io.SeekStart)
 		if err != nil {
 			return 0, 0, err
 		}
