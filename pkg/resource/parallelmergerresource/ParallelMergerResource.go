@@ -81,6 +81,7 @@ func (r *ParallelMergerResourceReader) Read(p []byte) (int, error) {
 
 	var totalRead int
 	group := errgroup.Group{}
+	index := 0
 	readResponses := make([]readResponse, 0, 1)
 
 	for r.readerIndex < len(r.readers) {
@@ -98,24 +99,29 @@ func (r *ParallelMergerResourceReader) Read(p []byte) (int, error) {
 		r.mu.Lock()
 		readResponses = append(readResponses, readResponse{})
 		r.mu.Unlock()
-		reader := r.readers[r.readerIndex]
-		readResponse := &readResponses[len(readResponses)-1]
+		readerIndex := r.readerIndex
+		localIndex := index
 		offset := totalRead
 		group.Go(func() error {
-			r.readWithReader(reader, readResponse, p[offset:])
+			// Read from underlying reader into slice
+			n, err := r.readers[readerIndex].Read(p[offset:])
+			// Store result
+			r.mu.RLock()
+			readResponses[localIndex].n = n
+			readResponses[localIndex].err = err
+			r.mu.RUnlock()
 			return nil
 		})
+
+		index++
+		totalRead += readerRead
 
 		// If buffer p will be full, we are done reading
 		if done {
 			r.readerByteIndex += int64(len(p) - totalRead)
-			totalRead = len(p)
-
 			r.index += int64(totalRead)
 			break
 		} else {
-			totalRead += readerRead
-
 			r.index += int64(totalRead)
 			r.readerIndex++
 			r.readerByteIndex = 0
@@ -147,16 +153,6 @@ func (r *ParallelMergerResourceReader) Read(p []byte) (int, error) {
 	}
 	// All readers exhausted, EOF
 	return totalRead, io.EOF
-}
-
-func (r *ParallelMergerResourceReader) readWithReader(reader io.ReadSeekCloser, response *readResponse, buf []byte) {
-	// Read from underlying reader into slice
-	n, err := reader.Read(buf)
-	// Store result
-	r.mu.RLock()
-	response.n = n
-	response.err = err
-	r.mu.RUnlock()
 }
 
 func (r *ParallelMergerResourceReader) Close() error {
