@@ -2,6 +2,7 @@ package fusemount
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -9,6 +10,8 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
+
+var ErrUnexpectedUnmount = errors.New("unexpected unmount, unmounted from external?")
 
 func Setup() *FileSystem {
 	// Create root directory node
@@ -20,7 +23,7 @@ func Setup() *FileSystem {
 	return &FileSystem{root: root}
 }
 
-func (fsManager *FileSystem) Mount(ctx context.Context, path string, mountOptions []string) (err error) {
+func (fsManager *FileSystem) Mount(ctx context.Context, path string, mountOptions []string) error {
 	server, err := fs.Mount(path, fsManager.root, &fs.Options{
 		MountOptions: fuse.MountOptions{
 			FsName:           "nzbstreamer",
@@ -33,7 +36,7 @@ func (fsManager *FileSystem) Mount(ctx context.Context, path string, mountOption
 		},
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("failed mounting: %w", err)
 	}
 	slog.Info("Mounted", "path", path)
 
@@ -51,7 +54,7 @@ func (fsManager *FileSystem) Mount(ctx context.Context, path string, mountOption
 			return fmt.Errorf("unmounting failed: %w", err)
 		}
 	case <-mountWaitCtx:
-		return fmt.Errorf("unexpected unmount, unmounted from external?")
+		return ErrUnexpectedUnmount
 	}
-	return
+	return nil
 }

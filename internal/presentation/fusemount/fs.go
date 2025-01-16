@@ -3,6 +3,7 @@ package fusemount
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -10,14 +11,10 @@ import (
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
-	"git.ruekov.eu/ruakij/nzbStreamer/pkg/readerAtWrapper"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/readeratwrapper"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
-
-type node struct {
-	fs.Inode
-}
 
 // fileNode represents a file in the read-only filesystem.
 type fileNode struct {
@@ -37,12 +34,14 @@ type dirNode struct {
 	modTime time.Time
 }
 
-var _ = (fs.InodeEmbedder)((*fileNode)(nil))
-var _ = (fs.InodeEmbedder)((*dirNode)(nil))
+var (
+	_ = fs.InodeEmbedder((*fileNode)(nil))
+	_ = fs.InodeEmbedder((*dirNode)(nil))
+)
 
 // ReadDir reads the directory and generates a directory stream.
-func (d *dirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	children := d.Children()
+func (n *dirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	children := n.Children()
 	r := make([]fuse.DirEntry, 0, len(children))
 	for name, child := range children {
 		mode := uint32(fuse.S_IFDIR)
@@ -58,34 +57,36 @@ func (d *dirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return fs.NewListDirStream(r), 0
 }
 
-var _ = (fs.NodeLookuper)((*dirNode)(nil))
+var _ = fs.NodeLookuper((*dirNode)(nil))
 
 // Lookup finds the child specified by name in the current directory node.
-func (d *dirNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	if child := d.GetChild(name); child != nil {
+func (n *dirNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if child := n.GetChild(name); child != nil {
 		return child, 0
 	}
 	return nil, syscall.ENOENT
 }
 
-var _ = (fs.NodeGetattrer)((*dirNode)(nil))
+var _ = fs.NodeGetattrer((*dirNode)(nil))
 
 func (n *dirNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Ino = n.StableAttr().Ino
 
-	modTime := n.modTime.Unix()
-	modTimeNs := uint32(n.modTime.Nanosecond())
+	modTime, modTimeNs, err := convertTimeToFuseAttr(n.modTime)
+	if err != nil {
+		return syscall.EINVAL
+	}
 
-	out.Ctime = uint64(modTime)
+	out.Ctime = modTime
 	out.Ctimensec = modTimeNs
-	out.Mtime = uint64(modTime)
+	out.Mtime = modTime
 	out.Mtimensec = modTimeNs
-	out.Atime = uint64(modTime)
+	out.Atime = modTime
 	out.Atimensec = modTimeNs
 	return 0
 }
 
-var _ = (fs.NodeGetattrer)((*fileNode)(nil))
+var _ = fs.NodeGetattrer((*fileNode)(nil))
 
 func (n *fileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	size, err := n.openable.Size()
@@ -93,35 +94,60 @@ func (n *fileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrO
 		return syscall.EIO
 	}
 	out.Ino = n.StableAttr().Ino
+
+	if size < 0 {
+		// size not convertable to fuse-size
+		return syscall.EIO
+	}
 	out.Size = uint64(size)
 
-	modTime := n.modTime.Unix()
-	modTimeNs := uint32(n.modTime.Nanosecond())
+	modTime, modTimeNs, err := convertTimeToFuseAttr(n.modTime)
+	if err != nil {
+		return syscall.EINVAL
+	}
 
-	out.Ctime = uint64(modTime)
+	out.Ctime = modTime
 	out.Ctimensec = modTimeNs
-	out.Mtime = uint64(modTime)
+	out.Mtime = modTime
 	out.Mtimensec = modTimeNs
-	out.Atime = uint64(modTime)
+	out.Atime = modTime
 	out.Atimensec = modTimeNs
 	return 0
 }
 
-var _ = (fs.NodeOpener)((*fileNode)(nil))
+var ErrTimeNotConvertableToFuseTime = errors.New("time is not convertable to fuse-time")
 
-func (n *fileNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
+// Safely converts time (like modTime) to fuse time and timensec attributes
+func convertTimeToFuseAttr(t time.Time) (time uint64, timeNs uint32, err error) {
+	unixTime := t.Unix()
+	if unixTime < 0 {
+		return 0, 0, ErrTimeNotConvertableToFuseTime
+	}
+	time = uint64(unixTime)
+
+	modTimeNs := t.Nanosecond()
+	if modTimeNs < 0 || modTimeNs > int(^uint32(0)) {
+		return 0, 0, ErrTimeNotConvertableToFuseTime
+	}
+	timeNs = uint32(modTimeNs)
+
+	return time, timeNs, nil
+}
+
+var _ = fs.NodeOpener((*fileNode)(nil))
+
+func (n *fileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	reader, err := n.openable.Open()
 	if err != nil {
 		slog.Error("Error opening file", "error", err)
-		errno = syscall.EIO
-		return
+		return nil, 0, syscall.EIO
 	}
 
-	fh = file{
-		reader: readerAtWrapper.NewReadSeekerAt(reader),
+	fh := file{
+		reader: readeratwrapper.NewReadSeekerAt(reader),
 	}
 
-	return
+	return fh, 0, syscall.F_OK
 }
 
 type readResult struct {
@@ -130,17 +156,18 @@ type readResult struct {
 	err int32
 }
 
-var _ = (fuse.ReadResult)((*readResult)(nil))
+var _ = fuse.ReadResult((*readResult)(nil))
 
 func (r *readResult) Bytes(buf []byte) ([]byte, fuse.Status) {
 	return r.buf, fuse.Status(r.err)
 }
+
 func (r *readResult) Size() int {
 	return r.n
 }
 func (r *readResult) Done() {}
 
-var _ = (fs.NodeReader)((*fileNode)(nil))
+var _ = fs.NodeReader((*fileNode)(nil))
 
 func (n *fileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	file, ok := f.(file)
@@ -151,7 +178,7 @@ func (n *fileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off i
 	return file.Read(ctx, dest, off)
 }
 
-var _ = (fs.FileReader)((*file)(nil))
+var _ = fs.FileReader((*file)(nil))
 
 func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	n, err := f.reader.ReadAt(dest, off)
@@ -172,16 +199,16 @@ type FileSystem struct {
 	root *dirNode
 }
 
-var _ = (presentation.Presenter)((*FileSystem)(nil))
+var _ = presentation.Presenter((*FileSystem)(nil))
 
-func (fsys *FileSystem) AddFile(fullpath string, modTime time.Time, openable presentation.Openable) error {
+func (fsManager *FileSystem) AddFile(fullpath string, modTime time.Time, openable presentation.Openable) error {
 	size, err := openable.Size()
 	if err != nil {
-		return err
+		return fmt.Errorf("adding file failed: %w", err)
 	}
 
 	parts := strings.Split(strings.Trim(fullpath, "/"), "/")
-	currentInode := &fsys.root.Inode
+	currentInode := &fsManager.root.Inode
 
 	// Ensure path exists
 	for _, part := range parts[:len(parts)-1] {
@@ -204,9 +231,11 @@ func (fsys *FileSystem) AddFile(fullpath string, modTime time.Time, openable pre
 	return nil
 }
 
-func (fsys *FileSystem) RemoveFile(fullpath string) error {
+const DirSuffixCount = 2
+
+func (fsManager *FileSystem) RemoveFile(fullpath string) error {
 	parts := strings.Split(strings.Trim(fullpath, "/"), "/")
-	currentInode := &fsys.root.Inode
+	currentInode := &fsManager.root.Inode
 
 	// Traverse to the file's directory
 	for _, part := range parts[:len(parts)-1] {
@@ -222,12 +251,17 @@ func (fsys *FileSystem) RemoveFile(fullpath string) error {
 	currentInode.RmChild(fileName)
 
 	// Remove empty directories
-	for i := len(parts) - 2; i >= 0; i-- {
+	for i := len(parts) - DirSuffixCount; i >= 0; i-- {
 		parentParts := parts[:i]
-		parentInode := &fsys.root.Inode
+		parentInode := &fsManager.root.Inode
 
 		if len(parentParts) > 0 {
-			parentInode, _ = pathWalker(fsys.root.Root(), strings.Join(parentParts, "/"))
+			var err error
+			targetPath := strings.Join(parentParts, "/")
+			parentInode, err = pathWalker(fsManager.root.Root(), targetPath)
+			if err != nil {
+				return fmt.Errorf("failed walking path from %s to %s: %w", fsManager.root, targetPath, err)
+			}
 		}
 
 		childName := parts[i]
@@ -243,6 +277,8 @@ func (fsys *FileSystem) RemoveFile(fullpath string) error {
 	return nil
 }
 
+var ErrPathNotFound = errors.New("path not found")
+
 // pathWalker tries to resolve the given path starting from the provided inode.
 func pathWalker(startInode *fs.Inode, path string) (*fs.Inode, error) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
@@ -252,7 +288,7 @@ func pathWalker(startInode *fs.Inode, path string) (*fs.Inode, error) {
 		if nextInode := currentInode.GetChild(part); nextInode != nil {
 			currentInode = nextInode
 		} else {
-			return nil, errors.New("Path not found")
+			return nil, ErrPathNotFound
 		}
 	}
 

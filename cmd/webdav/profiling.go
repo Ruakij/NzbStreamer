@@ -3,10 +3,9 @@ package main
 import (
 	"fmt"
 	"net/http"
+	_ "net/http/pprof"
 
 	"github.com/arl/statsviz"
-
-	_ "net/http/pprof"
 )
 
 func init() {
@@ -16,15 +15,21 @@ func init() {
 
 func initPprof() {
 	go func() {
-		http.ListenAndServe("localhost:6060", nil)
+		err := http.ListenAndServe("localhost:6060", nil)
+		if err != nil {
+			panic(err)
+		}
 	}()
 }
 
 func initStatsviz() {
 	mux := http.NewServeMux()
-	_ = statsviz.Register(mux,
+	err := statsviz.Register(mux,
 		statsviz.Root(""),
 	)
+	if err != nil {
+		panic(err)
+	}
 
 	go func() {
 		fmt.Println(http.ListenAndServe("localhost:8081", mux))

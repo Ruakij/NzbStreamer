@@ -9,7 +9,7 @@ import (
 type UsenetConfig struct {
 	Host     string `env:"USENET_HOST, required"`
 	Port     int    `env:"USENET_PORT, default=563"`
-	Tls      bool   `env:"USENET_TLS, default=true"`
+	TLS      bool   `env:"USENET_TLS, default=true"`
 	User     string `env:"USENET_USER, required"`
 	Password string `env:"USENET_PASS, required"`
 	MaxConn  int    `env:"USENET_MAX_CONN, default=20"`
@@ -21,7 +21,7 @@ type WebdavConfig struct {
 
 type MountConfig struct {
 	Path    string   `env:"MOUNT_PATH, default="`
-	Options []string `env:"MOUNT_OPTIONS, default=allow_other=true`
+	Options []string `env:"MOUNT_OPTIONS, default=allow_other=true"`
 }
 
 type CacheConfig struct {

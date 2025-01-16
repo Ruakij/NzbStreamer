@@ -1,6 +1,7 @@
 package webdav
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/emersion/go-webdav"
@@ -10,5 +11,5 @@ import (
 func Listen(listenAddress string, webdavHandler *webdav.Handler) error {
 	slog.Info("Webdav listening on", "Address", listenAddress)
 	err := http.ListenAndServe(listenAddress, webdavHandler)
-	return err
+	return fmt.Errorf("failed listening: %w", err)
 }

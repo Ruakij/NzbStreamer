@@ -9,21 +9,23 @@ import (
 	"syscall"
 	"time"
 
-	nntp "git.ruekov.eu/ruakij/nzbStreamer/internal/nntpClient"
-	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbRecordFactory"
-	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbStore/stubStore"
+	nntp "git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore/stubstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/fusemount"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/webdav"
-	"git.ruekov.eu/ruakij/nzbStreamer/internal/service/nzbService"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/service/nzbservice"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger"
-	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger/folderWatcher"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger/folderwatcher"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/SimpleWebdavFilesystem"
-	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskCache"
-
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
 	gowebdav "github.com/emersion/go-webdav"
-
 	"github.com/sethvargo/go-envconfig"
+)
+
+const (
+	ShutdownTimeout time.Duration = 3 * time.Second
 )
 
 func main() {
@@ -51,15 +53,15 @@ func signalHandler(cancel context.CancelFunc, wg *sync.WaitGroup) {
 		select {
 		case <-done:
 			slog.Info("Clean shutdown.")
-		case <-time.After(3 * time.Second):
+		case <-time.After(ShutdownTimeout):
 			slog.Warn("Timeout reached, forcefully exiting.")
 		}
 		os.Exit(0)
 	}
 }
 
-func start(ctx context.Context) (wg *sync.WaitGroup) {
-	var err error = nil
+func start(ctx context.Context) *sync.WaitGroup {
+	var err error
 
 	var c Config
 	if err := envconfig.Process(ctx, &c); err != nil {
@@ -71,14 +73,14 @@ func start(ctx context.Context) (wg *sync.WaitGroup) {
 	slog.SetLogLoggerLevel(c.Logging.Level)
 
 	// Setup nntpClient
-	nntpClient, err := nntp.SetupNntpClient(c.Usenet.Host, c.Usenet.Port, c.Usenet.Tls, c.Usenet.User, c.Usenet.Password, c.Usenet.MaxConn)
+	nntpClient, err := nntp.SetupNntpClient(c.Usenet.Host, c.Usenet.Port, c.Usenet.TLS, c.Usenet.User, c.Usenet.Password, c.Usenet.MaxConn)
 	if err != nil {
 		slog.Error("Setup Usenet-Client failed", "error", err)
 		os.Exit(1)
 	}
 
 	// Setup cache
-	segmentCache, err := diskCache.NewCache(&diskCache.CacheOptions{
+	segmentCache, err := diskcache.NewCache(&diskcache.CacheOptions{
 		CacheDir:             c.Cache.Path,
 		MaxSize:              c.Cache.MaxSize,
 		MaxSizeEvictBlocking: false,
@@ -89,7 +91,7 @@ func start(ctx context.Context) (wg *sync.WaitGroup) {
 	}
 
 	// Setup Presenters
-	presenters := make([]presentation.Presenter, 0, 2)
+	var presenters []presentation.Presenter
 	// Webdav
 	var webdavHandler *SimpleWebdavFilesystem.FS
 	if c.Webdav.Address != "" {
@@ -104,15 +106,15 @@ func start(ctx context.Context) (wg *sync.WaitGroup) {
 	}
 
 	// Setup services
-	factory := nzbRecordFactory.NewNzbFileFactory(segmentCache, nntpClient)
+	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpClient)
 	factory.SetAdaptiveReadaheadCacheSettings(c.ReadaheadCache.AvgSpeedTime, c.ReadaheadCache.Time, c.ReadaheadCache.MinSize, c.ReadaheadCache.LowBuffer, c.ReadaheadCache.MaxSize)
 
-	//store := folderStore.NewFolderStore()
-	store := stubStore.NewStubStore()
+	// store := folderStore.NewFolderStore()
+	store := stubstore.NewStubStore()
 
-	folderTrigger := folderWatcher.NewFolderWatcher(c.FolderWatcher.Path)
+	folderTrigger := folderwatcher.NewFolderWatcher(c.FolderWatcher.Path)
 
-	service := nzbService.NewService(store, factory, presenters, []trigger.Trigger{folderTrigger})
+	service := nzbservice.NewService(store, factory, presenters, []trigger.Trigger{folderTrigger})
 	service.SetBlacklist(c.Filesystem.Blacklist)
 	service.SetPathFlatteningDepth(c.Filesystem.FlattenMaxDepth)
 	service.SetFilenameReplacementBelowLevensteinRatio(c.Filesystem.FixFilenameThreshold)
@@ -124,7 +126,7 @@ func start(ctx context.Context) (wg *sync.WaitGroup) {
 	folderTrigger.Init()
 
 	// Start Presenters
-	wg = &sync.WaitGroup{}
+	wg := sync.WaitGroup{}
 	// Webdav
 	if c.Webdav.Address != "" {
 		wg.Add(1)
@@ -155,5 +157,5 @@ func start(ctx context.Context) (wg *sync.WaitGroup) {
 		}()
 	}
 
-	return
+	return &wg
 }
