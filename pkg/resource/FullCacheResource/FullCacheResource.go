@@ -188,11 +188,10 @@ func (r *FullCacheResourceReader) Seek(offset int64, whence int) (int64, error) 
 }
 
 func (r *FullCacheResourceReader) Read(p []byte) (int, error) {
-	size, err := r.resource.Size()
-	if err != nil {
-		return 0, err
+	if len(p) == 0 {
+		return 0, nil
 	}
-	if r.index >= size {
+	if r.resource.cachedSize > 0 && r.index >= r.resource.cachedSize {
 		return 0, io.EOF
 	}
 
@@ -244,10 +243,6 @@ func (r *FullCacheResourceReader) Read(p []byte) (int, error) {
 	r.resource.cachedSize = header.Size
 	r.resource.cachedSizeAccurate = true
 	r.resource.cachedSizeAccurateCached = true
-
-	if r.index >= header.Size {
-		err = io.EOF
-	}
 
 	return n, err
 }
