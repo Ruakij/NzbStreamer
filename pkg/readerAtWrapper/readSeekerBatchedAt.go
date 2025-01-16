@@ -2,6 +2,7 @@ package readerAtWrapper
 
 import (
 	"io"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -77,16 +78,7 @@ func (rsa *ReadSeekerBatchedAt) batchReadLoop() {
 		pos := sort.Search(len(batch), func(i int) bool {
 			return batch[i].off > req.off
 		})
-		batch = append(batch, req)       // append at the end
-		copy(batch[pos+1:], batch[pos:]) // shift elements to the right
-		batch[pos] = req                 // insert the new element
-	}
-
-	processSequentially := func() {
-		for len(batch) > 0 && batch[0].off == rsa.lastOffset {
-			rsa.performSeekAndRead(&batch[0])
-			batch = batch[1:] // remove the processed element
-		}
+		batch = slices.Insert(batch, pos, req)
 	}
 
 	for {
@@ -95,7 +87,10 @@ func (rsa *ReadSeekerBatchedAt) batchReadLoop() {
 			insertInOrder(req)
 
 			// Process any batch that's ready due to new insertion
-			processSequentially()
+			for len(batch) > 0 && batch[0].off == rsa.lastOffset {
+				rsa.performSeekAndRead(&batch[0])
+				batch = batch[1:] // remove the processed element
+			}
 
 			// Only reset the timer if there's more to process
 			if len(batch) > 0 {
