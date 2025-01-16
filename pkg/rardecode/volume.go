@@ -23,7 +23,7 @@ var (
 	ErrNoSig            = errors.New("rardecode: RAR signature not found")
 	ErrVerMismatch      = errors.New("rardecode: volume version mistmatch")
 	ErrArchiveNameEmpty = errors.New("rardecode: archive name empty")
-	ErrFileNameRequired = errors.New("rardecode: filename required for multi volume archive")
+	ErrFileNameRequired = errors.New("rardecode: missing volume. filename or missing volume-readers required for multi volume archive")
 )
 
 type option struct {
@@ -371,7 +371,7 @@ func (v *volume) next() error {
 	}
 
 	v.f[v.i] = nil
-	if v.i < len(v.f) { // Select next reader if exists
+	if v.i+1 < len(v.f) { // Select next reader if exists
 		v.i++
 		v.setBuffer()
 	} else { // Fallback to file
