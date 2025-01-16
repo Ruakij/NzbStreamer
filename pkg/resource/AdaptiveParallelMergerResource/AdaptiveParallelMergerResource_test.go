@@ -2,15 +2,17 @@ package AdaptiveParallelMergerResource
 
 import (
 	"bytes"
-	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
-	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/BytesResource"
 	"io"
 	"testing"
+
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/BytesResource"
 )
 
 type TestResource struct {
-	resource resource.ReadSeekCloseableResource
-	size     int64
+	resource     resource.ReadSeekCloseableResource
+	size         int64
+	sizeAccurate bool
 }
 
 type TestResourceReader struct {
@@ -20,8 +22,9 @@ type TestResourceReader struct {
 
 func NewTestResouce(data []byte, fakeSize int64) resource.ReadSeekCloseableResource {
 	return &TestResource{
-		resource: &BytesResource.BytesResource{Content: data},
-		size:     fakeSize,
+		resource:     &BytesResource.BytesResource{Content: data},
+		size:         fakeSize,
+		sizeAccurate: int64(len(data)) == fakeSize,
 	}
 }
 
@@ -32,11 +35,18 @@ func (r *TestResource) Open() (io.ReadSeekCloser, error) {
 		reader:   reader,
 	}, nil
 }
+
 func (r *TestResource) Size() (int64, error) {
 	return r.size, nil
 }
+
+func (r *TestResource) IsSizeAccurate() bool {
+	return r.sizeAccurate
+}
+
 func (r *TestResource) SetFakeSize(size int64) {
 	r.size = size
+	r.sizeAccurate = false
 }
 func (r *TestResourceReader) Close() error {
 	return r.reader.Close()
@@ -202,5 +212,157 @@ func TestAdaptiveParallelMergerResourceWithFakeSize(t *testing.T) {
 	err = readSeeker.Close()
 	if err != nil {
 		t.Errorf("failed to close: %v", err)
+	}
+}
+
+func TestSeekForward(t *testing.T) {
+	resources := []resource.ReadSeekCloseableResource{
+		NewTestResouce([]byte("Hel"), 1),
+		NewTestResouce([]byte("lo"), 1),
+		NewTestResouce([]byte("World"), 2),
+	}
+
+	merger := NewAdaptiveParallelMergerResource(resources)
+
+	readSeeker, err := merger.Open()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+
+	data, err := io.ReadAll(io.LimitReader(readSeeker, 2))
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if string(data) != "He" {
+		t.Errorf("expected 'He', got: %s", data)
+		return
+	}
+
+	n, err := readSeeker.Seek(4, io.SeekCurrent)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if n != 6 {
+		t.Errorf("expected seek-result 6, got: %d", n)
+		return
+	}
+
+	data, err = io.ReadAll(io.LimitReader(readSeeker, 2))
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if string(data) != "or" {
+		t.Errorf("expected 'or', got: %s", data)
+		return
+	}
+
+	n, err = readSeeker.Seek(-1, io.SeekEnd)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if n != 9 {
+		t.Errorf("expected seek-result 9, got: %d", n)
+		return
+	}
+
+	data, err = io.ReadAll(io.LimitReader(readSeeker, 1))
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if string(data) != "d" {
+		t.Errorf("expected 'd', got: %s", data)
+		return
+	}
+}
+
+func TestSeekBackward(t *testing.T) {
+	resources := []resource.ReadSeekCloseableResource{
+		NewTestResouce([]byte("Hel"), 1),
+		NewTestResouce([]byte("lo"), 1),
+		NewTestResouce([]byte("World"), 2),
+	}
+
+	merger := NewAdaptiveParallelMergerResource(resources)
+
+	readSeeker, err := merger.Open()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+
+	n, err := readSeeker.Seek(2, io.SeekCurrent)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if n != 2 {
+		t.Errorf("expected seek-result 2, got: %d", n)
+		return
+	}
+
+	data, err := io.ReadAll(io.LimitReader(readSeeker, 2))
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if string(data) != "ll" {
+		t.Errorf("expected 'll', got: %s", data)
+		return
+	}
+
+	n, err = readSeeker.Seek(-2, io.SeekCurrent)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if n != 2 {
+		t.Errorf("expected seek-result 2, got: %d", n)
+		return
+	}
+
+	data, err = io.ReadAll(io.LimitReader(readSeeker, 2))
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if string(data) != "ll" {
+		t.Errorf("expected 'll', got: %s", data)
+		return
+	}
+
+	n, err = readSeeker.Seek(0, io.SeekEnd)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if n != 10 {
+		t.Errorf("expected seek-result 10, got: %d", n)
+		return
+	}
+
+	n, err = readSeeker.Seek(3, io.SeekStart)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if n != 3 {
+		t.Errorf("expected seek-result 3, got: %d", n)
+		return
+	}
+
+	data, err = io.ReadAll(io.LimitReader(readSeeker, 2))
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if string(data) != "lo" {
+		t.Errorf("expected 'lo', got: %s", data)
+		return
 	}
 }
