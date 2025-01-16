@@ -1,6 +1,7 @@
 package nzbRecordFactory
 
 import (
+	"fmt"
 	"path"
 	"slices"
 	"time"
@@ -101,6 +102,7 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData
 			}
 		}
 		if err != nil {
+			err = fmt.Errorf("build special-file %s failed: %w", groupFilename, err)
 			return
 		}
 	}
