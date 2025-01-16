@@ -1,6 +1,7 @@
 package AdaptiveReadaheadCache
 
 import (
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -107,7 +108,11 @@ func (r *AdaptiveReadaheadCacheReader) Seek(offset int64, whence int) (newIndex 
 		if int64(r.cache.GetSize()) > indexDelta {
 			_, err = r.cache.Seek(offset, whence)
 			if err != nil {
-				return
+				if errors.Is(err, CircularBuffer.ErrSeekOutOfBounds) {
+					r.flushCache()
+				} else {
+					return
+				}
 			}
 		} else {
 			r.flushCache()
