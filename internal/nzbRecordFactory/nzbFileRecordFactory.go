@@ -7,7 +7,7 @@ import (
 
 	"astuart.co/nntp"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbFileAnalyzer"
-	"git.ruekov.eu/ruakij/nzbStreamer/pkg/SimpleWebdavFilesystem"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskCache"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/filenameOps"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbParser"
@@ -52,7 +52,7 @@ func (f *NzbFileFactory) SetAdaptiveReadaheadCacheSettings(adaptiveReadaheadCach
 	f.adaptiveReadaheadCacheMaxSize = adaptiveReadaheadCacheMaxSize
 }
 
-func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData) (files map[string]SimpleWebdavFilesystem.Openable, err error) {
+func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData) (files map[string]presentation.Openable, err error) {
 	// Build nzbFiles -> rawFiles
 	rawFiles := make(map[string]resource.ReadSeekCloseableResource, len(nzbData.Files))
 	for _, file := range nzbData.Files {
@@ -71,7 +71,7 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData
 	filenameOps.SortGroupedFilenames(groupedFilenames)
 
 	// Assemble structure
-	files = make(map[string]SimpleWebdavFilesystem.Openable, len(filenames))
+	files = make(map[string]presentation.Openable, len(filenames))
 	for groupFilename, filenames := range groupedFilenames {
 		groupedFiles := make([]resource.ReadSeekCloseableResource, len(filenames))
 		for i, filename := range filenames {
@@ -82,7 +82,7 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbParser.NzbData
 		}
 
 		// Process special files
-		var specialFiles map[string]SimpleWebdavFilesystem.Openable
+		var specialFiles map[string]presentation.Openable
 		extension := path.Ext(groupFilename)
 		switch extension {
 		case ".rar", ".r":
@@ -176,8 +176,8 @@ func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbParser.Segme
 
 // -- Special files --
 
-func (f *NzbFileFactory) BuildRarFileFromFileResource(underlyingResources []resource.ReadSeekCloseableResource, password string) (map[string]SimpleWebdavFilesystem.Openable, error) {
-	resources := make(map[string]SimpleWebdavFilesystem.Openable, 1)
+func (f *NzbFileFactory) BuildRarFileFromFileResource(underlyingResources []resource.ReadSeekCloseableResource, password string) (map[string]presentation.Openable, error) {
+	resources := make(map[string]presentation.Openable, 1)
 
 	fileheaders, err := RarFileResource.NewRarFileResource(underlyingResources, password, "").GetRarFiles(1)
 	if err != nil {
@@ -190,8 +190,8 @@ func (f *NzbFileFactory) BuildRarFileFromFileResource(underlyingResources []reso
 
 	return resources, nil
 }
-func (f *NzbFileFactory) Build7zFileFromFileResource(underlyingResources []resource.ReadSeekCloseableResource, password string) (map[string]SimpleWebdavFilesystem.Openable, error) {
-	resources := make(map[string]SimpleWebdavFilesystem.Openable, 1)
+func (f *NzbFileFactory) Build7zFileFromFileResource(underlyingResources []resource.ReadSeekCloseableResource, password string) (map[string]presentation.Openable, error) {
+	resources := make(map[string]presentation.Openable, 1)
 
 	mergedResource := AdaptiveParallelMergerResource.NewAdaptiveParallelMergerResource(underlyingResources)
 

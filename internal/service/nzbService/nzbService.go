@@ -2,6 +2,7 @@ package nzbService
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"path"
 	"regexp"
@@ -10,8 +11,8 @@ import (
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbRecordFactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbStore"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger"
-	"git.ruekov.eu/ruakij/nzbStreamer/pkg/SimpleWebdavFilesystem"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/filenameOps"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbParser"
 	"github.com/agnivade/levenshtein"
@@ -26,7 +27,7 @@ type Service struct {
 	mutex       sync.RWMutex
 	store       nzbStore.NzbStore
 	factory     nzbRecordFactory.Factory
-	filesystem  *SimpleWebdavFilesystem.FS
+	presenters  []presentation.Presenter
 	triggers    []TriggerListener
 	nzbFiledata map[string]*nzbParser.NzbData
 
@@ -36,7 +37,7 @@ type Service struct {
 	filenameReplacementBelowLevensteinRatio float32
 }
 
-func NewService(store nzbStore.NzbStore, factory nzbRecordFactory.Factory, filesystem *SimpleWebdavFilesystem.FS, triggers []trigger.Trigger) *Service {
+func NewService(store nzbStore.NzbStore, factory nzbRecordFactory.Factory, presenters []presentation.Presenter, triggers []trigger.Trigger) *Service {
 	triggerListeners := make([]TriggerListener, len(triggers))
 	for i, trigger := range triggers {
 		triggerListeners[i] = TriggerListener{
@@ -48,7 +49,7 @@ func NewService(store nzbStore.NzbStore, factory nzbRecordFactory.Factory, files
 	return &Service{
 		store:      store,
 		factory:    factory,
-		filesystem: filesystem,
+		presenters: presenters,
 		triggers:   triggerListeners,
 
 		fileBlacklist: []regexp.Regexp{},
@@ -114,6 +115,7 @@ func (s *Service) AddNzb(nzbData *nzbParser.NzbData) (err error) {
 
 	files, err := s.factory.BuildSegmentStackFromNzbData(nzbData)
 	if err != nil {
+		err = fmt.Errorf("failed building segment-stack for %s: %w", nzbData.MetaName, err)
 		return
 	}
 
@@ -163,14 +165,15 @@ func (s *Service) AddNzb(nzbData *nzbParser.NzbData) (err error) {
 		// TODO: Flatten
 		filepath = s.flattenPath(filepath, paths)
 
-		err = s.filesystem.AddFile(
-			path.Join(nzbData.MetaName, filepath),
-			filename,
-			nzbData.Files[0].ParsedDate,
-			file,
-		)
-		if err != nil {
-			slog.Error("Failed adding segment-stack as file", nzbData.MetaName, err)
+		for _, presenter := range s.presenters {
+			err = presenter.AddFile(
+				path.Join(nzbData.MetaName, filepath, filename),
+				nzbData.Files[0].ParsedDate,
+				file,
+			)
+			if err != nil {
+				slog.Error("Failed adding segment-stack as file", nzbData.MetaName, err)
+			}
 		}
 	}
 

@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"mime"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
 	"github.com/emersion/go-webdav"
 )
 
@@ -27,7 +29,7 @@ type Node struct {
 }
 
 type FS struct {
-	root *Node
+	Root *Node
 	mu   sync.RWMutex
 }
 
@@ -35,36 +37,33 @@ type FS struct {
 type simpleFile struct {
 	node     *Node
 	fs       *FS
-	openable Openable
+	openable presentation.Openable
 	size     int64
 	modTime  time.Time
 	name     string
 	isDir    bool
 }
 
-type Openable interface {
-	Open() (io.ReadSeekCloser, error)
-	Size() (int64, error)
-}
-
 func NewFS() *FS {
 	root := &Node{
-		File:     &simpleFile{name: "/", isDir: true},
+		File:     &simpleFile{name: "", isDir: true},
 		Children: make(map[string]*Node),
 	}
 	root.File.node = root
 
-	fs := &FS{root: root}
+	fs := &FS{Root: root}
 	root.File.fs = fs
 	return fs
 }
 
+var _ = (presentation.Presenter)((*FS)(nil))
+
 // AddFile adds a new file node to the filesystem, creating necessary directories.
-func (fs *FS) AddFile(path, filename string, modTime time.Time, openable Openable) error {
+func (fs *FS) AddFile(fullPath string, modTime time.Time, openable presentation.Openable) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	fullPath := filepath.Clean(filepath.Join(path, filename))
+	filename := path.Base(fullPath)
 	dirPath := filepath.Dir(fullPath)
 	parentNode, err := fs.ensurePath(dirPath, modTime)
 	if err != nil {
@@ -108,7 +107,7 @@ func (fs *FS) RemoveFile(path string) error {
 
 // pathWalker starts from the root and uses relativePathWalker to traverse the tree.
 func (fs *FS) pathWalker(path string) (*Node, error) {
-	return fs.relativePathWalker(fs.root, path)
+	return fs.relativePathWalker(fs.Root, path)
 }
 
 // relativePathWalker allows traversal starting at a given node and a relative path.
@@ -132,11 +131,11 @@ func (fs *FS) relativePathWalker(startNode *Node, path string) (*Node, error) {
 // ensurePath ensures that the given directory path exists, creating directories as necessary.
 func (fs *FS) ensurePath(dirPath string, modTime time.Time) (*Node, error) {
 	if dirPath == "/" {
-		return fs.root, nil
+		return fs.Root, nil
 	}
 
 	segments := strings.Split(strings.Trim(dirPath, "/"), "/")
-	current := fs.root
+	current := fs.Root
 	for _, segment := range segments {
 		if _, exists := current.Children[segment]; !exists {
 			newNode := &Node{
@@ -159,7 +158,7 @@ func (fs *FS) ensurePath(dirPath string, modTime time.Time) (*Node, error) {
 
 // cleanupEmptyDirs recursively removes empty directories up the tree.
 func (fs *FS) cleanupEmptyDirs(node *Node) {
-	if node == nil || node == fs.root {
+	if node == nil || node == fs.Root {
 		return
 	}
 
@@ -248,7 +247,8 @@ func (fs *FS) ReadDir(ctx context.Context, name string, recursive bool) ([]webda
 	var entries []webdav.FileInfo
 	for _, childNode := range node.Children {
 		entries = append(entries, webdav.FileInfo{
-			Path:    filepath.Join(name, childNode.File.Name()),
+			//Path:    filepath.Join(name, childNode.File.Name()),
+			Path:    childNode.File.Name(),
 			Size:    childNode.File.Size(),
 			ModTime: childNode.File.ModTime(),
 			IsDir:   childNode.File.IsDir(),
@@ -328,7 +328,11 @@ func (sf *simpleFileReader) Seek(offset int64, whence int) (int64, error) {
 
 	slog.Debug("Seek", "name", sf.simpleFile.name, "offset", offset, "whence", whence)
 	if sf.reader != nil {
-		return sf.reader.Seek(offset, whence)
+		n, err := sf.reader.Seek(offset, whence)
+		if err != nil {
+			slog.Error("Seek error", "name", sf.simpleFile.name, "offset", offset, "whence", whence, "err", err)
+		}
+		return n, err
 	}
 	return 0, ErrReadOnlyFilesystem
 }

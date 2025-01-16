@@ -19,6 +19,11 @@ type WebdavConfig struct {
 	Address string `env:"WEBDAV_ADDRESS, default=:8080"`
 }
 
+type MountConfig struct {
+	Path    string   `env:"MOUNT_PATH, default="`
+	Options []string `env:"MOUNT_OPTIONS, default=allow_other=true`
+}
+
 type CacheConfig struct {
 	Path    string `env:"CACHE_PATH, default=.cache"`
 	MaxSize int64  `env:"CACHE_MAX_SIZE, default=0"`
@@ -38,6 +43,7 @@ type FolderWatcherConfig struct {
 
 type FilesystemConfig struct {
 	Blacklist            []regexp.Regexp `env:"FILESYSTEM_BLACKLIST, default=(?i)\\.par2$"`
+	FlattenMaxDepth      int             `env:"FILESYSTEM_FLATTEN_MAX_DEPTH, default=1"`
 	FixFilenameThreshold float32         `env:"FILESYSTEM_FIX_FILENAME_THRESHOLD, default=0.2"`
 }
 
@@ -47,6 +53,7 @@ type LoggingConfig struct {
 
 type Config struct {
 	Usenet         UsenetConfig
+	Mount          MountConfig
 	Webdav         WebdavConfig
 	Cache          CacheConfig
 	ReadaheadCache ReadaheadCacheConfig
