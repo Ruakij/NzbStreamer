@@ -1,4 +1,4 @@
-package parallelmergerresource
+package parallelmergerresource_test
 
 import (
 	"bytes"
@@ -7,6 +7,7 @@ import (
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/bytesresource"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/parallelmergerresource"
 )
 
 func TestParallelMergerResource(t *testing.T) {
@@ -18,7 +19,7 @@ func TestParallelMergerResource(t *testing.T) {
 		&bytesresource.BytesResource{Content: []byte("World")},
 	}
 
-	merger := NewParallelMergerResource(resources)
+	merger := parallelmergerresource.NewParallelMergerResource(resources)
 
 	size, err := merger.Size()
 	if err != nil {

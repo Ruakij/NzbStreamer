@@ -1,4 +1,4 @@
-package mergerresource
+package mergerresource_test
 
 import (
 	"bytes"
@@ -7,6 +7,7 @@ import (
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/bytesresource"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/mergerresource"
 )
 
 func TestMergerResource(t *testing.T) {
@@ -17,7 +18,7 @@ func TestMergerResource(t *testing.T) {
 		&bytesresource.BytesResource{Content: []byte("World")},
 	}
 
-	merger := MergerResource{resources}
+	merger := mergerresource.NewMergerResource(resources)
 
 	size, err := merger.Size()
 	if err != nil {

@@ -1,4 +1,4 @@
-package adaptiveparallelmergerresource
+package adaptiveparallelmergerresource_test
 
 import (
 	"bytes"
@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/adaptiveparallelmergerresource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/bytesresource"
 )
 
@@ -70,7 +71,7 @@ func TestAdaptiveParallelMergerResource(t *testing.T) {
 		&bytesresource.BytesResource{Content: []byte("World")},
 	}
 
-	merger := NewAdaptiveParallelMergerResource(resources)
+	merger := adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(resources)
 
 	size, err := merger.Size()
 	if err != nil {
@@ -146,7 +147,7 @@ func TestAdaptiveParallelMergerResourceWithFakeSize(t *testing.T) {
 		NewTestResouce([]byte("World"), 2),
 	}
 
-	merger := NewAdaptiveParallelMergerResource(resources)
+	merger := adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(resources)
 
 	readSeeker, err := merger.Open()
 	if err != nil {
@@ -231,7 +232,7 @@ func TestSeekForward(t *testing.T) {
 		NewTestResouce([]byte("World"), 2),
 	}
 
-	merger := NewAdaptiveParallelMergerResource(resources)
+	merger := adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(resources)
 
 	readSeeker, err := merger.Open()
 	if err != nil {
@@ -299,7 +300,7 @@ func TestSeekBackward(t *testing.T) {
 		NewTestResouce([]byte("World"), 2),
 	}
 
-	merger := NewAdaptiveParallelMergerResource(resources)
+	merger := adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(resources)
 
 	readSeeker, err := merger.Open()
 	if err != nil {

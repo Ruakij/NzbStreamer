@@ -1,16 +1,18 @@
-package circularbuffer
+package circularbuffer_test
 
 import (
 	"errors"
 	"io"
 	"testing"
 	"time"
+
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/circularbuffer"
 )
 
 func TestWrite(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](0, 10)
+	cb := circularbuffer.NewCircularBuffer[byte](0, 10)
 
 	data := []byte("hello")
 	n, err := cb.Write(data)
@@ -26,18 +28,18 @@ func TestWrite(t *testing.T) {
 func TestWrappedWrite(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](0, 6)
+	cb := circularbuffer.NewCircularBuffer[byte](0, 6)
 	wrappedWrite(t, cb)
 }
 
 func TestWrappedResizeWrite(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](6, 6)
+	cb := circularbuffer.NewCircularBuffer[byte](6, 6)
 	wrappedWrite(t, cb)
 }
 
-func wrappedWrite(t *testing.T, cb *CircularBuffer[byte]) {
+func wrappedWrite(t *testing.T, cb *circularbuffer.CircularBuffer[byte]) {
 	t.Helper()
 
 	// Normal write
@@ -82,7 +84,7 @@ func wrappedWrite(t *testing.T, cb *CircularBuffer[byte]) {
 func TestRead(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](2, 10)
+	cb := circularbuffer.NewCircularBuffer[byte](2, 10)
 
 	data := []byte("hello")
 	_, err := cb.Write(data)
@@ -108,7 +110,7 @@ func TestRead(t *testing.T) {
 func TestBlockingWrite(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](0, 3)
+	cb := circularbuffer.NewCircularBuffer[byte](0, 3)
 	cb.SetWriteBlocking(true)
 
 	done := make(chan struct{})
@@ -140,7 +142,7 @@ func TestBlockingWrite(t *testing.T) {
 func TestBlockingRead(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](3, 3)
+	cb := circularbuffer.NewCircularBuffer[byte](3, 3)
 	cb.SetReadBlocking(true)
 
 	done := make(chan struct{})
@@ -171,7 +173,7 @@ func TestBlockingRead(t *testing.T) {
 func TestNonBlockingWriteFullBuffer(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](3, 3)
+	cb := circularbuffer.NewCircularBuffer[byte](3, 3)
 
 	data := []byte("abc")
 	_, err := cb.Write(data)
@@ -191,7 +193,7 @@ func TestNonBlockingWriteFullBuffer(t *testing.T) {
 func TestNonBlockingReadEmptyBuffer(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](3, 3)
+	cb := circularbuffer.NewCircularBuffer[byte](3, 3)
 
 	readData := make([]byte, 1)
 	_, err := cb.ReadNonBlocking(readData)
@@ -203,7 +205,7 @@ func TestNonBlockingReadEmptyBuffer(t *testing.T) {
 func TestResizeSuccess(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](5, 5)
+	cb := circularbuffer.NewCircularBuffer[byte](5, 5)
 
 	data := []byte("hello")
 	_, err := cb.Write(data)
@@ -220,7 +222,7 @@ func TestResizeSuccess(t *testing.T) {
 func TestResizeTooSmall(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](5, 5)
+	cb := circularbuffer.NewCircularBuffer[byte](5, 5)
 
 	data := []byte("hello")
 	_, err := cb.Write(data)
@@ -229,7 +231,7 @@ func TestResizeTooSmall(t *testing.T) {
 	}
 
 	err = cb.Resize(3)
-	if !errors.Is(err, ErrResizeTooSmall) {
+	if !errors.Is(err, circularbuffer.ErrResizeTooSmall) {
 		t.Errorf("expected error 'ErrResizeTooSmall', got: %v", err)
 	}
 }
@@ -237,7 +239,7 @@ func TestResizeTooSmall(t *testing.T) {
 func TestFlush(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](5, 5)
+	cb := circularbuffer.NewCircularBuffer[byte](5, 5)
 
 	data := []byte("hello")
 	_, err := cb.Write(data)
@@ -263,7 +265,7 @@ func TestFlush(t *testing.T) {
 func TestSeekStart(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](10, 10)
+	cb := circularbuffer.NewCircularBuffer[byte](10, 10)
 	data := []byte("abcdefghij")
 	_, err := cb.Write(data)
 	if err != nil {
@@ -283,7 +285,7 @@ func TestSeekStart(t *testing.T) {
 func TestSeekCurrent(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](10, 10)
+	cb := circularbuffer.NewCircularBuffer[byte](10, 10)
 	data := []byte("abcdefghij")
 	_, err := cb.Write(data)
 	if err != nil {
@@ -308,7 +310,7 @@ func TestSeekCurrent(t *testing.T) {
 func TestSeekEnd(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](10, 10)
+	cb := circularbuffer.NewCircularBuffer[byte](10, 10)
 	data := []byte("abcdefghij")
 	_, err := cb.Write(data)
 	if err != nil {
@@ -328,7 +330,7 @@ func TestSeekEnd(t *testing.T) {
 func TestSeekInvalid(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](10, 10)
+	cb := circularbuffer.NewCircularBuffer[byte](10, 10)
 	data := []byte("abcdefghij")
 	_, err := cb.Write(data)
 	if err != nil {
@@ -336,15 +338,15 @@ func TestSeekInvalid(t *testing.T) {
 	}
 
 	_, err = cb.Seek(100, -1)
-	if !errors.Is(err, ErrSeekInvalid) {
-		t.Errorf("expected error '%s', got: %v", ErrSeekInvalid, err)
+	if !errors.Is(err, circularbuffer.ErrSeekInvalid) {
+		t.Errorf("expected error '%s', got: %v", circularbuffer.ErrSeekInvalid, err)
 	}
 }
 
 func TestSeekOutOfBounds(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[byte](10, 10)
+	cb := circularbuffer.NewCircularBuffer[byte](10, 10)
 	data := []byte("abcdefghij")
 	_, err := cb.Write(data)
 	if err != nil {
@@ -352,15 +354,15 @@ func TestSeekOutOfBounds(t *testing.T) {
 	}
 
 	_, err = cb.Seek(100, io.SeekStart)
-	if !errors.Is(err, ErrSeekOutOfBounds) {
-		t.Errorf("expected error '%s', got: %v", ErrSeekOutOfBounds, err)
+	if !errors.Is(err, circularbuffer.ErrSeekOutOfBounds) {
+		t.Errorf("expected error '%s', got: %v", circularbuffer.ErrSeekOutOfBounds, err)
 	}
 }
 
 func TestExposeWriteSpaceAndCommitWrite(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[int](5, 10)
+	cb := circularbuffer.NewCircularBuffer[int](5, 10)
 
 	// Test exposing write space and committing write
 	writeSpace := cb.ExposeWriteSpace()
@@ -393,7 +395,7 @@ func TestExposeWriteSpaceAndCommitWrite(t *testing.T) {
 func TestExposeReadSpaceAndCommitRead(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[int](5, 10)
+	cb := circularbuffer.NewCircularBuffer[int](5, 10)
 
 	// Prepare buffer with initial data
 	data := []int{1, 2, 3, 4, 5}
@@ -429,7 +431,7 @@ func TestExposeReadSpaceAndCommitRead(t *testing.T) {
 func TestIncorrectUsageExposeWriteAndCommitWrite(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[int](5, 10)
+	cb := circularbuffer.NewCircularBuffer[int](5, 10)
 
 	// Trying to commit write without exposing
 	if err := cb.CommitWrite(1); err == nil {
@@ -458,7 +460,7 @@ func TestIncorrectUsageExposeWriteAndCommitWrite(t *testing.T) {
 func TestIncorrectUsageExposeReadAndCommitRead(t *testing.T) {
 	t.Parallel()
 
-	cb := NewCircularBuffer[int](5, 10)
+	cb := circularbuffer.NewCircularBuffer[int](5, 10)
 
 	// Prepare buffer with initial data
 	data := []int{1, 2, 3, 4, 5}
