@@ -62,13 +62,8 @@ func (fw *folderWatcher) startFsNotifyScan() error {
 	go func() {
 		defer watcher.Close()
 
-		for event := range watcher.Events {
-			if event.Has(fsnotify.Create) {
-				fw.mu.Lock()
-				fw.processedFiles[event.Name] = struct{}{}
-				fw.processFile(event.Name)
-				fw.mu.Unlock()
-			}
+		for range watcher.Events {
+			fw.scanDirectory()
 		}
 	}()
 
