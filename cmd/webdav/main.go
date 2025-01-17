@@ -18,7 +18,6 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/service/nzbservice"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger/folderwatcher"
-	"git.ruekov.eu/ruakij/nzbStreamer/pkg/SimpleWebdavFilesystem"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
 	gowebdav "github.com/emersion/go-webdav"
 	"github.com/sethvargo/go-envconfig"
@@ -93,9 +92,9 @@ func start(ctx context.Context) *sync.WaitGroup {
 	// Setup Presenters
 	var presenters []presentation.Presenter
 	// Webdav
-	var webdavHandler *SimpleWebdavFilesystem.FS
+	var webdavHandler *webdav.FS
 	if c.Webdav.Address != "" {
-		webdavHandler = SimpleWebdavFilesystem.NewFS()
+		webdavHandler = webdav.NewFS()
 		presenters = append(presenters, webdavHandler)
 	}
 	// Mount

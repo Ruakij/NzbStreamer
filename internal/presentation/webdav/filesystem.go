@@ -1,7 +1,8 @@
-package SimpleWebdavFilesystem
+package webdav
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,7 +19,7 @@ import (
 )
 
 var (
-	ErrReadOnlyFilesystem = fmt.Errorf("read-only filesystem")
+	ErrReadOnlyFilesystem = errors.New("read-only filesystem")
 	ErrFileNotFound       = os.ErrNotExist
 )
 
@@ -38,7 +39,6 @@ type simpleFile struct {
 	node     *Node
 	fs       *FS
 	openable presentation.Openable
-	size     int64
 	modTime  time.Time
 	name     string
 	isDir    bool
@@ -56,7 +56,7 @@ func NewFS() *FS {
 	return fs
 }
 
-var _ = (presentation.Presenter)((*FS)(nil))
+var _ = presentation.Presenter((*FS)(nil))
 
 // AddFile adds a new file node to the filesystem, creating necessary directories.
 func (fs *FS) AddFile(fullPath string, modTime time.Time, openable presentation.Openable) error {
@@ -247,7 +247,7 @@ func (fs *FS) ReadDir(ctx context.Context, name string, recursive bool) ([]webda
 	var entries []webdav.FileInfo
 	for _, childNode := range node.Children {
 		entries = append(entries, webdav.FileInfo{
-			//Path:    filepath.Join(name, childNode.File.Name()),
+			// Path:    filepath.Join(name, childNode.File.Name()),
 			Path:    childNode.File.Name(),
 			Size:    childNode.File.Size(),
 			ModTime: childNode.File.ModTime(),
@@ -297,7 +297,7 @@ type simpleFileReader struct {
 }
 
 func (sf *simpleFileReader) Close() (err error) {
-	slog.Debug("Close", "name", sf.simpleFile.name)
+	slog.Debug("Close", "handle", fmt.Sprintf("%p", sf), "name", sf.simpleFile.name)
 	if sf.reader != nil {
 		err = sf.reader.Close()
 		sf.reader = nil
@@ -311,7 +311,7 @@ func (sf *simpleFileReader) Read(p []byte) (n int, err error) {
 		if err != nil && err != io.EOF {
 			slog.Error("Read error", "name", sf.simpleFile.name, "len(p)", len(p), "err", err)
 		}
-		return
+		return n, err
 	}
 	return 0, ErrReadOnlyFilesystem
 }
@@ -332,6 +332,7 @@ func (sf *simpleFileReader) Seek(offset int64, whence int) (int64, error) {
 		if err != nil {
 			slog.Error("Seek error", "name", sf.simpleFile.name, "offset", offset, "whence", whence, "err", err)
 		}
+		sf.index = n
 		return n, err
 	}
 	return 0, ErrReadOnlyFilesystem
@@ -382,9 +383,9 @@ func (sf *simpleFile) Size() int64 {
 
 func (sf *simpleFile) Mode() os.FileMode {
 	if sf.isDir {
-		return os.ModeDir | 0444 // Directory, read-only
+		return os.ModeDir | 0o444 // Directory, read-only
 	}
-	return 0444 // File, read-only
+	return 0o444 // File, read-only
 }
 
 func (sf *simpleFile) ModTime() time.Time {
