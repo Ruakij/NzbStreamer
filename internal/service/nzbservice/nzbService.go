@@ -173,7 +173,7 @@ func (s *Service) isBlacklistedFilename(filename string) bool {
 
 func (s *Service) deobfuscateFilename(filepath string, paths []string, nzbData *nzbparser.NzbData) string {
 	filename := path.Base(filepath)
-	basePath := path.Dir(filepath)
+	basePath := strings.TrimLeft(filepath[:len(filepath)-len(filename)], "/")
 	fileExtension := path.Ext(filename)
 
 	// If only item with extension in folder
@@ -181,9 +181,9 @@ func (s *Service) deobfuscateFilename(filepath string, paths []string, nzbData *
 	filesByExtension := groupFilesByExtension(filesInFolder)
 	if len(filesByExtension[fileExtension]) == 1 {
 		replacement := nzbData.MetaName
-		if filepath != "" {
+		if basePath != "" {
 			// When folder fuzzy-checks above nzb-name, prefer it as replacement
-			foldername := path.Base(filepath)
+			foldername := path.Base(basePath)
 			folderBase := filenameops.GetBaseFilename(foldername)
 			if 1-float32(levenshtein.ComputeDistance(folderBase, replacement))/float32(len(replacement)) >= s.filenameReplacementBelowLevensteinRatio {
 				replacement = folderBase
@@ -229,6 +229,11 @@ func (s *Service) flattenPath(file string, files []string) (newFile string) {
 }
 
 func listItemsInFolder(folder string, files []string) (foundFiles []string) {
+	if folder == "." {
+		folder = ""
+	}
+	folder = strings.TrimLeft(folder, "/")
+
 	for _, file := range files {
 		// Match folder
 		if after, found := strings.CutPrefix(file, folder); found {
