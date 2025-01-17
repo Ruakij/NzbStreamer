@@ -137,6 +137,8 @@ func convertTimeToFuseAttr(t time.Time) (time uint64, timeNs uint32, err error) 
 var _ = fs.NodeOpener((*fileNode)(nil))
 
 func (n *fileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	slog.Debug("Open", "name", n.EmbeddedInode().Path(nil))
+
 	reader, err := n.openable.Open()
 	if err != nil {
 		slog.Error("Error opening file", "error", err)

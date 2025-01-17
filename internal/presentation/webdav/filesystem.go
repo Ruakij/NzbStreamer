@@ -332,7 +332,6 @@ func (sf *simpleFileReader) Seek(offset int64, whence int) (int64, error) {
 		if err != nil {
 			slog.Error("Seek error", "name", sf.simpleFile.name, "offset", offset, "whence", whence, "err", err)
 		}
-		sf.index = n
 		return n, err
 	}
 	return 0, ErrReadOnlyFilesystem
