@@ -165,34 +165,17 @@ func (cb *CircularBuffer[T]) write(data []T, blocking bool) (int, error) {
 			}
 		}
 
-		// Determine how much can be written in this iteration
-		n := len(data)
-		free := cb.getCurrFree()
-		if n > free {
-			n = free
-		}
-
-		// In case write head is after last byte on the right
-		cb.writePos %= cb.getCurrCapacity()
-		writeEnd := (cb.writePos + n) % cb.getCurrCapacity()
-
-		if cb.writePos < writeEnd || writeEnd == 0 {
-			// We can write in one go
-			copy(cb.buffer[cb.writePos:], data[:n])
-		} else {
-			// We need to write in a wrap-around way
-			part1 := cb.getCurrCapacity() - cb.writePos
-			copy(cb.buffer[cb.writePos:], data[:part1])
-			copy(cb.buffer[:writeEnd], data[part1:])
-		}
-
-		// Ensure, write head is after last byte on the right
-		cb.writePos = (cb.writePos + n)
-		cb.size += n
+		writeSpace := cb.exposeWriteSpace()
+		n := copy(writeSpace, data)
+		err := cb.commitWrite(n)
 
 		cb.canRead.Signal() // Signal that there's data available for reading
 		data = data[n:]
 		totalWritten += n
+
+		if err != nil {
+			return totalWritten, err
+		}
 	}
 
 	return totalWritten, nil
@@ -219,41 +202,24 @@ func (cb *CircularBuffer[T]) read(p []T, blocking bool) (int, error) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
-	n := len(p)
-	totalRead := 0
-
 	if cb.size == 0 {
 		if blocking {
 			cb.canRead.Wait()
 			if cb.size == 0 {
-				return totalRead, ErrBufferEmptyAfterWakeup
+				return 0, ErrBufferEmptyAfterWakeup
 			}
 		} else {
-			return totalRead, io.EOF
+			return 0, io.EOF
 		}
 	}
 
-	// Calculate how much we can read in this iteration
-	end := cb.readPos + (n - totalRead)
-	if end > cb.getCurrCapacity() {
-		end = cb.getCurrCapacity()
-	}
-	available := end - cb.readPos
-
-	if available > cb.size {
-		available = cb.size
-	}
-
-	// Copy data into p
-	copy(p[totalRead:], cb.buffer[cb.readPos:end])
-	cb.readPos %= cb.getCurrCapacity()
-	cb.readPos = (cb.readPos + available) % cb.getCurrCapacity()
-	cb.size -= available
-	totalRead += available
+	readSpace := cb.exposeReadSpace()
+	n := copy(p, readSpace)
+	err := cb.commitRead(n)
 
 	cb.canWrite.Signal() // Signal that there's space available for writing
 
-	return totalRead, nil
+	return n, err
 }
 
 // Flushes the buffer, freeing all data and waking up all goroutines waiting for read or write operations.
@@ -267,6 +233,23 @@ func (cb *CircularBuffer[T]) Flush() error {
 	if err := cb.resizeWithLock(0); err != nil {
 		return err
 	}
+
+	return cb.clear()
+}
+
+// Clears the buffer, waking up all goroutines waiting for read or write operations.
+// Buffer size is kept
+func (cb *CircularBuffer[T]) Clear() error {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	return cb.clear()
+}
+
+func (cb *CircularBuffer[T]) clear() error {
+	cb.size = 0
+	cb.readPos = 0
+	cb.writePos = 0
 
 	cb.canRead.Broadcast() // Signal all waiting goroutines
 	cb.canWrite.Broadcast()
@@ -322,7 +305,11 @@ func (cb *CircularBuffer[T]) resizeWithLock(newCapacity int) error {
 	return nil
 }
 
-// Seek moves the read head to new position if possible
+// Seek moves the read head to new position.
+//
+// SeekStart will seek relative to the write position, NOT the current readPosition.
+// SeekCurrent will seek relative to the read position.
+// SeekEnd will seek relative to the end of current capacity
 func (cb *CircularBuffer[T]) Seek(offset int64, whence int) (int64, error) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -335,7 +322,7 @@ func (cb *CircularBuffer[T]) seekWithLock(offset int64, whence int) (int64, erro
 
 	switch whence {
 	case io.SeekStart:
-		newPos = int(offset)
+		newPos = cb.writePos + int(offset)
 	case io.SeekCurrent:
 		newPos = cb.readPos + int(offset)
 	case io.SeekEnd:
@@ -347,6 +334,8 @@ func (cb *CircularBuffer[T]) seekWithLock(offset int64, whence int) (int64, erro
 	if newPos < 0 || newPos > cb.size {
 		return 0, ErrSeekOutOfBounds
 	}
+
+	newPos %= cb.getCurrCapacity()
 
 	cb.readPos = newPos
 
@@ -365,6 +354,10 @@ func (cb *CircularBuffer[T]) seekWithLock(offset int64, whence int) (int64, erro
 func (cb *CircularBuffer[T]) ExposeWriteSpace() []T {
 	cb.mu.Lock()
 
+	return cb.exposeWriteSpace()
+}
+
+func (cb *CircularBuffer[T]) exposeWriteSpace() []T {
 	if cb.size == cb.getCurrCapacity() {
 		// Buffer is full, no space to expose
 		return nil
@@ -398,6 +391,10 @@ func (cb *CircularBuffer[T]) CommitWrite(written int) error {
 		return ErrMutexNotLockedButRequredOnExpose
 	}
 
+	return cb.commitWrite(written)
+}
+
+func (cb *CircularBuffer[T]) commitWrite(written int) error {
 	if written > cb.getCurrFree() {
 		return ErrCommtedMoreThanAvailable
 	}
@@ -415,16 +412,19 @@ func (cb *CircularBuffer[T]) CommitWrite(written int) error {
 // and the readPos is adjusted after reading.
 func (cb *CircularBuffer[T]) ExposeReadSpace() []T {
 	cb.mu.Lock()
+	return cb.exposeReadSpace()
+}
 
+func (cb *CircularBuffer[T]) exposeReadSpace() []T {
 	if cb.size == 0 {
 		// Buffer is empty, no data to expose
-		return nil
+		return []T{}
 	}
 
 	// Determine the start and end of readable data
-	start := cb.readPos % cb.getCurrCapacity()
-	var end int
-	if start <= cb.writePos {
+	start := cb.readPos
+	end := (start + cb.size) % cb.getCurrCapacity()
+	if start <= end {
 		// Readable data is in a single segment
 		end = cb.writePos
 	} else {
@@ -444,12 +444,16 @@ func (cb *CircularBuffer[T]) CommitRead(read int) error {
 		return ErrMutexNotLockedButRequredOnExpose
 	}
 
+	return cb.commitRead(read)
+}
+
+func (cb *CircularBuffer[T]) commitRead(read int) error {
 	if read > cb.size {
 		return ErrCommtedMoreThanAvailable
 	}
 
 	cb.readPos %= cb.getCurrCapacity()
-	cb.readPos = (cb.readPos + read) % cb.getCurrCapacity()
+	cb.readPos = (cb.readPos + read)
 	cb.size -= read
 	cb.canWrite.Signal() // Signal that there's space available for writing
 	return nil

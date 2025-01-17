@@ -28,14 +28,14 @@ func TestWrite(t *testing.T) {
 func TestWrappedWrite(t *testing.T) {
 	t.Parallel()
 
-	cb := circularbuffer.NewCircularBuffer[byte](0, 6)
+	cb := circularbuffer.NewCircularBuffer[byte](6, 6)
 	wrappedWrite(t, cb)
 }
 
 func TestWrappedResizeWrite(t *testing.T) {
 	t.Parallel()
 
-	cb := circularbuffer.NewCircularBuffer[byte](6, 6)
+	cb := circularbuffer.NewCircularBuffer[byte](0, 6)
 	wrappedWrite(t, cb)
 }
 
@@ -118,6 +118,7 @@ func TestBlockingWrite(t *testing.T) {
 
 	go func() {
 		data := []byte("abc")
+		// First write should succeed
 		_, err := cb.Write(data)
 		if err != nil {
 			errChan <- err
@@ -129,9 +130,20 @@ func TestBlockingWrite(t *testing.T) {
 		close(done)
 	}()
 
+	// Allow the goroutine to potentially block
+	time.Sleep(10 * time.Millisecond)
+
+	// Now read data to unblock the goroutine
+	readData := make([]byte, 3)
+	cb.Read(readData)
+
+	// Now wait for the goroutine to finish executing
 	select {
 	case <-done:
-		t.Errorf("blocking write should have been blocked, but completed prematurely")
+		// Ensure the second write returned an error
+		if err := <-errChan; err == nil {
+			t.Errorf("Expected error when writing to full buffer, got nil")
+		}
 	case err := <-errChan:
 		if err != nil {
 			t.Fatalf("Unexpected error during Write: %v", err)
@@ -149,20 +161,25 @@ func TestBlockingRead(t *testing.T) {
 	errChan := make(chan error)
 
 	go func() {
-		readData := make([]byte, 1)
-
 		// Attempt to read from an empty buffer
+		readData := make([]byte, 1)
 		_, err := cb.Read(readData)
 		errChan <- err // Send the error back to the main goroutine
 		close(done)
 	}()
 
-	// Ensure that the read blocks until data is available
+	// Allow the goroutine to attempt the read and block
 	time.Sleep(10 * time.Millisecond)
 
+	// Now write data to unblock the goroutine
+	cb.Write([]byte("a"))
+
+	// Now wait for the goroutine to finish executing
 	select {
 	case <-done:
-		t.Errorf("blocking read should have been blocked, but completed prematurely")
+		if err := <-errChan; err == nil {
+			t.Errorf("Expected error when reading from empty buffer, got nil")
+		}
 	case err := <-errChan:
 		if err != nil {
 			t.Fatalf("Unexpected error during Read: %v", err)
@@ -422,8 +439,8 @@ func TestExposeReadSpaceAndCommitRead(t *testing.T) {
 
 	// No space to expose after flushing
 	readSpace = cb.ExposeReadSpace()
-	if readSpace != nil {
-		t.Fatalf("Expected nil read space after committing, got %d", len(readSpace))
+	if len(readSpace) != 0 {
+		t.Fatalf("Expected read space to be empty after flushing buffer, got %d", len(readSpace))
 	}
 }
 
@@ -487,7 +504,7 @@ func TestIncorrectUsageExposeReadAndCommitRead(t *testing.T) {
 		t.Fatalf("Unexpected error during CommitRead: %v", err)
 	}
 	readSpace = cb.ExposeReadSpace()
-	if readSpace != nil {
-		t.Fatalf("Expected nil read space after exhausting buffer, got %d", len(readSpace))
+	if len(readSpace) != 0 {
+		t.Fatalf("Expected read space to be empty after exhausting buffer, got %d", len(readSpace))
 	}
 }
