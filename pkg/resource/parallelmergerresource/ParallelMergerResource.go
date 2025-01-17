@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
-	"golang.org/x/sync/errgroup"
 )
 
 // AdaptiveParallelMergerResource is a Resource type which allows combining multiple Resources as if it was one.
@@ -25,7 +24,6 @@ func NewParallelMergerResource(resources []resource.ReadSeekCloseableResource) *
 type ParallelMergerResourceReader struct {
 	resource *ParallelMergerResource
 	readers  []io.ReadSeekCloser
-	mu       sync.RWMutex
 	// Position in data
 	index int64
 	// Active reader index
@@ -80,9 +78,8 @@ func (r *ParallelMergerResourceReader) Read(p []byte) (int, error) {
 	}
 
 	var totalRead int
-	group := errgroup.Group{}
-	index := 0
-	readResponses := make([]readResponse, 0, 1)
+	wg := sync.WaitGroup{}
+	readResponses := make([]*readResponse, 0, 1)
 
 	for r.readerIndex < len(r.readers) {
 		resourceSize, err := r.resource.resources[r.readerIndex].Size()
@@ -92,36 +89,35 @@ func (r *ParallelMergerResourceReader) Read(p []byte) (int, error) {
 
 		// What the reader can return
 		readerRead := int(resourceSize - r.readerByteIndex)
-
 		done := totalRead+readerRead >= len(p)
+		if done {
+			readerRead = len(p) - totalRead
+		}
 
-		// Start in parallel
-		r.mu.Lock()
-		readResponses = append(readResponses, readResponse{})
-		r.mu.Unlock()
-		readerIndex := r.readerIndex
-		localIndex := index
-		offset := totalRead
-		group.Go(func() error {
-			// Read from underlying reader into slice
-			n, err := r.readers[readerIndex].Read(p[offset:])
-			// Store result
-			r.mu.RLock()
-			readResponses[localIndex].n = n
-			readResponses[localIndex].err = err
-			r.mu.RUnlock()
-			return nil
-		})
-
-		index++
-		totalRead += readerRead
+		readResponse := &readResponse{}
+		readResponses = append(readResponses, readResponse)
+		reader := r.readers[r.readerIndex]
+		buf := p[totalRead:]
+		if !done { // Start in parallel
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				readWithReader(reader, readResponse, buf)
+			}()
+		} else { // Last reader starts sequentially, this also ensures we don't start any goroutines for only 1 reader
+			readWithReader(reader, readResponse, buf)
+		}
 
 		// If buffer p will be full, we are done reading
 		if done {
 			r.readerByteIndex += int64(len(p) - totalRead)
+			totalRead = len(p)
+
 			r.index += int64(totalRead)
 			break
 		} else {
+			totalRead += readerRead
+
 			r.index += int64(totalRead)
 			r.readerIndex++
 			r.readerByteIndex = 0
@@ -129,10 +125,7 @@ func (r *ParallelMergerResourceReader) Read(p []byte) (int, error) {
 	}
 
 	// Wait for completion
-	err := group.Wait()
-	if err != nil {
-		return 0, fmt.Errorf("failed reading from underlying resource: %w", err)
-	}
+	wg.Wait()
 
 	// Read and check responses
 	totalReadFromResponses := 0
@@ -153,6 +146,14 @@ func (r *ParallelMergerResourceReader) Read(p []byte) (int, error) {
 	}
 	// All readers exhausted, EOF
 	return totalRead, io.EOF
+}
+
+func readWithReader(reader io.Reader, response *readResponse, buf []byte) {
+	// Read from underlying reader into slice
+	n, err := reader.Read(buf)
+	// Store result
+	response.n = n
+	response.err = err
 }
 
 func (r *ParallelMergerResourceReader) Close() error {
@@ -228,6 +229,11 @@ func (r *ParallelMergerResourceReader) getReaderIndexAndByteIndexAtByteIndex(ind
 
 		if index <= byteIndex+size {
 			byteIndex = index - byteIndex
+
+			if byteIndex == size {
+				readerIndex++
+				byteIndex = 0
+			}
 			return readerIndex, byteIndex, nil
 		}
 		byteIndex += size
