@@ -84,6 +84,7 @@ func (r *AdaptiveReadaheadCacheReader) Close() error {
 	if err := r.cache.Flush(); err != nil {
 		return fmt.Errorf("failed flushing cache: %w", err)
 	}
+	r.readHistory = []readHistoryEntry{}
 	return nil
 }
 
@@ -116,20 +117,20 @@ func (r *AdaptiveReadaheadCacheReader) Seek(offset int64, whence int) (int64, er
 	indexDelta := newIndex - r.index
 	if indexDelta > 0 {
 		if int64(r.cache.GetSize()) > indexDelta {
-			_, err = r.cache.Seek(offset, whence)
+			_, err = r.cache.Seek(indexDelta, io.SeekCurrent)
 			if err != nil {
 				if errors.Is(err, circularbuffer.ErrSeekOutOfBounds) {
-					r.flushCache()
+					r.clearCache()
 				} else {
 					return 0, fmt.Errorf("failed seeking cache: %w", err)
 				}
 			}
 		} else {
-			r.flushCache()
+			r.clearCache()
 		}
 	} else {
 		// Otherwise flush cache
-		r.flushCache()
+		r.clearCache()
 		r.underlyingReaderEOF = false
 	}
 	if !r.underlyingReaderEOF {
@@ -140,9 +141,9 @@ func (r *AdaptiveReadaheadCacheReader) Seek(offset int64, whence int) (int64, er
 	return r.index, nil
 }
 
-func (r *AdaptiveReadaheadCacheReader) flushCache() {
+func (r *AdaptiveReadaheadCacheReader) clearCache() {
 	r.readHistory = r.readHistory[:0]
-	_ = r.cache.Flush()
+	_ = r.cache.Clear()
 }
 
 func (r *AdaptiveReadaheadCacheReader) Read(p []byte) (int, error) {
