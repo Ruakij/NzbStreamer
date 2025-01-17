@@ -48,7 +48,7 @@ func NewCache(options *CacheOptions) (*Cache, error) {
 	}
 
 	// Run sizeEvict, when current size is too large for maxSize
-	if cache.currentSize > cache.options.MaxSize {
+	if cache.options.MaxSize > 0 && cache.currentSize > cache.options.MaxSize {
 		err := cache.maxSizeEvict(0)
 		if err != nil {
 			return nil, fmt.Errorf("failed initial evicting: %w", err)
@@ -71,6 +71,9 @@ func (c *Cache) loadExistingItems() error {
 		filePath := filepath.Join(c.options.CacheDir, file.Name())
 		info, err := os.Stat(filePath)
 		if err != nil {
+			continue
+		}
+		if info.IsDir() {
 			continue
 		}
 
@@ -106,7 +109,6 @@ func (c *Cache) maxSizeEvict(requiredSpace int64) error {
 		err := c.removeFile(key)
 		header.lock.Unlock()
 		if err != nil {
-			header.lock.Unlock()
 			return err
 		}
 	}
@@ -140,25 +142,26 @@ func (c *Cache) SetWithReader(key string, reader io.Reader) (int64, error) {
 		n, readErr := reader.Read(buf)
 		totalN += int64(n)
 		if n > 0 {
-			if defaultCacheOptions.MaxSizeEvictBlocking {
-				c.mu.Lock()
-				// Ensure there is enough space, evict if necessary
-				err = c.maxSizeEvict(totalN)
-				if err != nil {
-					c.mu.Unlock()
-					return totalWritten, err
-				}
-				c.mu.Unlock()
-			} else {
-				go func(totalN int64) {
-					c.mu.Lock()
+			if c.options.MaxSize > 0 {
+				if defaultCacheOptions.MaxSizeEvictBlocking {
 					// Ensure there is enough space, evict if necessary
-					err := c.maxSizeEvict(totalN)
-					if err != nil {
-						slog.Error("Couldnt evict for item", "wanted space", totalN, "error", err)
-					}
+					c.mu.Lock()
+					err = c.maxSizeEvict(totalN)
 					c.mu.Unlock()
-				}(totalN)
+					if err != nil {
+						return totalWritten, err
+					}
+				} else {
+					go func(totalN int64) {
+						// Ensure there is enough space, evict if necessary
+						c.mu.Lock()
+						err = c.maxSizeEvict(totalN)
+						c.mu.Unlock()
+						if err != nil {
+							slog.Error("Couldnt evict for item", "wanted space", totalN, "error", err)
+						}
+					}(totalN)
+				}
 			}
 
 			// Write the chunk

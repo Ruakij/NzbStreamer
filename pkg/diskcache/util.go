@@ -11,7 +11,10 @@ const DirFileMode = 0o755
 func ensureDirExists(dirPath string) error {
 	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
 		err := os.Mkdir(dirPath, DirFileMode)
-		return fmt.Errorf("failed creating dir '%s': %w", dirPath, err)
+		if err != nil {
+			return fmt.Errorf("failed creating dir '%s': %w", dirPath, err)
+		}
+		return nil
 	}
 	return nil
 }
