@@ -142,36 +142,12 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 	}
 
 	for filepath, file := range files {
-		filename := path.Base(filepath)
-		fileExtension := path.Ext(filename)
-		filepath = filepath[:len(filepath)-len(filename)]
-
-		// If only item with extension in folder
-		filesInFolder := listItemsInFolder(filepath, paths)
-		filesByExtension := groupFilesByExtension(filesInFolder)
-		if len(filesByExtension[fileExtension]) == 1 {
-			replacement := nzbData.MetaName
-			if filepath != "" {
-				// When folder fuzzy-checks above nzb-name, prefer it as replacement
-				foldername := path.Base(filepath)
-				folderBase := filenameops.GetBaseFilename(foldername)
-				if 1-float32(levenshtein.ComputeDistance(folderBase, replacement))/float32(len(replacement)) >= s.filenameReplacementBelowLevensteinRatio {
-					replacement = folderBase
-				}
-			}
-			// Apply Fuzzy-check
-			fileBase := filename[:len(filename)-len(fileExtension)]
-			if 1-float32(levenshtein.ComputeDistance(fileBase, replacement))/float32(len(replacement)) < s.filenameReplacementBelowLevensteinRatio {
-				filename = replacement + fileExtension
-			}
-		}
-
-		// TODO: Flatten
+		filepath = s.deobfuscateFilename(filepath, paths, nzbData)
 		filepath = s.flattenPath(filepath, paths)
 
 		for _, presenter := range s.presenters {
 			err = presenter.AddFile(
-				path.Join(nzbData.MetaName, filepath, filename),
+				path.Join(nzbData.MetaName, filepath),
 				nzbData.Files[0].ParsedDate,
 				file,
 			)
@@ -195,7 +171,35 @@ func (s *Service) isBlacklistedFilename(filename string) bool {
 	return false
 }
 
-// flattenPath will remove as many folders from the file, starting from the left up to pathFlatteningDepth, and remove the resulting file
+func (s *Service) deobfuscateFilename(filepath string, paths []string, nzbData *nzbparser.NzbData) string {
+	filename := path.Base(filepath)
+	basePath := path.Dir(filepath)
+	fileExtension := path.Ext(filename)
+
+	// If only item with extension in folder
+	filesInFolder := listItemsInFolder(basePath, paths)
+	filesByExtension := groupFilesByExtension(filesInFolder)
+	if len(filesByExtension[fileExtension]) == 1 {
+		replacement := nzbData.MetaName
+		if filepath != "" {
+			// When folder fuzzy-checks above nzb-name, prefer it as replacement
+			foldername := path.Base(filepath)
+			folderBase := filenameops.GetBaseFilename(foldername)
+			if 1-float32(levenshtein.ComputeDistance(folderBase, replacement))/float32(len(replacement)) >= s.filenameReplacementBelowLevensteinRatio {
+				replacement = folderBase
+			}
+		}
+		// Apply Fuzzy-check
+		fileBase := filename[:len(filename)-len(fileExtension)]
+		if 1-float32(levenshtein.ComputeDistance(fileBase, replacement))/float32(len(replacement)) < s.filenameReplacementBelowLevensteinRatio {
+			filename = replacement + fileExtension
+		}
+	}
+
+	return path.Join(basePath, filename)
+}
+
+// flattenPath will remove as many folders from the file, starting from the left up to pathFlatteningDepth, and return the resulting file
 func (s *Service) flattenPath(file string, files []string) (newFile string) {
 	// Extract folders of search-path
 	folders := strings.SplitN(file, "/", s.pathFlatteningDepth+1)
@@ -207,14 +211,14 @@ func (s *Service) flattenPath(file string, files []string) (newFile string) {
 	}
 
 	folderPrefix := ""
-	for i := 0; i < maxDepth; i++ {
+	for i := range maxDepth {
 		// Build folders from left to right, up to max depth
 		folderPrefix = path.Join(folderPrefix, folders[i])
 
 		// Count prefix-matching items in paths
 		// If only 1 found, cut folder-prefix so far of path and return new path
 		if len(listItemsInFolder(folderPrefix, files)) == 1 {
-			newFile = file[len(folderPrefix):]
+			newFile = file[len(folderPrefix)+1:]
 		}
 	}
 
