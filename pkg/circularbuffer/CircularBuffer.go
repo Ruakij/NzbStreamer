@@ -196,17 +196,14 @@ func (cb *CircularBuffer[T]) ReadNonBlocking(p []T) (int, error) {
 	return cb.read(p, false)
 }
 
-var ErrBufferEmptyAfterWakeup = errors.New("buffer was still empty after wakeup")
-
 func (cb *CircularBuffer[T]) read(p []T, blocking bool) (int, error) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
 	if cb.size == 0 {
 		if blocking {
-			cb.canRead.Wait()
-			if cb.size == 0 {
-				return 0, ErrBufferEmptyAfterWakeup
+			for cb.size == 0 {
+				cb.canRead.Wait()
 			}
 		} else {
 			return 0, io.EOF
