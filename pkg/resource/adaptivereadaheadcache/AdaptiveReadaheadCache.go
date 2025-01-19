@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/circularbuffer"
@@ -45,6 +46,7 @@ type AdaptiveReadaheadCacheReader struct {
 	readHistory         []readHistoryEntry
 	cache               *circularbuffer.CircularBuffer[byte]
 	mutex               sync.RWMutex
+	readaheadRunning    atomic.Bool
 }
 
 type readHistoryEntry struct {
@@ -78,6 +80,9 @@ func (r *AdaptiveReadaheadCache) Size() (int64, error) {
 }
 
 func (r *AdaptiveReadaheadCacheReader) Close() error {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
 	if err := r.underlyingReader.Close(); err != nil {
 		return fmt.Errorf("failed closing underlying resource: %w", err)
 	}
@@ -133,7 +138,7 @@ func (r *AdaptiveReadaheadCacheReader) Seek(offset int64, whence int) (int64, er
 		r.clearCache()
 		r.underlyingReaderEOF = false
 	}
-	if !r.underlyingReaderEOF {
+	if !r.underlyingReaderEOF && r.readaheadRunning.CompareAndSwap(false, true) {
 		go r.readahead()
 	}
 
@@ -148,7 +153,7 @@ func (r *AdaptiveReadaheadCacheReader) clearCache() {
 
 func (r *AdaptiveReadaheadCacheReader) Read(p []byte) (int, error) {
 	r.recordRead(int64(len(p)))
-	if !r.underlyingReaderEOF {
+	if !r.underlyingReaderEOF && r.readaheadRunning.CompareAndSwap(false, true) {
 		go r.readahead()
 	}
 
@@ -156,7 +161,11 @@ func (r *AdaptiveReadaheadCacheReader) Read(p []byte) (int, error) {
 	n, err := r.cache.Read(p)
 	r.index += int64(n)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return n, fmt.Errorf("failed reading from cache: %w", err)
+		if errors.Is(err, io.EOF) {
+			err = nil
+		} else {
+			return n, fmt.Errorf("failed reading from cache: %w", err)
+		}
 	}
 
 	if r.underlyingReaderEOF && n == 0 {
@@ -213,6 +222,8 @@ func (r *AdaptiveReadaheadCacheReader) avgSpeed() float64 {
 }
 
 func (r *AdaptiveReadaheadCacheReader) readahead() error {
+	defer r.readaheadRunning.Store(false)
+
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
@@ -267,7 +278,7 @@ func (r *AdaptiveReadaheadCacheReader) readahead() error {
 	n, err := r.underlyingReader.Read(exposedBuffer)
 
 	if err := r.cache.CommitWrite(n); err != nil {
-		return fmt.Errorf("failed comitting write to cache: %w", err)
+		return fmt.Errorf("failed committing write to cache: %w", err)
 	}
 
 	if errors.Is(err, io.EOF) {
