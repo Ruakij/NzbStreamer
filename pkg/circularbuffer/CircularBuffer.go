@@ -323,7 +323,7 @@ func (cb *CircularBuffer[T]) seekWithLock(offset int64, whence int) (int64, erro
 	case io.SeekCurrent:
 		newPos = cb.readPos + int(offset)
 	case io.SeekEnd:
-		newPos = cb.size + int(offset)
+		newPos = cb.writePos + int(offset)
 	default:
 		return 0, ErrSeekInvalid
 	}
@@ -336,7 +336,7 @@ func (cb *CircularBuffer[T]) seekWithLock(offset int64, whence int) (int64, erro
 
 	cb.readPos = newPos
 
-	cb.size = cb.writePos - cb.readPos
+	cb.size = cb.writePos%cb.getCurrCapacity() - cb.readPos
 	if cb.size < 0 {
 		cb.size += cb.getCurrCapacity()
 	}
