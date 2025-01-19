@@ -419,18 +419,25 @@ func (cb *CircularBuffer[T]) exposeReadSpace() []T {
 	}
 
 	// Determine the start and end of readable data
-	start := cb.readPos
+	start := cb.readPos % cb.getCurrCapacity()
 	end := (start + cb.size) % cb.getCurrCapacity()
-	if start <= end {
+	var exposedBuffer []T
+	if start < end {
 		// Readable data is in a single segment
 		end = cb.writePos
-	} else {
+		exposedBuffer = cb.buffer[start:end]
+	} else if start >= end {
 		// Readable data wraps around at the end of the buffer
-		end = cb.getCurrCapacity()
+		endFirst := cb.getCurrCapacity()
+		if end == 0 {
+			exposedBuffer = cb.buffer[start:endFirst]
+		} else {
+			exposedBuffer = append(cb.buffer[start:endFirst], cb.buffer[0:end]...)
+		}
 	}
 
 	// Expose the readable space as a slice
-	return cb.buffer[start:end]
+	return exposedBuffer
 }
 
 // CommitRead MUST be called after using ExposeReadSpace to update the read position and release the lock.

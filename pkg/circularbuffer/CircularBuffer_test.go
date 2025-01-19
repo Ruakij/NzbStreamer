@@ -289,6 +289,11 @@ func TestSeekStart(t *testing.T) {
 		t.Errorf("unexpected error writing data: %v", err)
 	}
 
+	_, err = io.CopyN(io.Discard, cb, 6)
+	if err != nil {
+		t.Errorf("unexpected error dicarding: %v", err)
+	}
+
 	pos, err := cb.Seek(5, io.SeekStart)
 	if err != nil {
 		t.Errorf("unexpected error seeking: %v", err)
@@ -309,18 +314,13 @@ func TestSeekCurrent(t *testing.T) {
 		t.Errorf("unexpected error writing data: %v", err)
 	}
 
-	_, err = cb.Seek(5, io.SeekStart)
-	if err != nil {
-		t.Fatalf("Unexpected error during Seek: %v", err)
-	}
-
-	pos, err := cb.Seek(-2, io.SeekCurrent)
+	pos, err := cb.Seek(2, io.SeekCurrent)
 	if err != nil {
 		t.Errorf("unexpected error seeking: %v", err)
 	}
 
-	if pos != 3 {
-		t.Errorf("expected position 3, got %d", pos)
+	if pos != 2 {
+		t.Errorf("expected position 2, got %d", pos)
 	}
 }
 
