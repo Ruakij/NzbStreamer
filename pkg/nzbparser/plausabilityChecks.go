@@ -43,11 +43,11 @@ func (nzb *NzbData) CheckPlausability() (warnings, errors []EncapsulatedError) {
 		file := &nzb.Files[i]
 
 		fileWarnings, fileErrors := file.CheckPlausability()
-		warnings = append(warnings, prefixErrors(fmt.Sprintf("File[%d]: ", i), fileWarnings)...)
-		errors = append(errors, prefixErrors(fmt.Sprintf("File[%d]: ", i), fileErrors)...)
+		warnings = append(warnings, prefixErrors(fmt.Sprintf("File '%s': ", file.Filename), fileWarnings)...)
+		errors = append(errors, prefixErrors(fmt.Sprintf("File '%s': ", file.Filename), fileErrors)...)
 
 		if _, exists := filenames[file.Filename]; exists {
-			errors = append(errors, EncapsulatedError{ErrDuplicateFilename})
+			errors = append(errors, EncapsulatedError{fmt.Errorf("%s: %w", file.Filename, ErrDuplicateFilename)})
 		}
 		filenames[file.Filename] = struct{}{}
 	}
@@ -85,8 +85,8 @@ func (file *File) CheckPlausability() (warnings, errors []EncapsulatedError) {
 
 	for i := 0; i < len(file.Segments); i++ {
 		segmentWarnings, segmentErrors := file.Segments[i].CheckPlausability()
-		warnings = append(warnings, prefixErrors(fmt.Sprintf("Segment[%d]: ", i), segmentWarnings)...)
-		errors = append(errors, prefixErrors(fmt.Sprintf("Segment[%d]: ", i), segmentErrors)...)
+		warnings = append(warnings, prefixErrors(fmt.Sprintf("Segment %d: ", i), segmentWarnings)...)
+		errors = append(errors, prefixErrors(fmt.Sprintf("Segment %d: ", i), segmentErrors)...)
 	}
 
 	return warnings, errors
