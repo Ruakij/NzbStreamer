@@ -102,7 +102,7 @@ func (fw *folderWatcher) scanDirectory() {
 	group := errgroup.Group{}
 
 	for _, file := range files {
-		if !file.IsDir() && filepath.Ext(file.Name()) == ".nzb" {
+		if !file.IsDir() && strings.ToLower(filepath.Ext(file.Name())) == ".nzb" {
 			// Check if the file has been processed
 			if _, processed := fw.processedFiles[file.Name()]; !processed {
 				fw.processedFiles[file.Name()] = struct{}{}
