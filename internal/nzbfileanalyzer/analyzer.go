@@ -51,7 +51,8 @@ const (
 	segmentYEncOverheadMax float32 = 0.0453969
 )
 
-// Tries to find a known segment-size
+// GetProbableKnownSegmentSize tries to find a known segment size that matches the given segment size.
+// It returns the known segment size if found, otherwise it returns -1.
 func GetProbableKnownSegmentSize(segmentSize int) int {
 	for _, knownSize := range knownSizes {
 		// Exact
