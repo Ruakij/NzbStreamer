@@ -18,6 +18,8 @@ import (
 	"github.com/agnivade/levenshtein"
 )
 
+var logger = slog.With("Module", "NzbService")
+
 type TriggerListener struct {
 	trigger.Trigger
 	listenerID int
@@ -79,21 +81,21 @@ func (s *Service) SetFilenameReplacementBelowLevensteinRatio(ratio float32) {
 
 // Initialize the service; Load NzbData from store; build filedata and add to filesystem; Register to triggers
 func (s *Service) Init() error {
-	slog.Debug("Getting nzbData from store")
+	logger.Debug("Getting nzbData from store")
 	nzbData, err := s.store.List()
 	if err != nil {
 		return fmt.Errorf("failed listing nzbs in store: %w", err)
 	}
-	slog.Info("Loaded Nzb store", "items", len(nzbData))
+	logger.Info("Loaded Nzb store", "items", len(nzbData))
 
 	for _, nzb := range nzbData {
 		err := s.AddNzb(&nzb)
 		if err != nil {
-			slog.Error("Couldnt add nzb", "error", err)
+			logger.Error("Couldnt add nzb", "error", err)
 		}
 	}
 
-	slog.Debug("Registering at triggers")
+	logger.Debug("Registering at triggers")
 	for _, trigger := range s.triggers {
 		trigger.listenerID, err = trigger.AddListener(s.AddNzb, s.RemoveNzb)
 		if err != nil {
@@ -101,7 +103,7 @@ func (s *Service) Init() error {
 		}
 	}
 
-	slog.Debug("Init complete")
+	logger.Debug("Init complete")
 
 	return nil
 }
@@ -113,7 +115,7 @@ var (
 
 // Add parsed nzb-data
 func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
-	slog.Debug("Adding nzb", "MetaName", nzbData.MetaName)
+	logger.Debug("Adding nzb", "MetaName", nzbData.MetaName)
 
 	s.mutex.Lock()
 	if _, exists := s.nzbFiledata[nzbData.MetaName]; exists {
@@ -136,7 +138,7 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 	}
 
 	if len(files) == 0 {
-		slog.Warn("After blacklist, no files left", "MetaName", nzbData.MetaName)
+		logger.Warn("After blacklist, no files left", "MetaName", nzbData.MetaName)
 		return nil
 	}
 
@@ -162,13 +164,13 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 		for _, presenter := range s.presenters {
 			err = presenter.AddFile(fullPath, nzbData.Files[0].ParsedDate, file)
 			if err != nil {
-				slog.Error("Failed adding segment-stack as file", "nzb", nzbData.MetaName, "error", err)
+				logger.Error("Failed adding segment-stack as file", "nzb", nzbData.MetaName, "error", err)
 			}
 		}
 	}
 	s.mutex.Unlock()
 
-	slog.Info("Added nzb", "MetaName", nzbData.MetaName)
+	logger.Info("Added nzb", "MetaName", nzbData.MetaName)
 
 	return nil
 }
@@ -275,7 +277,7 @@ func (s *Service) RemoveNzb(nzbData *nzbparser.NzbData) error {
 		return fmt.Errorf("%w: %s", ErrNzbNotFound, nzbData.MetaName)
 	}
 
-	slog.Debug("Removing nzb", "MetaName", nzbData.MetaName)
+	logger.Debug("Removing nzb", "MetaName", nzbData.MetaName)
 
 	// Get tracked files
 	files := s.nzbFiles[nzbData.MetaName]
@@ -284,7 +286,7 @@ func (s *Service) RemoveNzb(nzbData *nzbparser.NzbData) error {
 	for _, filepath := range files {
 		for _, presenter := range s.presenters {
 			if err := presenter.RemoveFile(filepath); err != nil {
-				slog.Error("Failed removing file from presenter",
+				logger.Error("Failed removing file from presenter",
 					"nzb", nzbData.MetaName,
 					"file", filepath,
 					"error", err)
@@ -296,6 +298,6 @@ func (s *Service) RemoveNzb(nzbData *nzbparser.NzbData) error {
 	delete(s.nzbFiledata, nzbData.MetaName)
 	delete(s.nzbFiles, nzbData.MetaName)
 
-	slog.Info("Removed nzb", "MetaName", nzbData.MetaName)
+	logger.Info("Removed nzb", "MetaName", nzbData.MetaName)
 	return nil
 }

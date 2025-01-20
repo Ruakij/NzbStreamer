@@ -2,10 +2,12 @@ package webdav
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/emersion/go-webdav"
-	"golang.org/x/exp/slog"
+
+var logger = slog.With("Module", "Webdav")
 )
 
 func Listen(listenAddress string, webdavHandler *webdav.Handler) error {

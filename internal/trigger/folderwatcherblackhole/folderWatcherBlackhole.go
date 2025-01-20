@@ -11,6 +11,8 @@ import (
 	"golang.org/x/exp/slices"
 )
 
+var logger = slog.With("Module", "FolderWatcherBlackhole")
+
 // FolderWatcherBlackhole notifies listeners about new files in directory, after which the files are deleted
 type folderWatcherBlackhole struct {
 	watchFolder string
@@ -56,7 +58,7 @@ func (fw *folderWatcherBlackhole) scanDirectory() {
 
 	files, err := os.ReadDir(fw.watchFolder)
 	if err != nil {
-		slog.Error("Error reading directory", "error", err)
+		logger.Error("Error reading directory", "error", err)
 		return
 	}
 
@@ -73,31 +75,31 @@ func (fw *folderWatcherBlackhole) processFile(filename string) {
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		slog.Error("Failed to open file", filePath, err)
+		logger.Error("Failed to open file", filePath, err)
 	}
 
 	nzbData, err := nzbparser.ParseNzb(file)
 	if err != nil {
-		slog.Error("Failed parse nzb", filePath, err)
+		logger.Error("Failed parse nzb", filePath, err)
 	}
 
 	fw.wg.Add(1)
 	defer fw.wg.Done()
 
 	if len(fw.addHooks) == 0 {
-		slog.Warn("Cannot notify for event, no listeners found", "filepath", filePath)
+		logger.Warn("Cannot notify for event, no listeners found", "filepath", filePath)
 	}
 
 	for _, hook := range fw.addHooks {
 		err := hook(nzbData)
 		if err != nil {
-			slog.Error("Error executing hook:", "error", err)
+			logger.Error("Error executing hook:", "error", err)
 		}
 	}
 
 	err = os.Remove(filePath)
 	if err != nil {
-		slog.Error("Error deleting file", "filepath", filePath, "error", err)
+		logger.Error("Error deleting file", "filepath", filePath, "error", err)
 	}
 }
 

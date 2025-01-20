@@ -15,6 +15,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+var logger = slog.With("Module", "FolderWatcher")
+
 // FolderWatcher notifies listeners about new files in directory
 type folderWatcher struct {
 	watchFolder    string
@@ -41,7 +43,7 @@ func (fw *folderWatcher) Init() {
 	go fw.scanDirectory()
 	err := fw.startFsNotifyScan()
 	if err != nil {
-		slog.Error("Error when setting up FsNotifyScan, continuing with polling", "error", err)
+		logger.Error("Error when setting up FsNotifyScan, continuing with polling", "error", err)
 		fw.startPeriodicScan(PollingScanTime)
 	}
 }
@@ -95,7 +97,7 @@ func (fw *folderWatcher) scanDirectory() {
 
 	files, err := os.ReadDir(fw.watchFolder)
 	if err != nil {
-		slog.Error("Error reading directory", "err", err)
+		logger.Error("Error reading directory", "err", err)
 		return
 	}
 
@@ -122,14 +124,14 @@ func (fw *folderWatcher) scanDirectory() {
 func (fw *folderWatcher) processFile(filePath string) {
 	file, err := os.Open(filePath)
 	if err != nil {
-		slog.Error("Failed to open file", filePath, err)
+		logger.Error("Failed to open file", filePath, err)
 		return
 	}
 	defer file.Close() // Ensure the file is closed after processing
 
 	nzbData, err := nzbparser.ParseNzb(file)
 	if err != nil {
-		slog.Error("Failed to parse nzb", "filePath", filePath, "err", err)
+		logger.Error("Failed to parse nzb", "filePath", filePath, "err", err)
 		return
 	}
 
@@ -142,7 +144,7 @@ func (fw *folderWatcher) processFile(filePath string) {
 			}
 			msg.WriteString(fmt.Sprintf("%v", warn))
 		}
-		slog.Warn("Warnings while checking Nzb", "filePath", filePath, "msg", msg.String())
+		logger.Warn("Warnings while checking Nzb", "filePath", filePath, "msg", msg.String())
 	}
 	if len(errors) > 0 {
 		var msg strings.Builder
@@ -152,7 +154,7 @@ func (fw *folderWatcher) processFile(filePath string) {
 			}
 			msg.WriteString(fmt.Sprintf("%v", err))
 		}
-		slog.Warn("Errors while checking Nzb", "filePath", filePath, "msg", msg.String())
+		logger.Warn("Errors while checking Nzb", "filePath", filePath, "msg", msg.String())
 		return
 	}
 
@@ -160,14 +162,14 @@ func (fw *folderWatcher) processFile(filePath string) {
 	defer fw.wg.Done()
 
 	if len(fw.addHooks) == 0 {
-		slog.Warn("Cannot notify, no listeners found", "filePath", filePath)
+		logger.Warn("Cannot notify, no listeners found", "filePath", filePath)
 		return
 	}
 
 	for _, hook := range fw.addHooks {
 		err := hook(nzbData)
 		if err != nil {
-			slog.Error("Error executing hook:", "err", err)
+			logger.Error("Error executing hook:", "err", err)
 		}
 	}
 }

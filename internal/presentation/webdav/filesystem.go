@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime"
 	"os"
 	"path"
@@ -189,7 +188,7 @@ func (fs *FS) Open(ctx context.Context, name string) (io.ReadCloser, error) {
 		fs:         fs,
 	}
 
-	slog.Debug("Open", "name", name)
+	logger.Debug("Open", "name", name)
 
 	if !node.File.isDir {
 		reader, err := node.File.openable.Open()
@@ -297,7 +296,7 @@ type simpleFileReader struct {
 }
 
 func (sf *simpleFileReader) Close() (err error) {
-	slog.Debug("Close", "handle", fmt.Sprintf("%p", sf), "name", sf.simpleFile.name)
+	logger.Debug("Close", "handle", fmt.Sprintf("%p", sf), "name", sf.simpleFile.name)
 	if sf.reader != nil {
 		err = sf.reader.Close()
 		sf.reader = nil
@@ -308,8 +307,8 @@ func (sf *simpleFileReader) Close() (err error) {
 func (sf *simpleFileReader) Read(p []byte) (n int, err error) {
 	if sf.reader != nil {
 		n, err = sf.reader.Read(p)
-		if err != nil && err != io.EOF {
-			slog.Error("Read error", "name", sf.simpleFile.name, "len(p)", len(p), "err", err)
+		if err != nil && !errors.Is(err, io.EOF) {
+			logger.Error("Read error", "name", sf.simpleFile.name, "len(p)", len(p), "err", err)
 		}
 		return n, err
 	}
@@ -326,11 +325,11 @@ func (sf *simpleFileReader) Seek(offset int64, whence int) (int64, error) {
 		return info.Size(), nil
 	}
 
-	slog.Debug("Seek", "name", sf.simpleFile.name, "offset", offset, "whence", whence)
+	logger.Debug("Seek", "name", sf.simpleFile.name, "offset", offset, "whence", whence)
 	if sf.reader != nil {
 		n, err := sf.reader.Seek(offset, whence)
 		if err != nil {
-			slog.Error("Seek error", "name", sf.simpleFile.name, "offset", offset, "whence", whence, "err", err)
+			logger.Error("Seek error", "name", sf.simpleFile.name, "offset", offset, "whence", whence, "err", err)
 		}
 		return n, err
 	}
@@ -345,7 +344,7 @@ func (sf *simpleFileReader) Readdir(count int) ([]os.FileInfo, error) {
 	sf.fs.mu.RLock()
 	defer sf.fs.mu.RUnlock()
 
-	slog.Debug("Readdir", "name", sf.simpleFile.name)
+	logger.Debug("Readdir", "name", sf.simpleFile.name)
 
 	if !sf.simpleFile.isDir {
 		return nil, fmt.Errorf("%s is not a directory", sf.simpleFile.name)
@@ -364,7 +363,7 @@ func (sf *simpleFileReader) Readdir(count int) ([]os.FileInfo, error) {
 }
 
 func (sf *simpleFileReader) Stat() (os.FileInfo, error) {
-	slog.Debug("Stat", "name", sf.simpleFile.name)
+	logger.Debug("Stat", "name", sf.simpleFile.name)
 	return sf.simpleFile, nil
 }
 

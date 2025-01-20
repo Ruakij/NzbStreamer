@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"strings"
 	"syscall"
 	"time"
@@ -137,11 +136,11 @@ func convertTimeToFuseAttr(t time.Time) (time uint64, timeNs uint32, err error) 
 var _ = fs.NodeOpener((*fileNode)(nil))
 
 func (n *fileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	slog.Debug("Open", "name", n.EmbeddedInode().Path(nil))
+	logger.Debug("Open", "name", n.EmbeddedInode().Path(nil))
 
 	reader, err := n.openable.Open()
 	if err != nil {
-		slog.Error("Error opening file", "error", err)
+		logger.Error("Error opening file", "error", err)
 		return nil, 0, syscall.EIO
 	}
 
@@ -174,7 +173,7 @@ var _ = fs.NodeReader((*fileNode)(nil))
 func (n *fileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	file, ok := f.(file)
 	if !ok {
-		slog.Error("Error reading, invalid filehandle", "handle", f, "len", len(dest), "offset", off)
+		logger.Error("Error reading, invalid filehandle", "handle", f, "len", len(dest), "offset", off)
 		return nil, syscall.EINVAL // Invalid argument error
 	}
 	return file.Read(ctx, dest, off)
@@ -185,7 +184,7 @@ var _ = fs.FileReader((*file)(nil))
 func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	n, err := f.reader.ReadAt(dest, off)
 	if err != nil && err != io.EOF {
-		slog.Error("Error reading", "handle", f, "len", len(dest), "offset", off, "error", err)
+		logger.Error("Error reading", "handle", f, "len", len(dest), "offset", off, "error", err)
 		return nil, syscall.EIO
 	}
 
