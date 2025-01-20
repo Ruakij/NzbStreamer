@@ -17,7 +17,7 @@ func GetProbableUnknownSegmentSize(segmentResources []resource.ReadSeekCloseable
 	}
 
 	commonSegmentSize := 0
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		segmentResource := segmentResources[i]
 		reader, err := segmentResource.Open()
 		if err != nil {
