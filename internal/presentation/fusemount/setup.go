@@ -26,13 +26,11 @@ func Setup() *FileSystem {
 func (fsManager *FileSystem) Mount(ctx context.Context, path string, mountOptions []string) error {
 	server, err := fs.Mount(path, fsManager.root, &fs.Options{
 		MountOptions: fuse.MountOptions{
-			FsName:           "nzbstreamer",
-			Name:             "nzbstreamer",
-			DisableXAttrs:    true,
-			SyncRead:         true,
-			Options:          mountOptions,
-			MaxReadAhead:     0,
-			DirectMountFlags: fuse.FOPEN_NONSEEKABLE,
+			FsName:        "nzbstreamer",
+			Name:          "nzbstreamer",
+			DisableXAttrs: true,
+			SyncRead:      true,
+			Options:       mountOptions,
 		},
 	})
 	if err != nil {
