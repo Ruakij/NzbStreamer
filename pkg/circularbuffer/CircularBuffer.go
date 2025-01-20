@@ -1,3 +1,5 @@
+// Package circularbuffer provides a generic thread-safe circular buffer implementation
+// that supports dynamic resizing, blocking/non-blocking operations, and seek functionality.
 package circularbuffer
 
 import (
@@ -13,6 +15,8 @@ var (
 	ErrResizeTooSmall  = errors.New("new capacity cannot be less than the current size")
 )
 
+// CircularBuffer implements a generic thread-safe circular buffer that can grow up to
+// a maximum capacity. It supports both blocking and non-blocking read/write operations.
 type CircularBuffer[T any] struct {
 	mu       sync.RWMutex
 	canRead  *sync.Cond

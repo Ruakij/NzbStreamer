@@ -135,7 +135,9 @@ func TestBlockingWrite(t *testing.T) {
 
 	// Now read data to unblock the goroutine
 	readData := make([]byte, 3)
-	cb.Read(readData)
+	if _, err := cb.Read(readData); err != nil {
+		t.Fatalf("Unexpected error during Read: %v", err)
+	}
 
 	// Now wait for the goroutine to finish executing
 	select {
@@ -172,7 +174,9 @@ func TestBlockingRead(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Now write data to unblock the goroutine
-	cb.Write([]byte("a"))
+	if _, err := cb.Write([]byte("a")); err != nil {
+		t.Fatalf("Unexpected error during Write: %v", err)
+	}
 
 	// Now wait for the goroutine to finish executing
 	select {
