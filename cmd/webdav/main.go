@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -18,48 +17,38 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/service/nzbservice"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger/folderwatcher"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger/sabnzbd"
+	shutdownmanager "git.ruekov.eu/ruakij/nzbStreamer/pkg/ShutdownManager"
+	timeoutaction "git.ruekov.eu/ruakij/nzbStreamer/pkg/ShutdownManager/timeoutAction"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
 	gowebdav "github.com/emersion/go-webdav"
 	"github.com/sethvargo/go-envconfig"
 )
 
-const (
-	ShutdownTimeout time.Duration = 3 * time.Second
-)
+const ShutdownTimeout time.Duration = 3 * time.Second
 
 func main() {
-	context, cancel := context.WithCancel(context.Background())
+	sm, ctx := shutdownmanager.NewShutdownManager(ShutdownTimeout, timeoutaction.Exit1)
 
-	wg := start(context)
-	signalHandler(cancel, wg)
+	start(ctx, sm)
+	signalHandler(ctx, sm)
 }
 
-func signalHandler(cancel context.CancelFunc, wg *sync.WaitGroup) {
+func signalHandler(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
-	for {
-		sig := <-sigChan
-		slog.Info("Received signal: %s\n", "signal", sig.String())
-		cancel() // Cancel the context to stop goroutines
 
-		// Wait for the WaitGroup with a maximum timeout of 3 seconds
-		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			slog.Info("Clean shutdown.")
-		case <-time.After(ShutdownTimeout):
-			slog.Warn("Timeout reached, forcefully exiting.")
-		}
-		os.Exit(0)
+	select {
+	case sig := <-sigChan:
+		slog.Info("Received signal: %s\n", "signal", sig)
+		sm.Shutdown()
+	case <-ctx.Done():
+		signal.Stop(sigChan)
+		close(sigChan)
 	}
 }
 
-func start(ctx context.Context) *sync.WaitGroup {
+func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	var err error
 
 	var c Config
@@ -123,15 +112,15 @@ func start(ctx context.Context) *sync.WaitGroup {
 		os.Exit(1)
 	}
 	folderTrigger.Init()
+	go sabnzb.Listen(c.SabNzb.Address)
 
 	// Start Presenters
-	wg := sync.WaitGroup{}
 	// Webdav
 	if c.Webdav.Address != "" {
-		wg.Add(1)
+		sm.AddService()
 		go func() {
-			defer wg.Done()
-			err = webdav.Listen(c.Webdav.Address, &gowebdav.Handler{
+			defer sm.ServiceDone()
+			err = webdav.Listen(ctx, c.Webdav.Address, &gowebdav.Handler{
 				FileSystem: webdavHandler,
 			})
 			if err != nil {
@@ -144,9 +133,9 @@ func start(ctx context.Context) *sync.WaitGroup {
 
 	// Mount
 	if c.Mount.Path != "" {
-		wg.Add(1)
+		sm.AddService()
 		go func() {
-			defer wg.Done()
+			defer sm.ServiceDone()
 			err := mount.Mount(ctx, c.Mount.Path, c.Mount.Options)
 			if err != nil {
 				slog.Error("Error in mount", "error", err)
@@ -155,6 +144,4 @@ func start(ctx context.Context) *sync.WaitGroup {
 			slog.Info("Mount exited")
 		}()
 	}
-
-	return &wg
 }
