@@ -119,7 +119,7 @@ func (r *RarFileResource) Size() (int64, error) {
 	if r.size < 0 {
 		reader, err := r.Open()
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("failed creating new multi reader: %w", err)
 		}
 		reader.Close()
 	}
@@ -192,7 +192,7 @@ func (r *RarFileResourceReader) Seek(offset int64, whence int) (int64, error) {
 		}
 		err := group.Wait()
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("failed waiting for resource operations: %w", err)
 		}
 
 		r.rarReader, err = rardecode.NewMultiReader(r.openResources)
@@ -215,7 +215,7 @@ func (r *RarFileResourceReader) Seek(offset int64, whence int) (int64, error) {
 	var err error
 	var n int
 	var totalN int64
-	buf := make([]byte, 1*1024*1024)
+	buf := make([]byte, 16*1024*1024)
 	for err == nil && totalN < delta {
 		if totalN+int64(len(buf)) > delta {
 			buf = buf[:delta-totalN]
