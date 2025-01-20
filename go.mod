@@ -33,6 +33,5 @@ require (
 	github.com/emersion/go-webdav v0.6.0
 	github.com/fsnotify/fsnotify v1.8.0
 	github.com/hanwen/go-fuse/v2 v2.7.2
-	github.com/ricochet2200/go-disk-usage/du v0.0.0-20210707232629-ac9918953285
 	github.com/sethvargo/go-envconfig v1.1.0
 )
