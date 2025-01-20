@@ -30,6 +30,7 @@ type Service struct {
 	presenters  []presentation.Presenter
 	triggers    []TriggerListener
 	nzbFiledata map[string]*nzbparser.NzbData
+	nzbFiles    map[string][]string // Maps NZB MetaName to its file paths
 
 	// Options
 	fileBlacklist                           []regexp.Regexp
@@ -54,6 +55,7 @@ func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, prese
 
 		fileBlacklist: []regexp.Regexp{},
 		nzbFiledata:   make(map[string]*nzbparser.NzbData),
+		nzbFiles:      make(map[string][]string),
 	}
 }
 
@@ -104,7 +106,10 @@ func (s *Service) Init() error {
 	return nil
 }
 
-var ErrNzbAlreadyExists = errors.New("nzb already exists")
+var (
+	ErrNzbAlreadyExists = errors.New("nzb already exists")
+	ErrNzbNotFound      = errors.New("nzb not found")
+)
 
 // Add parsed nzb-data
 func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
@@ -141,21 +146,27 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 		paths = append(paths, path)
 	}
 
+	// Track files for this NZB
+	s.mutex.Lock()
+	s.nzbFiles[nzbData.MetaName] = make([]string, 0, len(files))
+
 	for filepath, file := range files {
 		filepath = s.deobfuscateFilename(filepath, paths, nzbData)
 		filepath = s.flattenPath(filepath, paths)
+		fullPath := path.Join(nzbData.MetaName, filepath)
 
+		// Track the full path
+		s.nzbFiles[nzbData.MetaName] = append(s.nzbFiles[nzbData.MetaName], fullPath)
+
+		// Add to presenters
 		for _, presenter := range s.presenters {
-			err = presenter.AddFile(
-				path.Join(nzbData.MetaName, filepath),
-				nzbData.Files[0].ParsedDate,
-				file,
-			)
+			err = presenter.AddFile(fullPath, nzbData.Files[0].ParsedDate, file)
 			if err != nil {
-				slog.Error("Failed adding segment-stack as file", nzbData.MetaName, err)
+				slog.Error("Failed adding segment-stack as file", "nzb", nzbData.MetaName, "error", err)
 			}
 		}
 	}
+	s.mutex.Unlock()
 
 	slog.Info("Added nzb", "MetaName", nzbData.MetaName)
 
@@ -259,6 +270,32 @@ func groupFilesByExtension(files []string) (filesByExtension map[string][]string
 }
 
 func (s *Service) RemoveNzb(nzbData *nzbparser.NzbData) error {
-	// TODO: Implement
+	// Check if NZB exists
+	if _, exists := s.nzbFiledata[nzbData.MetaName]; !exists {
+		return fmt.Errorf("%w: %s", ErrNzbNotFound, nzbData.MetaName)
+	}
+
+	slog.Debug("Removing nzb", "MetaName", nzbData.MetaName)
+
+	// Get tracked files
+	files := s.nzbFiles[nzbData.MetaName]
+
+	// Remove from all presenters
+	for _, filepath := range files {
+		for _, presenter := range s.presenters {
+			if err := presenter.RemoveFile(filepath); err != nil {
+				slog.Error("Failed removing file from presenter",
+					"nzb", nzbData.MetaName,
+					"file", filepath,
+					"error", err)
+			}
+		}
+	}
+
+	// Clean up tracking data
+	delete(s.nzbFiledata, nzbData.MetaName)
+	delete(s.nzbFiles, nzbData.MetaName)
+
+	slog.Info("Removed nzb", "MetaName", nzbData.MetaName)
 	return nil
 }
