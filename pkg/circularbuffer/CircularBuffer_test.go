@@ -512,3 +512,69 @@ func TestIncorrectUsageExposeReadAndCommitRead(t *testing.T) {
 		t.Fatalf("Expected read space to be empty after exhausting buffer, got %d", len(readSpace))
 	}
 }
+
+func BenchmarkWrite(b *testing.B) {
+	initialSize := 1024
+	maxSize := 1024 * 1024
+	cb := circularbuffer.NewCircularBuffer[byte](initialSize, maxSize)
+
+	batchSize := 256
+	data := make([]byte, batchSize)
+	for i := range data {
+		data[i] = byte(i)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i += maxSize / batchSize {
+		for range maxSize / batchSize {
+			_, err := cb.Write(data)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+		err := cb.Clear()
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+	}
+}
+
+func BenchmarkRead(b *testing.B) {
+	initialSize := 1024
+	maxSize := 1024 * 1024
+	cb := circularbuffer.NewCircularBuffer[byte](initialSize, maxSize)
+
+	batchSize := 256
+	data := make([]byte, batchSize)
+	readBuf := make([]byte, batchSize)
+	for i := range data {
+		data[i] = byte(i)
+	}
+
+	// Pre-fill buffer
+	for range maxSize / batchSize {
+		if _, err := cb.Write(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i += maxSize / batchSize {
+		for range maxSize / batchSize {
+			_, err := cb.Read(readBuf)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+		// Refill buffer
+		for range maxSize / batchSize {
+			if _, err := cb.Write(data); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StartTimer()
+	}
+}
