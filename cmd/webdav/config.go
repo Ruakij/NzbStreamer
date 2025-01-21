@@ -20,8 +20,8 @@ type WebdavConfig struct {
 }
 
 type MountConfig struct {
-	Path    string   `env:"MOUNT_PATH, default="`
-	Options []string `env:"MOUNT_OPTIONS, default=allow_other=true"`
+	Path    string   `env:"MOUNT_PATH"`
+	Options []string `env:"MOUNT_OPTIONS"`
 }
 
 type CacheConfig struct {
@@ -46,7 +46,7 @@ type NzbConfig struct {
 }
 
 type FilesystemConfig struct {
-	Blacklist            []regexp.Regexp `env:"FILESYSTEM_BLACKLIST, default=(?i)\\.par2$"`
+	Blacklist            []regexp.Regexp `env:"FILESYSTEM_BLACKLIST, default="`
 	FlattenMaxDepth      int             `env:"FILESYSTEM_FLATTEN_MAX_DEPTH, default=1"`
 	FixFilenameThreshold float32         `env:"FILESYSTEM_FIX_FILENAME_THRESHOLD, default=0.2"`
 }
