@@ -36,6 +36,7 @@ type Service struct {
 
 	// Options
 	fileBlacklist                           []regexp.Regexp
+	nzbFileBlacklist                        []regexp.Regexp
 	pathFlatteningDepth                     int
 	filenameReplacementBelowLevensteinRatio float32
 }
@@ -50,14 +51,14 @@ func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, prese
 	}
 
 	return &Service{
-		store:      store,
-		factory:    factory,
-		presenters: presenters,
-		triggers:   triggerListeners,
-
-		fileBlacklist: []regexp.Regexp{},
-		nzbFiledata:   make(map[string]*nzbparser.NzbData),
-		nzbFiles:      make(map[string][]string),
+		store:            store,
+		factory:          factory,
+		presenters:       presenters,
+		triggers:         triggerListeners,
+		fileBlacklist:    []regexp.Regexp{},
+		nzbFileBlacklist: []regexp.Regexp{},
+		nzbFiledata:      make(map[string]*nzbparser.NzbData),
+		nzbFiles:         make(map[string][]string),
 	}
 }
 
@@ -65,6 +66,12 @@ func (s *Service) SetBlacklist(blacklist []regexp.Regexp) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.fileBlacklist = blacklist
+}
+
+func (s *Service) SetNzbFileBlacklist(blacklist []regexp.Regexp) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.nzbFileBlacklist = blacklist
 }
 
 func (s *Service) SetPathFlatteningDepth(depth int) {
@@ -125,6 +132,17 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 	s.nzbFiledata[nzbData.MetaName] = nzbData
 	s.mutex.Unlock()
 
+	// Nzb-file blacklist
+	for i := range nzbData.Files {
+		if s.isBlacklistedNzbFile(nzbData.Files[i].Filename) {
+			nzbData.Files = append(nzbData.Files[:i], nzbData.Files[i+1:]...)
+		}
+	}
+	if len(nzbData.Files) == 0 {
+		logger.Warn("After blacklist, no nzb-files left", "MetaName", nzbData.MetaName)
+		return nil
+	}
+
 	files, err := s.factory.BuildSegmentStackFromNzbData(nzbData)
 	if err != nil {
 		return fmt.Errorf("failed building segment-stack for %s: %w", nzbData.MetaName, err)
@@ -136,7 +154,6 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 			delete(files, path)
 		}
 	}
-
 	if len(files) == 0 {
 		logger.Warn("After blacklist, no files left", "MetaName", nzbData.MetaName)
 		return nil
@@ -178,6 +195,15 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 func (s *Service) isBlacklistedFilename(filename string) bool {
 	for i := range s.fileBlacklist {
 		if s.fileBlacklist[i].MatchString(filename) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) isBlacklistedNzbFile(filename string) bool {
+	for i := range s.nzbFileBlacklist {
+		if s.nzbFileBlacklist[i].MatchString(filename) {
 			return true
 		}
 	}

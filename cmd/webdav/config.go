@@ -41,6 +41,10 @@ type FolderWatcherConfig struct {
 	Path string `env:"FOLDER_WATCHER_PATH, default=.watch"`
 }
 
+type NzbConfig struct {
+	FileBlacklist []regexp.Regexp `env:"NZB_FILE_BLACKLIST, default=(?i)\\.par2$"`
+}
+
 type FilesystemConfig struct {
 	Blacklist            []regexp.Regexp `env:"FILESYSTEM_BLACKLIST, default=(?i)\\.par2$"`
 	FlattenMaxDepth      int             `env:"FILESYSTEM_FLATTEN_MAX_DEPTH, default=1"`
@@ -57,6 +61,7 @@ type Config struct {
 	Webdav         WebdavConfig
 	Cache          CacheConfig
 	ReadaheadCache ReadaheadCacheConfig
+	NzbConfig      NzbConfig
 	Filesystem     FilesystemConfig
 	FolderWatcher  FolderWatcherConfig
 	Logging        LoggingConfig

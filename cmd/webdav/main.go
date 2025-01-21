@@ -104,6 +104,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 
 	service := nzbservice.NewService(store, factory, presenters, []trigger.Trigger{folderTrigger})
 	service.SetBlacklist(c.Filesystem.Blacklist)
+	service.SetNzbFileBlacklist(c.NzbConfig.FileBlacklist)
 	service.SetPathFlatteningDepth(c.Filesystem.FlattenMaxDepth)
 	service.SetFilenameReplacementBelowLevensteinRatio(c.Filesystem.FixFilenameThreshold)
 
