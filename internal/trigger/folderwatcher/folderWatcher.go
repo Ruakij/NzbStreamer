@@ -5,13 +5,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 	"github.com/fsnotify/fsnotify"
-	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -192,8 +192,8 @@ func (fw *folderWatcher) RemoveListener(listenerID int) error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
-	slices.Delete(fw.addHooks, listenerID, listenerID)
-	slices.Delete(fw.removeHooks, listenerID, listenerID)
+	_ = slices.Delete(fw.addHooks, listenerID, listenerID)
+	_ = slices.Delete(fw.removeHooks, listenerID, listenerID)
 
 	return nil
 }
