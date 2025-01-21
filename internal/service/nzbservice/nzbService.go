@@ -133,7 +133,7 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 	s.mutex.Unlock()
 
 	// Nzb-file blacklist
-	for i := range nzbData.Files {
+	for i := len(nzbData.Files) - 1; i >= 0; i-- {
 		if s.isBlacklistedNzbFile(nzbData.Files[i].Filename) {
 			nzbData.Files = append(nzbData.Files[:i], nzbData.Files[i+1:]...)
 		}
