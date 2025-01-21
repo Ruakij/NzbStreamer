@@ -9,7 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/readeratwrapper"
 	"github.com/hanwen/go-fuse/v2/fs"
