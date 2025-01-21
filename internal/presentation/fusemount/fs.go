@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/readeratwrapper"
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -136,8 +137,6 @@ func convertTimeToFuseAttr(t time.Time) (time uint64, timeNs uint32, err error) 
 var _ = fs.NodeOpener((*fileNode)(nil))
 
 func (n *fileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	logger.Debug("Open", "name", n.EmbeddedInode().Path(nil))
-
 	reader, err := n.openable.Open()
 	if err != nil {
 		logger.Error("Error opening file", "error", err)
@@ -147,6 +146,8 @@ func (n *fileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint3
 	fh := file{
 		reader: readeratwrapper.NewReadSeekerAt(reader),
 	}
+
+	logger.Debug("Open", "reader", fmt.Sprintf("%p", reader), "name", n.EmbeddedInode().Path(nil))
 
 	return fh, 0, syscall.F_OK
 }
@@ -183,7 +184,7 @@ var _ = fs.FileReader((*file)(nil))
 
 func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	n, err := f.reader.ReadAt(dest, off)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		logger.Error("Error reading", "handle", f, "len", len(dest), "offset", off, "error", err)
 		return nil, syscall.EIO
 	}
