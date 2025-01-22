@@ -4,20 +4,23 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
-	"golang.org/x/exp/slices"
 )
 
 var logger = slog.With("Module", "FolderWatcherBlackhole")
 
+type Listener struct {
+	add, remove func(nzbData *nzbparser.NzbData) error
+}
+
 // FolderWatcherBlackhole notifies listeners about new files in directory, after which the files are deleted
 type folderWatcherBlackhole struct {
 	watchFolder string
-	addHooks    []func(nzbData *nzbparser.NzbData) error
-	removeHooks []func(nzbData *nzbparser.NzbData) error
+	listeners   []Listener
 	mu          sync.Mutex
 	wg          sync.WaitGroup
 	stopChan    chan struct{}
@@ -86,12 +89,12 @@ func (fw *folderWatcherBlackhole) processFile(filename string) {
 	fw.wg.Add(1)
 	defer fw.wg.Done()
 
-	if len(fw.addHooks) == 0 {
+	if len(fw.listeners) == 0 {
 		logger.Warn("Cannot notify for event, no listeners found", "filepath", filePath)
 	}
 
-	for _, hook := range fw.addHooks {
-		err := hook(nzbData)
+	for _, listener := range fw.listeners {
+		err := listener.add(nzbData)
 		if err != nil {
 			logger.Error("Error executing hook:", "error", err)
 		}
@@ -108,10 +111,8 @@ func (fw *folderWatcherBlackhole) AddListener(addHook, removeHook func(nzbData *
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
-	listenerID := len(fw.addHooks)
-
-	fw.addHooks = append(fw.addHooks, addHook)
-	fw.removeHooks = append(fw.removeHooks, removeHook)
+	listenerID := len(fw.listeners)
+	fw.listeners = append(fw.listeners, Listener{add: addHook, remove: removeHook})
 
 	return listenerID, nil
 }
@@ -121,9 +122,7 @@ func (fw *folderWatcherBlackhole) RemoveListener(listenerID int) error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
-	slices.Delete(fw.addHooks, listenerID, listenerID)
-	slices.Delete(fw.removeHooks, listenerID, listenerID)
-
+	fw.listeners = slices.Delete(fw.listeners, listenerID, listenerID+1)
 	return nil
 }
 

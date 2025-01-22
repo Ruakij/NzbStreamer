@@ -18,22 +18,25 @@ import (
 var logger = slog.With("Module", "FolderWatcher")
 
 // FolderWatcher notifies listeners about new files in directory
+type Listener struct {
+	add, remove func(nzbData *nzbparser.NzbData) error
+}
+
 type folderWatcher struct {
-	watchFolder    string
-	addHooks       []func(nzbData *nzbparser.NzbData) error
-	removeHooks    []func(nzbData *nzbparser.NzbData) error
-	mu             sync.Mutex
-	wg             sync.WaitGroup
-	stopChan       chan struct{}
-	processedFiles map[string]struct{} // Store processed file names
+	watchFolder string
+	listeners   []Listener
+	mu          sync.Mutex
+	wg          sync.WaitGroup
+	stopChan    chan struct{}
+	nzbDataMap  map[string]*nzbparser.NzbData // Store NzbData for processed files
 }
 
 // NewFolderWatcher creates a new instance of folderWatcher
 func NewFolderWatcher(folder string) *folderWatcher {
 	return &folderWatcher{
-		watchFolder:    folder,
-		processedFiles: make(map[string]struct{}), // Initialize the map
-		stopChan:       make(chan struct{}),
+		watchFolder: folder,
+		nzbDataMap:  make(map[string]*nzbparser.NzbData),
+		stopChan:    make(chan struct{}),
 	}
 }
 
@@ -63,7 +66,6 @@ func (fw *folderWatcher) startFsNotifyScan() error {
 
 	go func() {
 		defer watcher.Close()
-
 		for range watcher.Events {
 			fw.scanDirectory()
 		}
@@ -95,6 +97,7 @@ func (fw *folderWatcher) scanDirectory() {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
+	currentFiles := make(map[string]struct{})
 	files, err := os.ReadDir(fw.watchFolder)
 	if err != nil {
 		logger.Error("Error reading directory", "err", err)
@@ -105,14 +108,21 @@ func (fw *folderWatcher) scanDirectory() {
 
 	for _, file := range files {
 		if !file.IsDir() && strings.ToLower(filepath.Ext(file.Name())) == ".nzb" {
-			// Check if the file has been processed
-			if _, processed := fw.processedFiles[file.Name()]; !processed {
-				fw.processedFiles[file.Name()] = struct{}{}
+			currentFiles[file.Name()] = struct{}{}
+			if _, processed := fw.nzbDataMap[file.Name()]; !processed {
+				fileName := file.Name() // Create a copy for the closure
 				group.Go(func() error {
-					fw.processFile(filepath.Join(fw.watchFolder, file.Name()))
+					fw.handleAddedFile(filepath.Join(fw.watchFolder, fileName))
 					return nil
 				})
 			}
+		}
+	}
+
+	// Check for removed files
+	for fileName := range fw.nzbDataMap {
+		if _, exists := currentFiles[fileName]; !exists {
+			fw.handleRemovedFile(filepath.Join(fw.watchFolder, fileName))
 		}
 	}
 
@@ -120,8 +130,28 @@ func (fw *folderWatcher) scanDirectory() {
 	_ = group.Wait()
 }
 
-// processFile triggers the addHooks for the file
-func (fw *folderWatcher) processFile(filePath string) {
+// handleRemovedFile triggers the removeHooks for the file
+func (fw *folderWatcher) handleRemovedFile(filePath string) {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+
+	fileName := filepath.Base(filePath)
+	if nzbData, exists := fw.nzbDataMap[fileName]; exists {
+		fw.wg.Add(1)
+		defer fw.wg.Done()
+
+		for _, listener := range fw.listeners {
+			if err := listener.remove(nzbData); err != nil {
+				logger.Error("Error executing remove hook", "err", err)
+			}
+		}
+
+		delete(fw.nzbDataMap, fileName)
+	}
+}
+
+// handleAddedFile triggers the addHooks for the file
+func (fw *folderWatcher) handleAddedFile(filePath string) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		logger.Error("Failed to open file", filePath, err)
@@ -158,16 +188,21 @@ func (fw *folderWatcher) processFile(filePath string) {
 		return
 	}
 
+	fileName := filepath.Base(filePath)
+	fw.mu.Lock()
+	fw.nzbDataMap[fileName] = nzbData
+	fw.mu.Unlock()
+
 	fw.wg.Add(1)
 	defer fw.wg.Done()
 
-	if len(fw.addHooks) == 0 {
+	if len(fw.listeners) == 0 {
 		logger.Warn("Cannot notify, no listeners found", "filePath", filePath)
 		return
 	}
 
-	for _, hook := range fw.addHooks {
-		err := hook(nzbData)
+	for _, listener := range fw.listeners {
+		err := listener.add(nzbData)
 		if err != nil {
 			logger.Error("Error executing hook:", "err", err)
 		}
@@ -179,10 +214,8 @@ func (fw *folderWatcher) AddListener(addHook, removeHook func(nzbData *nzbparser
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
-	listenerID := len(fw.addHooks)
-
-	fw.addHooks = append(fw.addHooks, addHook)
-	fw.removeHooks = append(fw.removeHooks, removeHook)
+	listenerID := len(fw.listeners)
+	fw.listeners = append(fw.listeners, Listener{add: addHook, remove: removeHook})
 
 	return listenerID, nil
 }
@@ -192,9 +225,7 @@ func (fw *folderWatcher) RemoveListener(listenerID int) error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
-	_ = slices.Delete(fw.addHooks, listenerID, listenerID)
-	_ = slices.Delete(fw.removeHooks, listenerID, listenerID)
-
+	fw.listeners = slices.Delete(fw.listeners, listenerID, listenerID+1)
 	return nil
 }
 
