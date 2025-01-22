@@ -150,6 +150,35 @@ func (fw *folderWatcher) handleRemovedFile(filePath string) {
 	}
 }
 
+func (fw *folderWatcher) logPlausabilityWarnings(warnings []nzbparser.EncapsulatedError, filePath string) {
+	if len(warnings) == 0 {
+		return
+	}
+	var msg strings.Builder
+	for i, warn := range warnings {
+		if i != 0 {
+			msg.WriteString(", ")
+		}
+		msg.WriteString(fmt.Sprintf("%v", warn))
+	}
+	logger.Warn("Warnings while checking Nzb", "filePath", filePath, "msg", msg.String())
+}
+
+func (fw *folderWatcher) logPlausabilityErrors(errors []nzbparser.EncapsulatedError, filePath string) bool {
+	if len(errors) == 0 {
+		return false
+	}
+	var msg strings.Builder
+	for i, err := range errors {
+		if i != 0 {
+			msg.WriteString(", ")
+		}
+		msg.WriteString(fmt.Sprintf("%v", err))
+	}
+	logger.Warn("Errors while checking Nzb", "filePath", filePath, "msg", msg.String())
+	return true
+}
+
 // handleAddedFile triggers the addHooks for the file
 func (fw *folderWatcher) handleAddedFile(filePath string) {
 	file, err := os.Open(filePath)
@@ -157,7 +186,7 @@ func (fw *folderWatcher) handleAddedFile(filePath string) {
 		logger.Error("Failed to open file", filePath, err)
 		return
 	}
-	defer file.Close() // Ensure the file is closed after processing
+	defer file.Close()
 
 	nzbData, err := nzbparser.ParseNzb(file)
 	if err != nil {
@@ -166,25 +195,8 @@ func (fw *folderWatcher) handleAddedFile(filePath string) {
 	}
 
 	warnings, errors := nzbData.CheckPlausability()
-	if len(warnings) > 0 {
-		var msg strings.Builder
-		for i, warn := range warnings {
-			if i != 0 {
-				msg.WriteString(", ")
-			}
-			msg.WriteString(fmt.Sprintf("%v", warn))
-		}
-		logger.Warn("Warnings while checking Nzb", "filePath", filePath, "msg", msg.String())
-	}
-	if len(errors) > 0 {
-		var msg strings.Builder
-		for i, err := range errors {
-			if i != 0 {
-				msg.WriteString(", ")
-			}
-			msg.WriteString(fmt.Sprintf("%v", err))
-		}
-		logger.Warn("Errors while checking Nzb", "filePath", filePath, "msg", msg.String())
+	fw.logPlausabilityWarnings(warnings, filePath)
+	if fw.logPlausabilityErrors(errors, filePath) {
 		return
 	}
 
@@ -202,8 +214,7 @@ func (fw *folderWatcher) handleAddedFile(filePath string) {
 	}
 
 	for _, listener := range fw.listeners {
-		err := listener.add(nzbData)
-		if err != nil {
+		if err := listener.add(nzbData); err != nil {
 			logger.Error("Error executing hook:", "err", err)
 		}
 	}
