@@ -6,7 +6,6 @@ require (
 	astuart.co/nntp v0.0.0-20240124040759-4b834862a3f8
 	github.com/arl/statsviz v0.6.0
 	github.com/chrisfarms/yenc v0.0.0-20140520125709-00bca2f8b3cb
-	golang.org/x/exp v0.0.0-20240416160154-fe59bbe5cc7f
 	golang.org/x/sync v0.10.0
 )
 
