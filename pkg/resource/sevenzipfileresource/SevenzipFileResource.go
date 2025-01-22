@@ -12,6 +12,11 @@ import (
 	"github.com/bodgit/sevenzip"
 )
 
+var (
+	ErrFileNotFound       = errors.New("file not found")
+	ErrFileSizeExceedsMax = errors.New("file size exceeds maximum supported size")
+)
+
 // SevenzipFileResource is a utility type that allows using a byte-slice resource.
 type SevenzipFileResource struct {
 	resource resource.ReadSeekCloseableResource
@@ -51,6 +56,9 @@ func (r *SevenzipFileResource) Open() (io.ReadSeekCloser, error) {
 		return nil, fmt.Errorf("failed opening 7z file: %w", err)
 	}
 
+	if file.UncompressedSize > uint64(1<<63-1) {
+		return nil, fmt.Errorf("%w: size %d", ErrFileSizeExceedsMax, file.UncompressedSize)
+	}
 	r.size = int64(file.UncompressedSize)
 
 	return reader, nil
@@ -123,7 +131,10 @@ func (r *SevenzipFileResourceReader) Read(p []byte) (int, error) {
 	n, err := r.fileReader.Read(p)
 	r.index += int64(n)
 
-	return n, err
+	if err != nil {
+		return n, fmt.Errorf("failed to read from 7z file: %w", err)
+	}
+	return n, nil
 }
 
 func (r *SevenzipFileResourceReader) Seek(offset int64, whence int) (newIndex int64, err error) {
@@ -175,8 +186,6 @@ func (r *SevenzipFileResourceReader) Seek(offset int64, whence int) (newIndex in
 	r.index = newIndex
 	return r.index, nil
 }
-
-var ErrFileNotFound = errors.New("file not found")
 
 func skipToFile(reader *sevenzip.Reader, filename string) (*sevenzip.File, error) {
 	for _, file := range reader.File {
