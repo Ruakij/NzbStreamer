@@ -93,12 +93,29 @@ func (r *AdaptiveReadaheadCacheReader) Close() error {
 	return nil
 }
 
+func (r *AdaptiveReadaheadCacheReader) trySeekCache(indexDelta int64) bool {
+	if indexDelta <= 0 {
+		return false
+	}
+
+	if int64(r.cache.GetSize()) > indexDelta {
+		_, err := r.cache.Seek(indexDelta, io.SeekCurrent)
+		if err == nil {
+			return true
+		}
+		if !errors.Is(err, circularbuffer.ErrSeekOutOfBounds) {
+			// Log error if needed, but continue with cache clear
+			_ = err
+		}
+	}
+	return false
+}
+
 func (r *AdaptiveReadaheadCacheReader) Seek(offset int64, whence int) (int64, error) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
 	var newIndex int64
-
 	switch whence {
 	case io.SeekStart:
 		newIndex = offset
@@ -118,26 +135,16 @@ func (r *AdaptiveReadaheadCacheReader) Seek(offset int64, whence int) (int64, er
 		return -1, fmt.Errorf("failed seeking underlying reader: %w", err)
 	}
 
-	// Seek cache if seeking is forwards and within bounds
 	indexDelta := newIndex - r.index
-	if indexDelta > 0 {
-		if int64(r.cache.GetSize()) > indexDelta {
-			_, err = r.cache.Seek(indexDelta, io.SeekCurrent)
-			if err != nil {
-				if errors.Is(err, circularbuffer.ErrSeekOutOfBounds) {
-					r.clearCache()
-				} else {
-					return 0, fmt.Errorf("failed seeking cache: %w", err)
-				}
-			}
-		} else {
-			r.clearCache()
+	cacheValid := r.trySeekCache(indexDelta)
+
+	if !cacheValid {
+		if err := r.clearCache(); err != nil {
+			return 0, fmt.Errorf("failed to clear cache during seek: %w", err)
 		}
-	} else {
-		// Otherwise flush cache
-		r.clearCache()
 		r.underlyingReaderEOF = false
 	}
+
 	if !r.underlyingReaderEOF && r.readaheadRunning.CompareAndSwap(false, true) {
 		go r.readahead()
 	}
@@ -146,9 +153,12 @@ func (r *AdaptiveReadaheadCacheReader) Seek(offset int64, whence int) (int64, er
 	return r.index, nil
 }
 
-func (r *AdaptiveReadaheadCacheReader) clearCache() {
+func (r *AdaptiveReadaheadCacheReader) clearCache() error {
 	r.readHistory = r.readHistory[:0]
-	_ = r.cache.Clear()
+	if err := r.cache.Clear(); err != nil {
+		return fmt.Errorf("failed to clear cache: %w", err)
+	}
+	return nil
 }
 
 func (r *AdaptiveReadaheadCacheReader) Read(p []byte) (int, error) {
@@ -221,6 +231,19 @@ func (r *AdaptiveReadaheadCacheReader) avgSpeed() float64 {
 	return 0
 }
 
+func (r *AdaptiveReadaheadCacheReader) ensureBufferSize(readaheadAmount int) error {
+	if r.cache.GetCurrFree() < readaheadAmount && r.cache.GetCurrCapacity() < r.cache.GetMaxCapacity() {
+		resizeTarget := r.cache.GetSize() + readaheadAmount
+		if resizeTarget > r.cache.GetMaxCapacity() {
+			resizeTarget = r.cache.GetMaxCapacity()
+		}
+		if err := r.cache.Resize(resizeTarget); err != nil {
+			return fmt.Errorf("failed resizing cache: %w", err)
+		}
+	}
+	return nil
+}
+
 func (r *AdaptiveReadaheadCacheReader) readahead() error {
 	defer r.readaheadRunning.Store(false)
 
@@ -247,25 +270,8 @@ func (r *AdaptiveReadaheadCacheReader) readahead() error {
 		return nil
 	}
 
-	/*
-		// TODO: Why is this necessary in the first place? When copy couldnt write everything to cache, what happens with the leftover data?
-		readaheadAmount -= int64(r.cache.GetSize())
-
-		// Limit the reader to the readaheadAmount
-		limitedReader := io.LimitReader(r.underlyingReader, readaheadAmount)
-		n, err := io.Copy(r.cache, limitedReader)
-	*/
-
-	// If buffer is too small, but it can grow
-	if r.cache.GetCurrFree() < readaheadAmount && r.cache.GetCurrCapacity() < r.cache.GetMaxCapacity() {
-		resizeTarget := r.cache.GetSize() + readaheadAmount
-		if resizeTarget > r.cache.GetMaxCapacity() {
-			resizeTarget = r.cache.GetMaxCapacity()
-		}
-		err := r.cache.Resize(resizeTarget)
-		if err != nil {
-			return fmt.Errorf("failed resizing cache: %w", err)
-		}
+	if err := r.ensureBufferSize(readaheadAmount); err != nil {
+		return err
 	}
 
 	// Check if buffer has any space
@@ -281,9 +287,14 @@ func (r *AdaptiveReadaheadCacheReader) readahead() error {
 		return fmt.Errorf("failed committing write to cache: %w", err)
 	}
 
-	if errors.Is(err, io.EOF) {
-		r.underlyingReaderEOF = true
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			r.underlyingReaderEOF = true
+			return io.EOF
+		} else {
+			return fmt.Errorf("failed reading from underlying reader: %w", err)
+		}
 	}
 
-	return err
+	return nil
 }
