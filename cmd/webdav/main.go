@@ -18,7 +18,6 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/service/nzbservice"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger/folderwatcher"
-	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger/sabnzbd"
 	shutdownmanager "git.ruekov.eu/ruakij/nzbStreamer/pkg/ShutdownManager"
 	timeoutaction "git.ruekov.eu/ruakij/nzbStreamer/pkg/ShutdownManager/timeoutAction"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
@@ -114,7 +113,6 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		os.Exit(1)
 	}
 	folderTrigger.Init()
-	go sabnzb.Listen(c.SabNzb.Address)
 
 	// Start Presenters
 	// Webdav
