@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -40,7 +39,7 @@ func signalHandler(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 
 	select {
 	case sig := <-sigChan:
-		slog.Info("Received signal", "signal", fmt.Sprintf("%s", sig.String()))
+		slog.Info("Received signal", "signal", sig.String())
 		sm.Shutdown()
 	case <-ctx.Done():
 		signal.Stop(sigChan)
