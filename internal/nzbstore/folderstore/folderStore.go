@@ -1,8 +1,11 @@
 package folderstore
 
 import (
+	"encoding/xml"
+	"fmt"
 	"os"
-	"path"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
@@ -24,7 +27,7 @@ func NewFolderStore(location string) *FolderStore {
 func (s *FolderStore) List() ([]nzbparser.NzbData, error) {
 	entries, err := os.ReadDir(s.location)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read directory %s: %w", s.location, err)
 	}
 
 	group := errgroup.Group{}
@@ -36,29 +39,80 @@ func (s *FolderStore) List() ([]nzbparser.NzbData, error) {
 			continue
 		}
 
-		group.Go(func() (err error) {
-			file, err := os.Open(path.Join(s.location, entry.Name()))
+		entryName := entry.Name()
+		group.Go(func() error {
+			file, err := os.Open(filepath.Join(s.location, entryName))
 			if err != nil {
-				return
+				return fmt.Errorf("failed to open file %s: %w", entryName, err)
 			}
+			defer file.Close()
 
-			data, err := nzbparser.ParseNzb(file)
-			if err != nil {
-				return
+			var data nzbparser.NzbData
+			decoder := xml.NewDecoder(file)
+			if err := decoder.Decode(&data); err != nil {
+				return fmt.Errorf("failed to decode XML from %s: %w", entryName, err)
 			}
 
 			mu.Lock()
-			list = append(list, *data)
+			list = append(list, data)
 			mu.Unlock()
 
-			return
+			return nil
 		})
-
 	}
-	err = group.Wait()
 
-	return list, err
+	if err := group.Wait(); err != nil {
+		return nil, fmt.Errorf("error processing files: %w", err)
+	}
+
+	return list, nil
 }
 
-func (s *FolderStore) Set(*nzbparser.NzbData) error
-func (s *FolderStore) Delete(*nzbparser.NzbData) error
+func sanitizeFilename(name string) string {
+	// Replace invalid characters with underscore
+	invalid := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|"}
+	result := name
+	for _, char := range invalid {
+		result = strings.ReplaceAll(result, char, "_")
+	}
+	return result + ".nzb"
+}
+
+func (s *FolderStore) Set(data *nzbparser.NzbData) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	filename := sanitizeFilename(data.MetaName)
+	filepath := filepath.Join(s.location, filename)
+
+	file, err := os.Create(filepath)
+	if err != nil {
+		return fmt.Errorf("failed to create file %s: %w", filename, err)
+	}
+	defer file.Close()
+
+	encoder := xml.NewEncoder(file)
+	encoder.Indent("", "  ")
+	if err := encoder.Encode(data); err != nil {
+		return fmt.Errorf("failed to encode NZB data to %s: %w", filename, err)
+	}
+
+	return nil
+}
+
+func (s *FolderStore) Delete(data *nzbparser.NzbData) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	filename := sanitizeFilename(data.MetaName)
+	filepath := filepath.Join(s.location, filename)
+
+	if err := os.Remove(filepath); err != nil {
+		if os.IsNotExist(err) {
+			return nil // File already doesn't exist, not an error
+		}
+		return fmt.Errorf("failed to delete file %s: %w", filename, err)
+	}
+
+	return nil
+}
