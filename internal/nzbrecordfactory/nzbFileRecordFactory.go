@@ -53,76 +53,104 @@ func (f *NzbFileFactory) SetAdaptiveReadaheadCacheSettings(adaptiveReadaheadCach
 }
 
 func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData) (map[string]presentation.Openable, error) {
-	// Build nzbFiles -> rawFiles
+	rawFiles := f.buildRawFiles(nzbData)
+	groupedFilenames := f.groupFiles(rawFiles)
+
+	files := make(map[string]presentation.Openable, len(rawFiles))
+	err := f.processFileGroups(groupedFilenames, rawFiles, nzbData.Meta["Password"], files)
+	if err != nil {
+		return files, err
+	}
+
+	return f.wrapWithCache(files), nil
+}
+
+// buildRawFiles creates the initial map of raw file resources
+func (f *NzbFileFactory) buildRawFiles(nzbData *nzbparser.NzbData) map[string]resource.ReadSeekCloseableResource {
 	rawFiles := make(map[string]resource.ReadSeekCloseableResource, len(nzbData.Files))
 	for i := range nzbData.Files {
 		file := &nzbData.Files[i]
 		rawFiles[file.Filename] = f.BuildFileResourceFromNzbFile(file)
 	}
+	return rawFiles
+}
 
-	// Extract filenames
+// groupFiles extracts and groups filenames from raw files
+func (f *NzbFileFactory) groupFiles(rawFiles map[string]resource.ReadSeekCloseableResource) map[string][]string {
 	filenames := make([]string, 0, len(rawFiles))
 	for filename := range rawFiles {
 		filenames = append(filenames, filename)
 	}
 
-	// Group
 	groupedFilenames := filenameops.GroupPartFilenames(filenames)
-	// Sort within Groups
 	filenameops.SortGroupedFilenames(groupedFilenames)
+	return groupedFilenames
+}
 
-	// Assemble structure
-	files := make(map[string]presentation.Openable, len(filenames))
+// processFileGroups handles processing of file groups and their special cases
+func (f *NzbFileFactory) processFileGroups(groupedFilenames map[string][]string, rawFiles map[string]resource.ReadSeekCloseableResource, password string, files map[string]presentation.Openable) error {
 	for groupFilename, filenames := range groupedFilenames {
-		groupedFiles := make([]resource.ReadSeekCloseableResource, len(filenames))
-		for i, filename := range filenames {
-			resource := rawFiles[filename]
+		groupedFiles := f.prepareGroupedFiles(filenames, rawFiles, files)
+		if err := f.processSpecialFiles(groupFilename, groupedFiles, password, files); err != nil {
+			return fmt.Errorf("build special-file %s failed: %w", groupFilename, err)
+		}
+	}
+	return nil
+}
 
-			files[filename] = resource
-			groupedFiles[i] = resource
-		}
+// prepareGroupedFiles prepares grouped files from filenames
+func (f *NzbFileFactory) prepareGroupedFiles(filenames []string, rawFiles map[string]resource.ReadSeekCloseableResource, files map[string]presentation.Openable) []resource.ReadSeekCloseableResource {
+	groupedFiles := make([]resource.ReadSeekCloseableResource, len(filenames))
+	for i, filename := range filenames {
+		resource := rawFiles[filename]
+		files[filename] = resource
+		groupedFiles[i] = resource
+	}
+	return groupedFiles
+}
 
-		// Process special files
-		var specialFiles map[string]presentation.Openable
-		var err error
-		extension := path.Ext(groupFilename)
-		switch extension {
-		case ".rar", ".r":
-			specialFiles, err = f.BuildRarFileFromFileResource(groupedFiles, nzbData.Meta["Password"])
-		case ".7z", ".z", ".zip":
-			specialFiles, err = f.Build7zFileFromFileResource(groupedFiles, nzbData.Meta["Password"])
-			if err != nil && extension == ".z" { // Fallback in case its actually a zip
-				// specialFiles, err = f.BuildZipFileFromFileResource(groupedFiles, nzbData.Meta["Password"])
-			}
-			// case ".zip": // TODO: Implement zip?
-			// specialFiles, err = f.BuildZipFileFromFileResource(groupedFiles, nzbData.Meta["Password"])
-		}
-		if len(specialFiles) > 0 {
-			for filepath, resource := range specialFiles {
-				files[path.Join(groupFilename, filepath)] = resource
-			}
-		}
-		if err != nil {
-			err = fmt.Errorf("build special-file %s failed: %w", groupFilename, err)
-			return files, err
+// processSpecialFiles handles special file types like RAR and 7z
+func (f *NzbFileFactory) processSpecialFiles(groupFilename string, groupedFiles []resource.ReadSeekCloseableResource, password string, files map[string]presentation.Openable) error {
+	extension := path.Ext(groupFilename)
+	var specialFiles map[string]presentation.Openable
+	var err error
+
+	switch extension {
+	case ".rar", ".r":
+		specialFiles, err = f.BuildRarFileFromFileResource(groupedFiles, password)
+	case ".7z", ".z", ".zip":
+		specialFiles, err = f.Build7zFileFromFileResource(groupedFiles, password)
+		if err != nil && extension == ".z" {
+			// Handle potential zip fallback
 		}
 	}
 
-	// Wrap every exposed file in AdaptiveReadaheadCache
-	if f.adaptiveReadaheadCacheMaxSize > 1 {
-		for path, file := range files {
-			files[path] = adaptivereadaheadcache.NewAdaptiveReadaheadCache(
-				file,
-				f.adaptiveReadaheadCacheAvgSpeedTime,
-				f.adaptiveReadaheadCacheTime,
-				f.adaptiveReadaheadCacheMinSize,
-				f.adaptiveReadaheadCacheMaxSize,
-				f.adaptiveReadaheadCacheLowBuffer,
-			)
+	if len(specialFiles) > 0 {
+		for filepath, resource := range specialFiles {
+			files[path.Join(groupFilename, filepath)] = resource
 		}
 	}
+	return err
+}
 
-	return files, nil
+// wrapWithCache wraps files with adaptive readahead cache if enabled
+func (f *NzbFileFactory) wrapWithCache(files map[string]presentation.Openable) map[string]presentation.Openable {
+	if f.adaptiveReadaheadCacheMaxSize <= 1 {
+		return files
+	}
+
+	wrappedFiles := make(map[string]presentation.Openable, len(files))
+	for path, file := range files {
+		wrappedFiles[path] = adaptivereadaheadcache.NewAdaptiveReadaheadCache(
+			file,
+			f.adaptiveReadaheadCacheAvgSpeedTime,
+			f.adaptiveReadaheadCacheTime,
+			f.adaptiveReadaheadCacheMinSize,
+			f.adaptiveReadaheadCacheMaxSize,
+			f.adaptiveReadaheadCacheLowBuffer,
+		)
+	}
+	return wrappedFiles
 }
 
 func (f *NzbFileFactory) BuildNamedFileResourcesFromNzb(nzbData *nzbparser.NzbData) map[string]resource.ReadSeekCloseableResource {
