@@ -1,6 +1,7 @@
 package adaptivereadaheadcache_test
 
 import (
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -9,7 +10,7 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/bytesresource"
 )
 
-func TestAdaptiveReadaheadCache_Read(t *testing.T) {
+func TestAdaptiveReadaheadCacheRead(t *testing.T) {
 	t.Parallel()
 
 	res := bytesresource.BytesResource{Content: []byte("Hello, World!")}
@@ -23,7 +24,7 @@ func TestAdaptiveReadaheadCache_Read(t *testing.T) {
 
 	buf := make([]byte, 5)
 	n, err := reader.Read(buf)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -34,7 +35,7 @@ func TestAdaptiveReadaheadCache_Read(t *testing.T) {
 
 	// Testing the readahead by reading more
 	n, err = reader.Read(buf)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -44,7 +45,7 @@ func TestAdaptiveReadaheadCache_Read(t *testing.T) {
 	}
 }
 
-func TestAdaptiveReadaheadCache_Seek(t *testing.T) {
+func TestAdaptiveReadaheadCacheSeek(t *testing.T) {
 	t.Parallel()
 
 	res := bytesresource.BytesResource{Content: []byte("Hello, World!")}
@@ -64,7 +65,7 @@ func TestAdaptiveReadaheadCache_Seek(t *testing.T) {
 
 	buf := make([]byte, 5)
 	n, err := reader.Read(buf)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -74,7 +75,7 @@ func TestAdaptiveReadaheadCache_Seek(t *testing.T) {
 	}
 }
 
-func TestAdaptiveReadaheadCache_MultipleSeeks(t *testing.T) {
+func TestAdaptiveReadaheadCacheMultipleSeeks(t *testing.T) {
 	t.Parallel()
 
 	res := bytesresource.BytesResource{Content: []byte("Hello, World!")}
@@ -127,7 +128,7 @@ func TestAdaptiveReadaheadCache_MultipleSeeks(t *testing.T) {
 	}
 }
 
-func TestAdaptiveReadaheadCache_EOF(t *testing.T) {
+func TestAdaptiveReadaheadCacheEOF(t *testing.T) {
 	t.Parallel()
 
 	res := bytesresource.BytesResource{Content: []byte("Hello")}
@@ -141,7 +142,7 @@ func TestAdaptiveReadaheadCache_EOF(t *testing.T) {
 
 	buf := make([]byte, 10)
 	n, err := reader.Read(buf)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -154,13 +155,16 @@ func TestAdaptiveReadaheadCache_EOF(t *testing.T) {
 		t.Fatalf("expected to read 5 bytes, got: %d", n)
 	}
 
-	n, _ = reader.Read(buf)
+	n, err = reader.Read(buf)
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if n != 0 {
 		t.Fatalf("expected EOF, but read %d bytes", n)
 	}
 }
 
-func TestAdaptiveReadaheadCache_MultipleReads(t *testing.T) {
+func TestAdaptiveReadaheadCacheMultipleReads(t *testing.T) {
 	t.Parallel()
 
 	res := bytesresource.BytesResource{Content: []byte("Hello, World!")}
@@ -175,9 +179,9 @@ func TestAdaptiveReadaheadCache_MultipleReads(t *testing.T) {
 	buf := make([]byte, 5)
 
 	// Read multiple times
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		n, err := reader.Read(buf)
-		if err != nil && err != io.EOF {
+		if err != nil && !errors.Is(err, io.EOF) {
 			t.Fatalf("unexpected error during read: %v", err)
 		}
 		if n > 0 {
@@ -186,7 +190,7 @@ func TestAdaptiveReadaheadCache_MultipleReads(t *testing.T) {
 	}
 }
 
-func TestAdaptiveReadaheadCache_SequentialReadWriteSeek(t *testing.T) {
+func TestAdaptiveReadaheadCacheSequentialReadWriteSeek(t *testing.T) {
 	t.Parallel()
 
 	content := []byte("Hello, World!")
