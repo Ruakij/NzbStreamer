@@ -72,34 +72,36 @@ func (fw *folderWatcherBlackhole) scanDirectory() {
 // processFile triggers the addHooks for the file then deletes it
 func (fw *folderWatcherBlackhole) processFile(filename string) {
 	filePath := filepath.Join(fw.watchFolder, filename)
-
 	file, err := os.Open(filePath)
 	if err != nil {
-		logger.Error("Failed to open file", filePath, err)
+		logger.Error("Failed to open file", "filename", filename, "err", err)
+		return
 	}
+	defer file.Close()
 
 	nzbData, err := nzbparser.ParseNzb(file)
 	if err != nil {
-		logger.Error("Failed parse nzb", filePath, err)
+		logger.Error("Failed to parse nzb", "filename", filename, "err", err)
+		return
 	}
 
 	fw.wg.Add(1)
 	defer fw.wg.Done()
 
 	if len(fw.addHooks) == 0 {
-		logger.Warn("Cannot notify for event, no listeners found", "filepath", filePath)
+		logger.Warn("Cannot notify, no listeners found", "filename", filename)
 	}
 
 	for _, hook := range fw.addHooks {
 		err := hook(nzbData)
 		if err != nil {
-			logger.Error("Error executing hook:", "error", err)
+			logger.Error("Error executing hook", "filename", filename, "err", err)
 		}
 	}
 
 	err = os.Remove(filePath)
 	if err != nil {
-		logger.Error("Error deleting file", "filepath", filePath, "error", err)
+		logger.Error("Error deleting file", "filename", filename, "err", err)
 	}
 }
 

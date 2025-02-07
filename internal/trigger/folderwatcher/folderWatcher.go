@@ -109,7 +109,7 @@ func (fw *folderWatcher) scanDirectory() {
 			if _, processed := fw.processedFiles[file.Name()]; !processed {
 				fw.processedFiles[file.Name()] = struct{}{}
 				group.Go(func() error {
-					fw.processFile(filepath.Join(fw.watchFolder, file.Name()))
+					fw.processFile(file.Name())
 					return nil
 				})
 			}
@@ -121,17 +121,18 @@ func (fw *folderWatcher) scanDirectory() {
 }
 
 // processFile triggers the addHooks for the file
-func (fw *folderWatcher) processFile(filePath string) {
+func (fw *folderWatcher) processFile(filename string) {
+	filePath := filepath.Join(fw.watchFolder, filename)
 	file, err := os.Open(filePath)
 	if err != nil {
-		logger.Error("Failed to open file", filePath, err)
+		logger.Error("Failed to open file", "filename", filename, "err", err)
 		return
 	}
 	defer file.Close() // Ensure the file is closed after processing
 
 	nzbData, err := nzbparser.ParseNzb(file)
 	if err != nil {
-		logger.Error("Failed to parse nzb", "filePath", filePath, "err", err)
+		logger.Error("Failed to parse nzb", "filename", filename, "err", err)
 		return
 	}
 
@@ -144,7 +145,7 @@ func (fw *folderWatcher) processFile(filePath string) {
 			}
 			msg.WriteString(fmt.Sprintf("%v", warn))
 		}
-		logger.Warn("Warnings while checking Nzb", "filePath", filePath, "msg", msg.String())
+		logger.Warn("Warnings while checking Nzb", "filename", filename, "msg", msg.String())
 	}
 	if len(errors) > 0 {
 		var msg strings.Builder
@@ -154,7 +155,7 @@ func (fw *folderWatcher) processFile(filePath string) {
 			}
 			msg.WriteString(fmt.Sprintf("%v", err))
 		}
-		logger.Warn("Errors while checking Nzb", "filePath", filePath, "msg", msg.String())
+		logger.Warn("Errors while checking Nzb", "filename", filename, "msg", msg.String())
 		return
 	}
 
@@ -162,14 +163,14 @@ func (fw *folderWatcher) processFile(filePath string) {
 	defer fw.wg.Done()
 
 	if len(fw.addHooks) == 0 {
-		logger.Warn("Cannot notify, no listeners found", "filePath", filePath)
+		logger.Warn("Cannot notify, no listeners found", "filename", filename)
 		return
 	}
 
 	for _, hook := range fw.addHooks {
 		err := hook(nzbData)
 		if err != nil {
-			logger.Error("Error executing hook:", "err", err)
+			logger.Error("Error executing hook:", "filename", filename, "err", err)
 		}
 	}
 }
