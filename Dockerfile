@@ -14,19 +14,19 @@ COPY . .
 
 # Build with optimizations
 RUN CGO_ENABLED=0 go build \
-    -ldflags="-s -w -X main.version=$(git describe --tags --always)" \
+    -ldflags="-s -w" \
     -trimpath \
-    -o webdav ./cmd/webdav
+    -o nzbstreamer ./cmd/nzbstreamer
 
 # ---- Release ----
-FROM alpine:latest AS release
+FROM alpine:3.19 AS release
 WORKDIR /app
 
 # Install runtime dependencies
 RUN apk add --no-cache fuse ca-certificates
 
 # Copy binary from build stage
-COPY --from=build /build/webdav .
+COPY --from=build /build/nzbstreamer .
 
 # Create non-root user
 RUN adduser -D appuser && \
@@ -35,9 +35,4 @@ USER appuser
 
 # Configure container
 EXPOSE 8080
-ENTRYPOINT ["/app/webdav"]
-
-# Add metadata
-LABEL maintainer="NzbStreamer" \
-    description="WebDAV / FUSE server for streaming NZB content" \
-    version="1.0"
+ENTRYPOINT ["/app/nzbstreamer"]
