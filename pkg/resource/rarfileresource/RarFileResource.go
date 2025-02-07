@@ -128,7 +128,6 @@ func (r *RarFileResource) Size() (int64, error) {
 }
 
 func (r *RarFileResourceReader) Close() error {
-	r.rarReader = nil
 	return nil
 }
 
