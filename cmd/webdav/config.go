@@ -42,7 +42,10 @@ type FolderWatcherConfig struct {
 }
 
 type NzbConfig struct {
-	FileBlacklist []regexp.Regexp `env:"NZB_FILE_BLACKLIST, default=(?i)\\.par2$"`
+	FileBlacklist         []regexp.Regexp `env:"NZB_FILE_BLACKLIST, default=(?i)\\.par2$"`
+	TryReadBytes          int64           `env:"NZB_TRY_READ_BYTES, default=1"`
+	TryReadPercentage     float32         `env:"NZB_TRY_READ_PERCENTAGE, default=0"`
+	FilesHealthyThreshold float32         `env:"NZB_FILES_HEALTHY_THRESHOLD, default=1.0"`
 }
 
 type FilesystemConfig struct {

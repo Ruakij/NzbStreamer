@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/filehealth"
 	nntp "git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore/stubstore"
@@ -101,11 +102,18 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 
 	folderTrigger := folderwatcher.NewFolderWatcher(c.FolderWatcher.Path)
 
-	service := nzbservice.NewService(store, factory, presenters, []trigger.Trigger{folderTrigger})
+	// Setup health checker
+	healthChecker := filehealth.NewDefaultChecker(filehealth.CheckerConfig{
+		TryReadBytes:      c.NzbConfig.TryReadBytes,
+		TryReadPercentage: c.NzbConfig.TryReadPercentage,
+	})
+
+	service := nzbservice.NewService(store, factory, presenters, []trigger.Trigger{folderTrigger}, healthChecker)
 	service.SetBlacklist(c.Filesystem.Blacklist)
 	service.SetNzbFileBlacklist(c.NzbConfig.FileBlacklist)
 	service.SetPathFlatteningDepth(c.Filesystem.FlattenMaxDepth)
 	service.SetFilenameReplacementBelowLevensteinRatio(c.Filesystem.FixFilenameThreshold)
+	service.SetFilesHealthyThreshold(c.NzbConfig.FilesHealthyThreshold)
 
 	// Start services
 	if err = service.Init(); err != nil {

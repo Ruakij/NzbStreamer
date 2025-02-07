@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/filehealth"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
@@ -39,9 +40,11 @@ type Service struct {
 	nzbFileBlacklist                        []regexp.Regexp
 	pathFlatteningDepth                     int
 	filenameReplacementBelowLevensteinRatio float32
+	healthChecker                           filehealth.Checker
+	filesHealthyThreshold                   float32
 }
 
-func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, presenters []presentation.Presenter, triggers []trigger.Trigger) *Service {
+func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, presenters []presentation.Presenter, triggers []trigger.Trigger, healthChecker filehealth.Checker) *Service {
 	triggerListeners := make([]TriggerListener, len(triggers))
 	for i, trigger := range triggers {
 		triggerListeners[i] = TriggerListener{
@@ -51,14 +54,16 @@ func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, prese
 	}
 
 	return &Service{
-		store:            store,
-		factory:          factory,
-		presenters:       presenters,
-		triggers:         triggerListeners,
-		fileBlacklist:    []regexp.Regexp{},
-		nzbFileBlacklist: []regexp.Regexp{},
-		nzbFiledata:      make(map[string]*nzbparser.NzbData),
-		nzbFiles:         make(map[string][]string),
+		store:                 store,
+		factory:               factory,
+		presenters:            presenters,
+		triggers:              triggerListeners,
+		fileBlacklist:         []regexp.Regexp{},
+		nzbFileBlacklist:      []regexp.Regexp{},
+		nzbFiledata:           make(map[string]*nzbparser.NzbData),
+		nzbFiles:              make(map[string][]string),
+		healthChecker:         healthChecker,
+		filesHealthyThreshold: 1.0, // Default to requiring all files
 	}
 }
 
@@ -84,6 +89,12 @@ func (s *Service) SetFilenameReplacementBelowLevensteinRatio(ratio float32) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.filenameReplacementBelowLevensteinRatio = ratio
+}
+
+func (s *Service) SetFilesHealthyThreshold(threshold float32) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.filesHealthyThreshold = threshold
 }
 
 // Initialize the service; Load NzbData from store; build filedata and add to filesystem; Register to triggers
@@ -116,8 +127,9 @@ func (s *Service) Init() error {
 }
 
 var (
-	ErrNzbAlreadyExists = errors.New("nzb already exists")
-	ErrNzbNotFound      = errors.New("nzb not found")
+	ErrNzbAlreadyExists  = errors.New("nzb already exists")
+	ErrNzbNotFound       = errors.New("nzb not found")
+	ErrHealthCheckFailed = errors.New("health check failed")
 )
 
 // Add parsed nzb-data
@@ -157,6 +169,27 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 	if len(files) == 0 {
 		logger.Warn("After blacklist, no files left", "MetaName", nzbData.MetaName)
 		return nil
+	}
+
+	// Perform health check on files
+	// TODO: Only run health check on nzbFiles, not special files; From here its not possible to distinguish between them; This would require a change in the factory i.e. to return 2 lists, nzbFiles and special files
+	healthErrors := s.healthChecker.CheckFiles(files)
+	if len(healthErrors) > 0 {
+		// Log unhealthy files
+		for _, err := range healthErrors {
+			logger.Warn("Unhealthy file detected",
+				"nzb", nzbData.MetaName,
+				"error", err)
+		}
+		healthyRatio := float32(len(files)-len(healthErrors)) / float32(len(files))
+		if healthyRatio < s.filesHealthyThreshold {
+			return fmt.Errorf("%w: only %.1f%% of files are healthy (threshold: %.1f%%)",
+				ErrHealthCheckFailed, healthyRatio*100, s.filesHealthyThreshold*100)
+		}
+		logger.Warn("Some files are unhealthy but within threshold",
+			"nzb", nzbData.MetaName,
+			"healthyRatio", healthyRatio,
+			"unhealthyCount", len(healthErrors))
 	}
 
 	// Extract paths
