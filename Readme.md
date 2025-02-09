@@ -111,6 +111,8 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `FOLDER_WATCHER_PATH`             | .watch                 | Watch folder for adding nzbs (blackhole folder)  |
 | **Presenters**
 | `WEBDAV_ADDRESS`                  | :8080                  | Address for WebDAV server; Disabled when unset   |
+| `WEBDAV_USERNAME`                 |                        | Username for WebDAV basic auth; Authentication disabled when unset |
+| `WEBDAV_PASSWORD`                 |                        | Password for WebDAV basic auth                   |
 | `MOUNT_PATH`                      |                        | Path for FUSE mount; Disabled when unset         |
 | `MOUNT_OPTIONS`                   |                        | Additional Options for FUSE mount; See mount.fuse3 Manpage for more information |
 | **Cache**

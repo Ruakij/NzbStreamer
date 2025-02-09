@@ -127,9 +127,18 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		sm.AddService()
 		go func() {
 			defer sm.ServiceDone()
+
+			var authConfig *webdav.BasicAuthConfig
+			if c.Webdav.Username != "" {
+				authConfig = &webdav.BasicAuthConfig{
+					Username: c.Webdav.Username,
+					Password: c.Webdav.Password,
+				}
+			}
+
 			err = webdav.Listen(ctx, c.Webdav.Address, &gowebdav.Handler{
 				FileSystem: webdavHandler,
-			})
+			}, authConfig)
 			if err != nil {
 				slog.Error("Error in webdav", "error", err)
 				os.Exit(1)

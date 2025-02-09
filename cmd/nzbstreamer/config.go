@@ -16,7 +16,9 @@ type UsenetConfig struct {
 }
 
 type WebdavConfig struct {
-	Address string `env:"WEBDAV_ADDRESS, default=:8080"` // Address for WebDAV server; Disabled when unset
+	Address  string `env:"WEBDAV_ADDRESS, default=:8080"` // Address for WebDAV server; Disabled when unset
+	Username string `env:"WEBDAV_USERNAME"`               // Username for WebDAV basic auth; Authentication disabled when unset
+	Password string `env:"WEBDAV_PASSWORD"`               // Password for WebDAV basic auth
 }
 
 type MountConfig struct {
