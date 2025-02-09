@@ -28,11 +28,6 @@ RUN apk add --no-cache fuse ca-certificates
 # Copy binary from build stage
 COPY --from=build /build/nzbstreamer .
 
-# Create non-root user
-RUN adduser -D appuser && \
-    chown -R appuser:appuser /app
-USER appuser
-
 # Configure container
 EXPOSE 8080
 ENTRYPOINT ["/app/nzbstreamer"]
