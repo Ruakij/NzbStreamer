@@ -255,9 +255,7 @@ func (r *AdaptiveReadaheadCacheReader) readahead() error {
 
 	if readaheadAmount > r.resource.cacheMaxSize {
 		readaheadAmount = r.resource.cacheMaxSize
-	}
-
-	if readaheadAmount < r.resource.cacheMinSize {
+	} else if readaheadAmount < r.resource.cacheMinSize {
 		readaheadAmount = r.resource.cacheMinSize
 	}
 
@@ -283,8 +281,9 @@ func (r *AdaptiveReadaheadCacheReader) readahead() error {
 	exposedBuffer := r.cache.ExposeWriteSpace()
 	n, err := r.underlyingReader.Read(exposedBuffer)
 
-	if err := r.cache.CommitWrite(n); err != nil {
-		return fmt.Errorf("failed committing write to cache: %w", err)
+	// Immediately commit the result (even if n==0) so that the cache unblocks waiting reads:
+	if commitErr := r.cache.CommitWrite(n); commitErr != nil {
+		return fmt.Errorf("failed committing write to cache: %w", commitErr)
 	}
 
 	if err != nil {
