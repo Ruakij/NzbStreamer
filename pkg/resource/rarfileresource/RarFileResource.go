@@ -42,6 +42,12 @@ func NewRarFileResource(volumes []resource.ReadSeekCloseableResource, password, 
 	}
 }
 
+// volumeBufferSize is how much rardecode reads from a volume at a time. Its
+// default of 4 KiB would chop a 128 KiB read of a member into 32 trips down the
+// stack; anything below the segment size costs no extra download, since the cache
+// stores a whole segment either way.
+const volumeBufferSize = 128 * 1024
+
 // options configures rardecode to read through the volume resources.
 //
 // SkipCheck is deliberate: verifying a members checksum requires reading all of
@@ -52,6 +58,7 @@ func (r *RarFileResource) options() []rardecode.Option {
 		rardecode.FileSystem(r.volumes),
 		rardecode.Password(r.password),
 		rardecode.SkipCheck,
+		rardecode.BufferSize(volumeBufferSize),
 	}
 }
 
