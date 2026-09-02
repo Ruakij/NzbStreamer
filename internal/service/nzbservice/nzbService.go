@@ -329,6 +329,9 @@ func groupFilesByExtension(files []string) (filesByExtension map[string][]string
 }
 
 func (s *Service) RemoveNzb(nzbData *nzbparser.NzbData) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
 	// Check if NZB exists
 	if _, exists := s.nzbFiledata[nzbData.MetaName]; !exists {
 		return fmt.Errorf("%w: %s", ErrNzbNotFound, nzbData.MetaName)
