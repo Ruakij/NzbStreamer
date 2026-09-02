@@ -133,7 +133,7 @@ var (
 )
 
 // Add parsed nzb-data
-func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
+func (s *Service) AddNzb(nzbData *nzbparser.NzbData) (err error) {
 	logger.Debug("Adding nzb", "MetaName", nzbData.MetaName)
 
 	s.mutex.Lock()
@@ -143,6 +143,16 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 	}
 	s.nzbFiledata[nzbData.MetaName] = nzbData
 	s.mutex.Unlock()
+
+	// The entry reserves the name for this add, so an add that fails has to give
+	// it back; keeping it would make the nzb un-re-addable
+	defer func() {
+		if err != nil {
+			s.mutex.Lock()
+			delete(s.nzbFiledata, nzbData.MetaName)
+			s.mutex.Unlock()
+		}
+	}()
 
 	// Nzb-file blacklist
 	for i := len(nzbData.Files) - 1; i >= 0; i-- {
@@ -210,8 +220,7 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 
 		// Add to presenters
 		for _, presenter := range s.presenters {
-			err = presenter.AddFile(fullPath, nzbData.Files[0].ParsedDate, file)
-			if err != nil {
+			if err := presenter.AddFile(fullPath, nzbData.Files[0].ParsedDate, file); err != nil {
 				logger.Error("Failed adding segment-stack as file", "nzb", nzbData.MetaName, "error", err)
 			}
 		}
