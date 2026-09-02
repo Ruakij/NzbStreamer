@@ -45,9 +45,9 @@ type FolderWatcherConfig struct {
 
 type NzbConfig struct {
 	FileBlacklist         []regexp.Regexp `env:"NZB_FILE_BLACKLIST, default=(?i)\\.par2$"` // Early Regex-blacklist, immediately applied after nzb-file is scanned
-	TryReadBytes          int64           `env:"NZB_TRY_READ_BYTES, default=1"`            // Bytes to try to read when scanning files
-	TryReadPercentage     float32         `env:"NZB_TRY_READ_PERCENTAGE, default=0"`       // Percentage of file to try to read when scanning files
-	FilesHealthyThreshold float32         `env:"NZB_FILES_HEALTHY_THRESHOLD, default=1.0"` // Above this percentage-threshold, try-read errors are allowed
+	SegmentsPerFile       int             `env:"NZB_CHECK_SEGMENTS_PER_FILE, default=2"`   // Segments checked per file for existence, spread evenly; 0 disables the check, -1 checks all
+	SegmentCheckParallel  int             `env:"NZB_CHECK_SEGMENTS_PARALLEL, default=0"`   // Concurrent segment-checks; defaults to USENET_MAX_CONN when 0
+	FilesHealthyThreshold float32         `env:"NZB_FILES_HEALTHY_THRESHOLD, default=1.0"` // Above this percentage-threshold, files with missing segments are allowed
 }
 
 type FilesystemConfig struct {

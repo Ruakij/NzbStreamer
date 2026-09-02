@@ -155,6 +155,25 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 		return nil
 	}
 
+	// Verify the posts still exist before building anything on top of them
+	healthErrors := s.healthChecker.CheckFiles(nzbData)
+	if len(healthErrors) > 0 {
+		for _, err := range healthErrors {
+			logger.Warn("Unhealthy file detected",
+				"nzb", nzbData.MetaName,
+				"error", err)
+		}
+		healthyRatio := float32(len(nzbData.Files)-len(healthErrors)) / float32(len(nzbData.Files))
+		if healthyRatio < s.filesHealthyThreshold {
+			return fmt.Errorf("%w: only %.1f%% of files are healthy (threshold: %.1f%%)",
+				ErrHealthCheckFailed, healthyRatio*100, s.filesHealthyThreshold*100)
+		}
+		logger.Warn("Some files are unhealthy but within threshold",
+			"nzb", nzbData.MetaName,
+			"healthyRatio", healthyRatio,
+			"unhealthyCount", len(healthErrors))
+	}
+
 	files, err := s.factory.BuildSegmentStackFromNzbData(nzbData)
 	if err != nil {
 		return fmt.Errorf("failed building segment-stack for %s: %w", nzbData.MetaName, err)
@@ -169,27 +188,6 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 	if len(files) == 0 {
 		logger.Warn("After blacklist, no files left", "MetaName", nzbData.MetaName)
 		return nil
-	}
-
-	// Perform health check on files
-	// TODO: Only run health check on nzbFiles, not special files; From here its not possible to distinguish between them; This would require a change in the factory i.e. to return 2 lists, nzbFiles and special files
-	healthErrors := s.healthChecker.CheckFiles(files)
-	if len(healthErrors) > 0 {
-		// Log unhealthy files
-		for _, err := range healthErrors {
-			logger.Warn("Unhealthy file detected",
-				"nzb", nzbData.MetaName,
-				"error", err)
-		}
-		healthyRatio := float32(len(files)-len(healthErrors)) / float32(len(files))
-		if healthyRatio < s.filesHealthyThreshold {
-			return fmt.Errorf("%w: only %.1f%% of files are healthy (threshold: %.1f%%)",
-				ErrHealthCheckFailed, healthyRatio*100, s.filesHealthyThreshold*100)
-		}
-		logger.Warn("Some files are unhealthy but within threshold",
-			"nzb", nzbData.MetaName,
-			"healthyRatio", healthyRatio,
-			"unhealthyCount", len(healthErrors))
 	}
 
 	// Extract paths

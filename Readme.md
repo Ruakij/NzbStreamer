@@ -126,9 +126,9 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `READAHEAD_CACHE_MAX_SIZE`        | 16777216               | Maximum readahead amount in bytes; Disables readahead-cache when 0                |
 | **Nzb-Options**
 | `NZB_FILE_BLACKLIST`              | (?i)\.par2$            | Early Regex-blacklist, immediately applied after nzb-file is scanned <br>Can be used to skip unwanted files like .par2 |
-| `NZB_TRY_READ_BYTES`              | 1                      | Bytes to try to read when scanning files         |
-| `NZB_TRY_READ_PERCENTAGE`         | 0                      | Percentage of file to try to read when scanning files |
-| `NZB_FILES_HEALTHY_THRESHOLD`     | 1.0                    | Above this percentage-threshold, try-read errors are allowed |
+| `NZB_CHECK_SEGMENTS_PER_FILE`     | 2                      | Segments checked per file for existence, spread evenly (so first and last)<br>0 disables the check, -1 checks all segments |
+| `NZB_CHECK_SEGMENTS_PARALLEL`     | 0                      | Concurrent segment-checks; defaults to `USENET_MAX_CONN` when 0 |
+| `NZB_FILES_HEALTHY_THRESHOLD`     | 1.0                    | Above this percentage-threshold, files with missing segments are allowed |
 | **Filesystem-Options**
 | `FILESYSTEM_BLACKLIST`            |                        | Late Regex-blacklist, applied on the actual file added to the filesystem; includes files from archives <br>Can be used to hide archive-files, but leaving unpacked files |
 | `FILESYSTEM_FLATTEN_MAX_DEPTH`    | 1                      | Unpacks files from folders e.g. archives where possible <br>Can be used to hide archive-group-folder |

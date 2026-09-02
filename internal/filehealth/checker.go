@@ -3,26 +3,37 @@ package filehealth
 import (
 	"errors"
 	"fmt"
-	"io"
+	"sync"
 
-	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
 
+var ErrSegmentsMissing = errors.New("segments missing on server")
+
+// SegmentExistsFunc reports whether a segment is retrievable from the server.
+type SegmentExistsFunc func(id string) (bool, error)
+
 type CheckerConfig struct {
-	TryReadBytes      int64
-	TryReadPercentage float32
+	// Segments checked per file, spread evenly across it; 0 disables checking, -1 checks all
+	SegmentsPerFile int
+	// Maximum concurrent segment-checks
+	MaxParallel int
 }
 
 // Ensure DefaultChecker implements Checker interface
 var _ Checker = (*DefaultChecker)(nil)
 
-// DefaultChecker implements basic file health checking
+// DefaultChecker verifies that a files segments are still present on the server.
 type DefaultChecker struct {
 	config CheckerConfig
+	exists SegmentExistsFunc
 }
 
-func NewDefaultChecker(config CheckerConfig) *DefaultChecker {
-	return &DefaultChecker{config: config}
+func NewDefaultChecker(config CheckerConfig, exists SegmentExistsFunc) *DefaultChecker {
+	if config.MaxParallel < 1 {
+		config.MaxParallel = 1
+	}
+	return &DefaultChecker{config: config, exists: exists}
 }
 
 // FileHealthError represents a file health check error
@@ -35,68 +46,99 @@ func (e *FileHealthError) Error() string {
 	return fmt.Sprintf("health check failed for %s: %v", e.Path, e.Err)
 }
 
-func (c *DefaultChecker) CheckFiles(files map[string]presentation.Openable) []error {
-	if c.config.TryReadBytes <= 0 && c.config.TryReadPercentage <= 0 {
+func (e *FileHealthError) Unwrap() error {
+	return e.Err
+}
+
+type fileResult struct {
+	checked int
+	missing int
+	err     error
+}
+
+func (c *DefaultChecker) CheckFiles(nzbData *nzbparser.NzbData) []error {
+	if c.config.SegmentsPerFile == 0 {
 		return nil
 	}
 
-	var errs []error
-	for path, file := range files {
-		if err := c.checkFile(file); err != nil {
-			errs = append(errs, &FileHealthError{
-				Path: path,
-				Err:  err,
-			})
+	results := make([]fileResult, len(nzbData.Files))
+
+	var (
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, c.config.MaxParallel)
+	)
+
+	for fileIndex := range nzbData.Files {
+		file := &nzbData.Files[fileIndex]
+		for _, segmentIndex := range sampleIndices(len(file.Segments), c.config.SegmentsPerFile) {
+			id := file.Segments[segmentIndex].ID
+
+			wg.Add(1)
+			sem <- struct{}{}
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				exists, err := c.exists(id)
+
+				mu.Lock()
+				defer mu.Unlock()
+				result := &results[fileIndex]
+				result.checked++
+				switch {
+				case err != nil:
+					if result.err == nil {
+						result.err = err
+					}
+				case !exists:
+					result.missing++
+				}
+			}()
 		}
+	}
+	wg.Wait()
+
+	var errs []error
+	for fileIndex, result := range results {
+		var err error
+		switch {
+		case result.err != nil:
+			err = result.err
+		case result.missing > 0:
+			err = fmt.Errorf("%w: %d of %d checked", ErrSegmentsMissing, result.missing, result.checked)
+		default:
+			continue
+		}
+
+		errs = append(errs, &FileHealthError{
+			Path: nzbData.Files[fileIndex].Filename,
+			Err:  err,
+		})
 	}
 	return errs
 }
 
-func (c *DefaultChecker) checkFile(file presentation.Openable) error {
-	f, err := file.Open()
-	if err != nil {
-		return fmt.Errorf("failed to open file: %w", err)
+// sampleIndices picks count indices spread evenly over [0, length), always
+// including the first and last one. A negative count selects everything.
+func sampleIndices(length, count int) []int {
+	if length == 0 {
+		return nil
 	}
-	defer f.Close()
-
-	size, err := f.Seek(0, io.SeekEnd)
-	if err != nil {
-		return fmt.Errorf("failed to get file size: %w", err)
-	}
-
-	// Calculate how much to read
-	var readSize int64
-	if c.config.TryReadBytes > 0 {
-		readSize = c.config.TryReadBytes
-	} else {
-		readSize = int64(float32(size) * c.config.TryReadPercentage)
-	}
-
-	if readSize == 0 {
-		readSize = 1 // Read at least 1 byte
-	}
-	if readSize > size {
-		readSize = size
-	}
-
-	// Read from beginning
-	_, err = f.Seek(0, io.SeekStart)
-	if err != nil {
-		return fmt.Errorf("failed to seek to start: %w", err)
-	}
-
-	buf := make([]byte, min(readSize, 1*1024*1024))
-	var totalRead int64
-	for totalRead < readSize {
-		n, err := f.Read(buf)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return fmt.Errorf("failed to read file: %w", err)
+	if count < 0 || count >= length {
+		indices := make([]int, length)
+		for i := range indices {
+			indices[i] = i
 		}
-		totalRead += int64(n)
+		return indices
+	}
+	if count == 1 {
+		return []int{0}
 	}
 
-	return nil
+	indices := make([]int, count)
+	for i := range indices {
+		indices[i] = i * (length - 1) / (count - 1)
+	}
+	return indices
 }
