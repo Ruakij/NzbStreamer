@@ -82,7 +82,7 @@ func (fw *folderWatcherBlackhole) processFile(filename string) {
 	}
 	defer file.Close()
 
-	nzbData, err := nzbparser.ParseNzb(file)
+	nzbData, err := nzbparser.ParseNzb(file, filename)
 	if err != nil {
 		logger.Error("Failed to parse nzb", "filename", filename, "err", err)
 		return

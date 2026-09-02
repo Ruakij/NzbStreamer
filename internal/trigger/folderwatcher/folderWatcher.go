@@ -132,7 +132,7 @@ func (fw *folderWatcher) processFile(filename string) {
 	}
 	defer file.Close() // Ensure the file is closed after processing
 
-	nzbData, err := nzbparser.ParseNzb(file)
+	nzbData, err := nzbparser.ParseNzb(file, filename)
 	if err != nil {
 		logger.Error("Failed to parse nzb", "filename", filename, "err", err)
 		return

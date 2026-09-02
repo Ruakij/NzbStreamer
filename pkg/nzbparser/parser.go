@@ -15,7 +15,9 @@ const (
 	MetaKeyPassword = "Password"
 )
 
-func ParseNzb(inputStream io.Reader) (*NzbData, error) {
+// ParseNzb reads an nzb. filename is the name of the file it was read from, which
+// decides what the nzb is called; pass empty for a source that has none.
+func ParseNzb(inputStream io.Reader, filename string) (*NzbData, error) {
 	decoder := xml.NewDecoder(inputStream)
 	var nzb NzbData
 
@@ -50,20 +52,30 @@ func ParseNzb(inputStream io.Reader) (*NzbData, error) {
 		file.SegmentCountHint = result.SegmentCountHint
 	}
 
-	// Handle special meta keys
-	if _, ok := nzb.Meta["Name"]; !ok {
-		// If Name is not set in meta
-		if _, ok := nzb.Meta["Title"]; ok {
-			// try title
-			nzb.Meta["Name"] = nzb.Meta["Title"]
-		} else {
-			// lastly try to guess it via file
-			nzb.Meta["Name"] = guessName(nzb.Files)
-		}
-	}
-	nzb.MetaName = nzb.Meta["Name"]
+	nzb.MetaName = resolveName(&nzb, filename)
 
 	return &nzb, nil
+}
+
+// resolveName decides what an nzb is called.
+//
+// The file it was read from wins. That name is written outside the post, so it is
+// the one part obfuscation cannot reach: an obfuscated nzb names its files, its
+// recovery set and often its archive members after the same hash, and every name
+// derivable from within it is that hash. It also makes the choice unique for free,
+// since a watch folder cannot hold two files of the same name, so two nzbs never
+// claim the same tree.
+func resolveName(nzb *NzbData, filename string) string {
+	switch {
+	case filename != "":
+		return getBaseFilename(filename)
+	case nzb.Meta[MetaKeyName] != "":
+		return nzb.Meta[MetaKeyName]
+	case nzb.Meta["Title"] != "":
+		return nzb.Meta["Title"]
+	}
+
+	return guessName(nzb.Files)
 }
 
 var subjectRegexPatterns = []*regexp.Regexp{
