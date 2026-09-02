@@ -25,6 +25,7 @@ type fileNode struct {
 
 type file struct {
 	reader io.ReaderAt
+	closer io.Closer
 }
 
 // dirNode represents a directory in the filesystem.
@@ -142,8 +143,9 @@ func (n *fileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint3
 		return nil, 0, syscall.EIO
 	}
 
-	fh := file{
-		reader: readeratwrapper.NewReadSeekerAt(reader),
+	fh := &file{
+		reader: readeratwrapper.Positional(reader),
+		closer: reader,
 	}
 
 	logger.Debug("Open", "reader", fmt.Sprintf("%p", reader), "name", n.EmbeddedInode().Path(nil))
@@ -171,12 +173,25 @@ func (r *readResult) Done() {}
 var _ = fs.NodeReader((*fileNode)(nil))
 
 func (n *fileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	file, ok := f.(file)
+	file, ok := f.(*file)
 	if !ok {
 		logger.Error("Error reading, invalid filehandle", "handle", f, "len", len(dest), "offset", off)
 		return nil, syscall.EINVAL // Invalid argument error
 	}
 	return file.Read(ctx, dest, off)
+}
+
+var _ = fs.FileReleaser((*file)(nil))
+
+// Release closes the reader the handle was opened with, which is what returns
+// its descriptors and pooled readers.
+func (f *file) Release(ctx context.Context) syscall.Errno {
+	if err := f.closer.Close(); err != nil {
+		logger.Error("Error closing reader", "handle", f, "error", err)
+		return syscall.EIO
+	}
+
+	return 0
 }
 
 var _ = fs.FileReader((*file)(nil))

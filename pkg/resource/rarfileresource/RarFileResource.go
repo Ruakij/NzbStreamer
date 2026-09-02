@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwaples/rardecode/v2"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/readeratwrapper"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 )
 
@@ -80,6 +81,10 @@ func (r *RarFileResource) GetRarFiles(limit int) ([]*rardecode.FileHeader, error
 	return headers, nil
 }
 
+// maxMemberReaders bounds how many independent paths into one member positional
+// reads may open. A flat cap, sized for what a FUSE mount keeps in flight.
+const maxMemberReaders = 8
+
 func (r *RarFileResource) Open() (io.ReadSeekCloser, error) {
 	reader, size, err := r.openMember()
 	if err != nil {
@@ -92,10 +97,63 @@ func (r *RarFileResource) Open() (io.ReadSeekCloser, error) {
 
 	// A stored member is a byte range in the volumes, so rardecode hands back a
 	// reader that seeks. A compressed one is a one-way decoder stream.
-	if seeker, ok := reader.(io.ReadSeekCloser); ok {
-		return seeker, nil
+	seeker, ok := reader.(io.ReadSeekCloser)
+	if !ok {
+		return &decoderSeeker{resource: r, reader: reader, size: size}, nil
 	}
-	return &decoderSeeker{resource: r, reader: reader, size: size}, nil
+
+	return &storedMember{
+		storedReader: newStoredReader(r, seeker, size),
+		pool:         readeratwrapper.NewPooledReadSeekerAt(r.openStoredReader, maxMemberReaders),
+	}, nil
+}
+
+// storedMember is a handle on a stored member. Being addressable, it answers
+// positional reads too, and does so from readers of their own so concurrent ones
+// run in parallel rather than queueing behind a single position.
+type storedMember struct {
+	*storedReader
+	pool *readeratwrapper.PooledReadSeekerAt
+}
+
+func (m *storedMember) ReadAt(p []byte, off int64) (int, error) {
+	//nolint:wrapcheck // io.EOF has to reach the caller unwrapped
+	return m.pool.ReadAt(p, off)
+}
+
+func (m *storedMember) Close() error {
+	return errors.Join(m.pool.Close(), m.storedReader.Close())
+}
+
+// openStoredReader opens another independent path into a stored member, which is
+// what the pool hands to a positional read.
+func (r *RarFileResource) openStoredReader() (io.ReadSeekCloser, error) {
+	reader, size, err := r.openStoredMember()
+	if err != nil {
+		return nil, err
+	}
+
+	return newStoredReader(r, reader, size), nil
+}
+
+var ErrMemberNotStored = errors.New("member is not stored")
+
+// openStoredMember opens the member and reports its unpacked size, refusing one
+// that only decodes forwards.
+func (r *RarFileResource) openStoredMember() (io.ReadSeekCloser, int64, error) {
+	reader, size, err := r.openMember()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	seeker, ok := reader.(io.ReadSeekCloser)
+	if !ok {
+		//nolint:errcheck // Nothing to do with a failure of a reader we are rejecting
+		reader.Close()
+		return nil, 0, fmt.Errorf("%w: %s", ErrMemberNotStored, r.filename)
+	}
+
+	return seeker, size, nil
 }
 
 // openMember opens the member and reports its unpacked size.

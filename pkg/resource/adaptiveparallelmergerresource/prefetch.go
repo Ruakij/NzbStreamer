@@ -40,6 +40,8 @@ func SetPrefetch(concurrency int, leadTime time.Duration, minLead, maxLead int) 
 
 // consumptionRate is what the consumer has taken per second since the read head
 // was last placed, or 0 while the run is too short to measure.
+//
+// Requires prefetchMutex.
 func (r *AdaptiveParallelMergerResourceReader) consumptionRate(settings *prefetchSettings) float64 {
 	elapsed := time.Since(r.runStart)
 	if r.runStart.IsZero() || elapsed < settings.leadTime {
@@ -51,13 +53,15 @@ func (r *AdaptiveParallelMergerResourceReader) consumptionRate(settings *prefetc
 
 // lead is how many resources ahead of the read head to warm: what the consumer
 // takes during the lead time, expressed in resources of the size at hand.
-func (r *AdaptiveParallelMergerResourceReader) lead(settings *prefetchSettings) int {
+//
+// Requires prefetchMutex.
+func (r *AdaptiveParallelMergerResourceReader) lead(settings *prefetchSettings, index int) int {
 	rate := r.consumptionRate(settings)
-	if rate <= 0 {
+	if rate <= 0 || index >= len(r.resource.resources) {
 		return settings.minLead
 	}
 
-	resourceSize, err := r.resource.resources[r.readerIndex].SizeHint()
+	resourceSize, err := r.resource.resources[index].SizeHint()
 	if err != nil || resourceSize <= 0 {
 		return settings.minLead
 	}
@@ -67,23 +71,84 @@ func (r *AdaptiveParallelMergerResourceReader) lead(settings *prefetchSettings) 
 	return min(max(lead, settings.minLead), settings.maxLead)
 }
 
-// prefetch warms the resources ahead of the read head. It works on resources
-// rather than readers, so what it fetches lands in their cache and outlives this
-// reader; a demand read arriving later just finds it there.
-//
-// ponytail: refill happens per Read, not the moment a fetch finishes. A read that
-// consumes a whole lead in one call still issues the next one; a stalled consumer
-// simply stops asking.
-func (r *AdaptiveParallelMergerResourceReader) prefetch() {
+// prefetchAt anchors the lead on a positional read, which carries no read head
+// of its own. Concurrent readahead arrives out of order, so the anchor only
+// advances; one landing outside the warm window is a jump, and drops the lead
+// and the rate the way a seek does.
+func (r *AdaptiveParallelMergerResourceReader) prefetchAt(index int, read int64) {
 	settings := prefetch.Load()
 	if settings == nil || settings.maxLead <= 0 {
 		return
 	}
 
-	if r.prefetchedTo < r.readerIndex {
-		r.prefetchedTo = r.readerIndex
+	r.prefetchMutex.Lock()
+	if index < r.readAtIndex-1 || index > r.readAtIndex+settings.maxLead {
+		r.prefetchedTo = index
+		r.runStart = time.Now()
+		r.runBytes = 0
 	}
-	limit := min(r.readerIndex+r.lead(settings), len(r.resource.resources))
+	if index > r.readAtIndex {
+		r.readAtIndex = index
+	}
+	if r.runStart.IsZero() {
+		r.runStart = time.Now()
+	}
+	r.runBytes += read
+	anchor := r.readAtIndex
+	r.prefetchMutex.Unlock()
+
+	r.prefetchFrom(anchor)
+}
+
+// noteSeek keeps the lead and the rate when the seek landed inside the window
+// already warm ahead of from - a caller chopping a stream into small positional
+// reads looks like that - and drops both otherwise, since a jump says nothing
+// about what follows.
+func (r *AdaptiveParallelMergerResourceReader) noteSeek(from int) {
+	r.prefetchMutex.Lock()
+	defer r.prefetchMutex.Unlock()
+
+	if r.readerIndex >= from && r.readerIndex <= r.prefetchedTo {
+		return
+	}
+
+	r.prefetchedTo = r.readerIndex
+	r.readAtIndex = r.readerIndex
+	r.runStart = time.Time{}
+	r.runBytes = 0
+}
+
+// noteRead folds what a read served into the rate estimate.
+func (r *AdaptiveParallelMergerResourceReader) noteRead(read int64) {
+	r.prefetchMutex.Lock()
+	defer r.prefetchMutex.Unlock()
+
+	if r.runStart.IsZero() {
+		r.runStart = time.Now()
+	}
+	r.runBytes += read
+}
+
+// prefetchFrom warms the resources ahead of index. It works on resources rather
+// than readers, so what it fetches lands in their cache and outlives this
+// reader; a demand read arriving later just finds it there.
+//
+// The lead refills per Read rather than the moment a fetch finishes. A read that
+// consumes a whole lead in one call still issues the next one; a stalled consumer
+// simply stops asking.
+func (r *AdaptiveParallelMergerResourceReader) prefetchFrom(index int) {
+	settings := prefetch.Load()
+	if settings == nil || settings.maxLead <= 0 {
+		return
+	}
+
+	r.prefetchMutex.Lock()
+	defer r.prefetchMutex.Unlock()
+
+	if r.prefetchedTo < index {
+		r.prefetchedTo = index
+	}
+	limit := min(index+r.lead(settings, index), len(r.resource.resources))
 
 	for i := r.prefetchedTo; i < limit; i++ {
 		prefetcher, ok := r.resource.resources[i].(resource.Prefetcher)

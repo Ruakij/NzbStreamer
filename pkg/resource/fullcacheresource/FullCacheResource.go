@@ -59,6 +59,7 @@ type FullCacheResourceReader struct {
 	resource         *FullCacheResource
 	underlyingReader io.ReadCloser
 	// Cache-file kept open for the readers lifetime; reads are positional, so no seeking
+	fileMutex sync.Mutex
 	cacheFile *os.File
 	index     int64
 }
@@ -165,10 +166,13 @@ func (r *FullCacheResource) size() (size int64, exact bool, err error) {
 }
 
 func (r *FullCacheResourceReader) Close() error {
-	if r.cacheFile != nil {
-		err := r.cacheFile.Close()
-		r.cacheFile = nil
-		if err != nil {
+	r.fileMutex.Lock()
+	cacheFile := r.cacheFile
+	r.cacheFile = nil
+	r.fileMutex.Unlock()
+
+	if cacheFile != nil {
+		if err := cacheFile.Close(); err != nil {
 			return fmt.Errorf("failed closing cache-file: %w", err)
 		}
 	}
@@ -228,16 +232,45 @@ func (r *FullCacheResourceReader) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 
-	if r.cacheFile == nil {
-		if err := r.openCacheFile(); err != nil {
-			return 0, err
-		}
+	cacheFile, err := r.file()
+	if err != nil {
+		return 0, err
 	}
 
-	n, err := r.cacheFile.ReadAt(p, r.index)
+	n, err := cacheFile.ReadAt(p, r.index)
 	r.index += int64(n)
 
 	return n, err
+}
+
+// ReadAt reads at an absolute offset in the segment, which the cache-file
+// answers directly. It carries no position, so concurrent calls run in parallel.
+func (r *FullCacheResourceReader) ReadAt(p []byte, off int64) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	cacheFile, err := r.file()
+	if err != nil {
+		return 0, err
+	}
+
+	//nolint:wrapcheck // io.EOF has to reach the caller unwrapped
+	return cacheFile.ReadAt(p, off)
+}
+
+// file is the cache-file of this reader, stored and opened on first use.
+func (r *FullCacheResourceReader) file() (*os.File, error) {
+	r.fileMutex.Lock()
+	defer r.fileMutex.Unlock()
+
+	if r.cacheFile == nil {
+		if err := r.openCacheFile(); err != nil {
+			return nil, err
+		}
+	}
+
+	return r.cacheFile, nil
 }
 
 // openCacheFile ensures the segment is cached and keeps its file open for subsequent reads.

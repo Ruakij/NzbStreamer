@@ -78,7 +78,7 @@ func (r *SevenzipFileResource) open() (*SevenzipFileResourceReader, error) {
 
 	// Create RarReader
 	sevenzipReader, err := sevenzip.NewReaderWithPassword(
-		readeratwrapper.NewReadSeekerAt(reader),
+		readeratwrapper.Positional(reader),
 		size,
 		r.password,
 	)

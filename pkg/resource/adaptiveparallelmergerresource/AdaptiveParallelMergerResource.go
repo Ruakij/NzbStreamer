@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,11 +19,18 @@ import (
 // It reads underlying sources in parallel and can handle their size to be unknown.
 type AdaptiveParallelMergerResource struct {
 	resources []resource.ReadSeekCloseableResource
+
+	// Start offset of each resource, filled in as far as a positional read has
+	// needed it. offsets[i] is where resource i begins, so a complete table has
+	// one entry more than there are resources.
+	offsetsMutex sync.Mutex
+	offsets      []int64
 }
 
 func NewAdaptiveParallelMergerResource(resources []resource.ReadSeekCloseableResource) *AdaptiveParallelMergerResource {
 	return &AdaptiveParallelMergerResource{
 		resources: resources,
+		offsets:   []int64{0},
 	}
 }
 
@@ -41,10 +49,16 @@ type AdaptiveParallelMergerResourceReader struct {
 	readerIndex int
 	// Active reader byte index
 	readerByteIndex int64
+
+	// Prefetch state, which positional reads touch without holding mutex
+	prefetchMutex sync.Mutex
 	// Highest index prefetch has been issued for
 	prefetchedTo int
+	// Highest index a positional read has reached. Concurrent readahead arrives
+	// out of order, so the lead is anchored to the furthest of them.
+	readAtIndex int
 	// Bytes served and since when, measuring how fast the consumer takes them.
-	// A seek starts a new run, since a jump says nothing about the next one.
+	// A jump starts a new run, since it says nothing about the next one.
 	runStart time.Time
 	runBytes int64
 }
@@ -124,18 +138,35 @@ func (r *AdaptiveParallelMergerResource) SizeHint() (int64, error) {
 	return totalSize, nil
 }
 
+// knownSize answers from the resource itself, and reports false where only
+// reading it can settle the length.
+func knownSize(res resource.ReadSeekCloseableResource) (int64, bool, error) {
+	sized, ok := res.(resource.Sized)
+	if !ok {
+		return 0, false, nil
+	}
+
+	size, err := sized.Size()
+	switch {
+	case err == nil:
+		return size, true, nil
+	case errors.Is(err, resource.ErrSizeNotExact):
+		return 0, false, nil
+	default:
+		return 0, false, err
+	}
+}
+
 // partSize is the length of resource i. A resource that knows it exactly answers
 // for free; the rest have to be seeked to their end, which for an uncached
 // segment means downloading it.
 func (r *AdaptiveParallelMergerResourceReader) partSize(i int) (int64, error) {
-	if sized, ok := r.resource.resources[i].(resource.Sized); ok {
-		size, err := sized.Size()
-		if err == nil {
-			return size, nil
-		}
-		if !errors.Is(err, resource.ErrSizeNotExact) {
-			return 0, fmt.Errorf("failed getting size from resource %d: %w", i, err)
-		}
+	size, known, err := knownSize(r.resource.resources[i])
+	if err != nil {
+		return 0, fmt.Errorf("failed getting size from resource %d: %w", i, err)
+	}
+	if known {
+		return size, nil
 	}
 
 	reader, err := r.reader(i)
@@ -143,12 +174,131 @@ func (r *AdaptiveParallelMergerResourceReader) partSize(i int) (int64, error) {
 		return 0, err
 	}
 
-	size, err := reader.Seek(0, io.SeekEnd)
+	size, err = reader.Seek(0, io.SeekEnd)
 	if err != nil {
 		return 0, fmt.Errorf("failed seeking resource %d to end: %w", i, err)
 	}
 
 	return size, nil
+}
+
+// locate maps an absolute offset onto the resource holding it. The table it
+// walks is built from exact sizes only - an estimate would send a read to the
+// wrong byte - so a resource that does not know its own length is measured,
+// which for an uncached segment costs a download, the same price a seek across
+// it pays.
+func (r *AdaptiveParallelMergerResource) locate(off int64) (index int, inner int64, err error) {
+	r.offsetsMutex.Lock()
+	defer r.offsetsMutex.Unlock()
+
+	for len(r.offsets) <= len(r.resources) && r.offsets[len(r.offsets)-1] <= off {
+		i := len(r.offsets) - 1
+
+		size, known, err := knownSize(r.resources[i])
+		if err != nil {
+			return 0, 0, fmt.Errorf("failed getting size from resource %d: %w", i, err)
+		}
+		if !known {
+			if size, err = measure(r.resources[i]); err != nil {
+				return 0, 0, fmt.Errorf("failed measuring resource %d: %w", i, err)
+			}
+		}
+
+		r.offsets = append(r.offsets, r.offsets[i]+size)
+	}
+
+	index = sort.Search(len(r.offsets), func(i int) bool { return r.offsets[i] > off }) - 1
+	if index < 0 || index >= len(r.resources) {
+		return 0, 0, io.EOF
+	}
+
+	return index, off - r.offsets[index], nil
+}
+
+// measure reads a resource to its end to settle its length, on a reader of its
+// own so no position is shared with anything else.
+func measure(res resource.ReadSeekCloseableResource) (int64, error) {
+	reader, err := res.Open()
+	if err != nil {
+		return 0, fmt.Errorf("failed opening resource: %w", err)
+	}
+	defer reader.Close()
+
+	size, err := reader.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, fmt.Errorf("failed seeking resource to end: %w", err)
+	}
+
+	return size, nil
+}
+
+// ReadAt reads at an absolute offset without touching the position Read and Seek
+// share, so concurrent calls proceed in parallel.
+//
+// It opens a reader per resource it touches rather than borrowing the ones the
+// read head keeps, which would need reference counting to stay safe against
+// closeBehind. That is one cache-file open per resource per call.
+func (r *AdaptiveParallelMergerResourceReader) ReadAt(p []byte, off int64) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if off < 0 {
+		return 0, resource.ErrInvalidSeek
+	}
+
+	index, inner, err := r.resource.locate(off)
+	if err != nil {
+		//nolint:wrapcheck // io.EOF has to reach the caller unwrapped
+		return 0, err
+	}
+
+	r.prefetchAt(index, int64(len(p)))
+
+	totalRead := 0
+	for totalRead < len(p) {
+		if index >= len(r.resource.resources) {
+			return totalRead, io.EOF
+		}
+
+		n, err := readResourceAt(r.resource.resources[index], p[totalRead:], inner)
+		totalRead += n
+		if err != nil && !errors.Is(err, io.EOF) {
+			return totalRead, fmt.Errorf("failed reading resource %d at %d: %w", index, inner, err)
+		}
+
+		index++
+		inner = 0
+	}
+
+	return totalRead, nil
+}
+
+// readResourceAt fills p from an offset inside one resource. A reader that
+// answers positional reads is used as it is; the rest get a reader of their own,
+// since seeking a shared one is what ReadAt exists to avoid.
+func readResourceAt(res resource.ReadSeekCloseableResource, p []byte, off int64) (int, error) {
+	reader, err := res.Open()
+	if err != nil {
+		return 0, fmt.Errorf("failed opening resource: %w", err)
+	}
+	defer reader.Close()
+
+	if readerAt, ok := reader.(io.ReaderAt); ok {
+		//nolint:wrapcheck // io.EOF has to reach the caller unwrapped
+		return readerAt.ReadAt(p, off)
+	}
+
+	if _, err := reader.Seek(off, io.SeekStart); err != nil {
+		return 0, fmt.Errorf("failed seeking to %d: %w", off, err)
+	}
+
+	n, err := io.ReadFull(reader, p)
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		err = io.EOF
+	}
+
+	//nolint:wrapcheck // io.EOF has to reach the caller unwrapped
+	return n, err
 }
 
 type readResponse struct {
@@ -167,10 +317,8 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 
 	r.mutex.Lock()
 
-	if r.runStart.IsZero() {
-		r.runStart = time.Now()
-	}
-	r.prefetch()
+	r.noteRead(0)
+	r.prefetchFrom(r.readerIndex)
 
 	totalRead := 0
 	expectedTotalRead := 0
@@ -191,7 +339,7 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 	// Unlock mutex, when group finished
 	// TODO: Maybe its possible to only block affected readers separately not to halt all activity? Might not be that critical though
 	defer func() {
-		r.runBytes += int64(totalRead)
+		r.noteRead(int64(totalRead))
 
 		// When already everything processed, dont start goroutine
 		if processIndex >= len(responses) {
@@ -450,12 +598,10 @@ func (r *AdaptiveParallelMergerResourceReader) Close() error {
 func (r *AdaptiveParallelMergerResourceReader) Seek(offset int64, whence int) (int64, error) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	// A jump has no lead to keep and says nothing about the speed of what
-	// follows, so both are re-established from wherever this lands
+
+	from := r.readerIndex
 	defer func() {
-		r.prefetchedTo = r.readerIndex
-		r.runStart = time.Time{}
-		r.runBytes = 0
+		r.noteSeek(from)
 		r.closeBehind()
 	}()
 

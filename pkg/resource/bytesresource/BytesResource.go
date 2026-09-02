@@ -52,6 +52,23 @@ func (r *BytesResourceReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// ReadAt holds no position, so concurrent reads of one reader do not interfere.
+func (r *BytesResourceReader) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 {
+		return 0, resource.ErrInvalidSeek
+	}
+	if off >= int64(len(r.resource.Content)) {
+		return 0, io.EOF
+	}
+
+	n := copy(p, r.resource.Content[off:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+
+	return n, nil
+}
+
 func (r *BytesResourceReader) Seek(offset int64, whence int) (int64, error) {
 	var newIndex int64
 

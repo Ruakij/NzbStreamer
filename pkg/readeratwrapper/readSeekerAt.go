@@ -1,6 +1,7 @@
 package readeratwrapper
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -18,7 +19,22 @@ func NewReadSeekerAt(r io.ReadSeeker) io.ReaderAt {
 	return &ReadSeekerAt{underlyingReader: r}
 }
 
-// ReadAt uses the ReadSeeker's Seek method to navigate and read data at a given offset.
+// Positional takes a reader as an io.ReaderAt, wrapping only one that cannot
+// answer positional reads itself. Addressable data answers them directly and its
+// readers then run concurrently; a decoder stream runs forwards only, and
+// serialising it is the constraint rather than an artefact.
+func Positional(r io.ReadSeeker) io.ReaderAt {
+	if readerAt, ok := r.(io.ReaderAt); ok {
+		return readerAt
+	}
+
+	return NewReadSeekerAt(r)
+}
+
+// ReadAt uses the ReadSeeker's Seek method to navigate and read data at a given
+// offset. It fills p, which is what io.ReaderAt promises and what a presenter
+// handing the bytes to a kernel needs: a short read there reads as the end of
+// the file.
 func (r *ReadSeekerAt) ReadAt(p []byte, off int64) (n int, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -28,7 +44,10 @@ func (r *ReadSeekerAt) ReadAt(p []byte, off int64) (n int, err error) {
 		return 0, fmt.Errorf("failed seeking: %w", err)
 	}
 
-	n, err = r.underlyingReader.Read(p)
+	n, err = io.ReadFull(r.underlyingReader, p)
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		err = io.EOF
+	}
 
 	return n, err
 }
