@@ -46,14 +46,23 @@ func (r *HookedResource) AddCloseHook(hook CloseHook) {
 	r.closeHooks = append(r.closeHooks, hook)
 }
 
-// Size returns the size of the underlying resource.
+// SizeHint returns the size of the underlying resource.
 // It implements the ReadSeekCloseableResource interface.
-func (r *HookedResource) Size() (int64, error) {
-	size, err := r.underlying.Size()
+func (r *HookedResource) SizeHint() (int64, error) {
+	size, err := r.underlying.SizeHint()
 	if err != nil {
 		return 0, fmt.Errorf("hookedresource: size from underlying resource: %w", err)
 	}
 	return size, nil
+}
+
+func (r *HookedResource) Size() (int64, error) {
+	sized, ok := r.underlying.(resource.Sized)
+	if !ok {
+		return 0, resource.ErrSizeNotExact
+	}
+
+	return sized.Size()
 }
 
 func (r *HookedResource) Open() (io.ReadSeekCloser, error) {

@@ -20,7 +20,7 @@ func TestMergerResource(t *testing.T) {
 
 	merger := mergerresource.NewMergerResource(resources)
 
-	size, err := merger.Size()
+	size, err := merger.SizeHint()
 	if err != nil {
 		t.Errorf("failed get Size() %v", err)
 	}

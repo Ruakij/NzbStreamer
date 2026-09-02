@@ -32,13 +32,12 @@ func keyMutex(key string) *sync.Mutex {
 
 // FullCacheResource caches underlying Record by fully reading its content into cache
 type FullCacheResource struct {
-	UnderlyingResource       resource.ReadCloseableResource
-	CacheKey                 string
-	Cache                    *diskcache.Cache
-	cachedSize               int64
-	cachedSizeAccurate       bool
-	cachedSizeAccurateCached bool
-	options                  *FullCacheResourceOptions
+	UnderlyingResource resource.ReadCloseableResource
+	CacheKey           string
+	Cache              *diskcache.Cache
+	cachedSize         int64
+	cachedSizeExact    bool
+	options            *FullCacheResourceOptions
 }
 
 type FullCacheResourceOptions struct {
@@ -76,66 +75,68 @@ func (r *FullCacheResource) Open() (io.ReadSeekCloser, error) {
 	}, nil
 }
 
-func (r *FullCacheResource) Size() (int64, error) {
+func (r *FullCacheResource) SizeHint() (int64, error) {
 	mu := keyMutex(r.CacheKey)
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Check if size is cached
-	if r.cachedSize >= 0 {
-		return r.cachedSize, nil
-	}
+	size, _, err := r.size()
+	return size, err
+}
 
-	if !r.options.SizeAlwaysFromResource {
-		exists, header := r.Cache.Exists(r.CacheKey)
-		if exists {
-			r.cachedSize = header.Size
-			r.cachedSizeAccurateCached = true
-			r.cachedSizeAccurate = true
-			return r.cachedSize, nil
-		}
-	}
-
-	// Fetching size from the underlying resource
-	size, err := r.UnderlyingResource.Size()
+// Size is exact once the content sits in the cache, since the cache header then
+// records what was actually stored.
+func (r *FullCacheResource) Size() (int64, error) {
+	size, exact, err := r.size()
 	if err != nil {
-		return 0, fmt.Errorf("failed getting size from underlying resource: %w", err)
+		return 0, err
+	}
+	if !exact {
+		return 0, resource.ErrSizeNotExact
 	}
 
-	r.cachedSize = size
 	return size, nil
 }
 
-// IsSizeAccurate checks if the underlying reader supports accurate size reporting.
-func (r *FullCacheResource) IsSizeAccurate() bool {
+func (r *FullCacheResource) size() (size int64, exact bool, err error) {
 	mu := keyMutex(r.CacheKey)
 	mu.Lock()
 	defer mu.Unlock()
 
-	sizeAccurateResource, ok := r.UnderlyingResource.(resource.SizeAccurateResource)
-	if !ok {
-		// If it doesnt support it, default to true
-		return true
-	}
-
-	if r.cachedSizeAccurateCached {
-		return r.cachedSizeAccurate
+	if r.cachedSizeExact {
+		return r.cachedSize, true, nil
 	}
 
 	if !r.options.SizeAlwaysFromResource {
-		exists, header := r.Cache.Exists(r.CacheKey)
-		if exists {
+		if exists, header := r.Cache.Exists(r.CacheKey); exists {
 			r.cachedSize = header.Size
-			r.cachedSizeAccurateCached = true
-			r.cachedSizeAccurate = true
-			return r.cachedSizeAccurate
+			r.cachedSizeExact = true
+			return r.cachedSize, true, nil
 		}
 	}
 
-	// Get from underlying
-	r.cachedSizeAccurate = sizeAccurateResource.IsSizeAccurate()
-	r.cachedSizeAccurateCached = true
-	return r.cachedSizeAccurate
+	// Not cached yet, so only the underlying resource can answer
+	if sized, ok := r.UnderlyingResource.(resource.Sized); ok {
+		if size, err := sized.Size(); err == nil {
+			r.cachedSize = size
+			r.cachedSizeExact = true
+			return size, true, nil
+		} else if !errors.Is(err, resource.ErrSizeNotExact) {
+			return 0, false, fmt.Errorf("failed getting size from underlying resource: %w", err)
+		}
+	}
+
+	if r.cachedSize >= 0 {
+		return r.cachedSize, false, nil
+	}
+
+	size, err = r.UnderlyingResource.SizeHint()
+	if err != nil {
+		return 0, false, fmt.Errorf("failed getting size-hint from underlying resource: %w", err)
+	}
+
+	r.cachedSize = size
+	return size, false, nil
 }
 
 func (r *FullCacheResourceReader) Close() error {
@@ -165,18 +166,18 @@ func (r *FullCacheResourceReader) Seek(offset int64, whence int) (int64, error) 
 	case io.SeekCurrent:
 		newIndex = r.index + offset
 	case io.SeekEnd:
-		// If size not accurate, needs to trigger read to get accurate size
-		if !r.resource.IsSizeAccurate() {
-			_, err := io.CopyN(io.Discard, r, 1)
-			if err != nil {
+		resourceSize, err := r.resource.Size()
+		if errors.Is(err, resource.ErrSizeNotExact) {
+			// Only reading the content settles the size
+			if _, err := io.CopyN(io.Discard, r, 1); err != nil {
 				return 0, fmt.Errorf("failed reading from underlying reader: %w", err)
 			}
+			resourceSize, err = r.resource.Size()
 		}
-		resourceSize, err := r.resource.Size()
 		if err != nil {
 			return 0, err
 		}
-		newIndex = resourceSize - offset
+		newIndex = resourceSize + offset
 	default:
 		return 0, resource.ErrInvalidSeek
 	}
@@ -249,8 +250,7 @@ func (r *FullCacheResourceReader) openCacheFile() error {
 
 	r.cacheFile = file
 	r.resource.cachedSize = size
-	r.resource.cachedSizeAccurate = true
-	r.resource.cachedSizeAccurateCached = true
+	r.resource.cachedSizeExact = true
 
 	return nil
 }

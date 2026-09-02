@@ -7,7 +7,7 @@ import (
 
 type Openable interface {
 	Open() (io.ReadSeekCloser, error)
-	Size() (int64, error)
+	SizeHint() (int64, error)
 }
 
 type Presenter interface {

@@ -21,7 +21,7 @@ func TestParallelMergerResource(t *testing.T) {
 
 	merger := parallelmergerresource.NewParallelMergerResource(resources)
 
-	size, err := merger.Size()
+	size, err := merger.SizeHint()
 	if err != nil {
 		t.Errorf("failed get Size() %v", err)
 	}

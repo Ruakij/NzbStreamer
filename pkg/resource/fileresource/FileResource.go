@@ -33,6 +33,10 @@ func (r *FileResource) Open() (io.ReadSeekCloser, error) {
 	return reader, nil
 }
 
+func (r *FileResource) SizeHint() (int64, error) {
+	return r.Size()
+}
+
 func (r *FileResource) Size() (size int64, err error) {
 	var file http.File
 	if r.Options.Filesystem != nil {

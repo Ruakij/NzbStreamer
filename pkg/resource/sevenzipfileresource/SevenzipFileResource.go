@@ -71,7 +71,7 @@ func (r *SevenzipFileResource) open() (*SevenzipFileResourceReader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed opening underlying resource: %w", err)
 	}
-	size, err := r.resource.Size()
+	size, err := r.resource.SizeHint()
 	if err != nil {
 		return nil, fmt.Errorf("failed getting size from underlying resource: %w", err)
 	}
@@ -106,13 +106,23 @@ func (r *SevenzipFileResource) GetFiles() (map[string]fs.FileInfo, error) {
 	return fileInfos, nil
 }
 
-func (r *SevenzipFileResource) Size() (int64, error) {
+func (r *SevenzipFileResource) SizeHint() (int64, error) {
 	if r.size < 0 {
 		reader, err := r.Open()
 		if err != nil {
 			return 0, err
 		}
 		reader.Close()
+	}
+
+	return r.size, nil
+}
+
+// Size is exact once the archive entry has been read, since 7z records the
+// uncompressed length there.
+func (r *SevenzipFileResource) Size() (int64, error) {
+	if r.size < 0 {
+		return 0, resource.ErrSizeNotExact
 	}
 
 	return r.size, nil

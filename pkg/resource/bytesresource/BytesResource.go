@@ -23,6 +23,10 @@ func (r *BytesResource) Open() (io.ReadSeekCloser, error) {
 	}, nil
 }
 
+func (r *BytesResource) SizeHint() (int64, error) {
+	return r.Size()
+}
+
 func (r *BytesResource) Size() (int64, error) {
 	return int64(len(r.Content)), nil
 }
@@ -51,7 +55,7 @@ func (r *BytesResourceReader) Read(p []byte) (int, error) {
 func (r *BytesResourceReader) Seek(offset int64, whence int) (int64, error) {
 	var newIndex int64
 
-	resourceSize, err := r.resource.Size()
+	resourceSize, err := r.resource.SizeHint()
 	if err != nil {
 		return 0, err
 	}

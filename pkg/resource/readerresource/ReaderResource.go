@@ -22,6 +22,10 @@ func (r *ReaderResource) Open() (io.ReadSeekCloser, error) {
 	return r.reader, nil
 }
 
+func (r *ReaderResource) SizeHint() (int64, error) {
+	return r.Size()
+}
+
 func (r *ReaderResource) Size() (int64, error) {
 	size, err := r.reader.Seek(0, io.SeekEnd)
 	if err != nil {

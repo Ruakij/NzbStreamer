@@ -37,12 +37,16 @@ func (r *TestResource) Open() (io.ReadSeekCloser, error) {
 	}, err
 }
 
-func (r *TestResource) Size() (int64, error) {
+func (r *TestResource) SizeHint() (int64, error) {
 	return r.size, nil
 }
 
-func (r *TestResource) IsSizeAccurate() bool {
-	return r.sizeAccurate
+func (r *TestResource) Size() (int64, error) {
+	if !r.sizeAccurate {
+		return 0, resource.ErrSizeNotExact
+	}
+
+	return r.size, nil
 }
 
 func (r *TestResource) SetFakeSize(size int64) {

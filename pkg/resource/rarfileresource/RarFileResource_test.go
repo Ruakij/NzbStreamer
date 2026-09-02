@@ -15,7 +15,7 @@ var errUnreachable = errors.New("volume was read")
 type unreachableVolume struct{}
 
 func (unreachableVolume) Open() (io.ReadSeekCloser, error) { return nil, errUnreachable }
-func (unreachableVolume) Size() (int64, error)             { return 0, errUnreachable }
+func (unreachableVolume) SizeHint() (int64, error)         { return 0, errUnreachable }
 
 // Stat is answered for every entry of a mount, so it has to come from the
 // header the archive listing already produced, not from opening the archive.

@@ -58,10 +58,10 @@ func (r *AdaptiveParallelMergerResource) Open() (io.ReadSeekCloser, error) {
 	}, nil
 }
 
-func (r *AdaptiveParallelMergerResource) Size() (int64, error) {
+func (r *AdaptiveParallelMergerResource) SizeHint() (int64, error) {
 	var totalSize int64
 	for i, resource := range r.resources {
-		size, err := resource.Size()
+		size, err := resource.SizeHint()
 		if err != nil {
 			return totalSize, fmt.Errorf("failed getting size from resource %d: %w", i, err)
 		}
@@ -152,7 +152,7 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 	for expectedTotalRead < len(p) && r.readerIndex < len(r.readers) {
 		requiredRead := len(p) - expectedTotalRead
 
-		resourceSize, err := r.resource.resources[r.readerIndex].Size()
+		resourceSize, err := r.resource.resources[r.readerIndex].SizeHint()
 		if err != nil {
 			return 0, fmt.Errorf("failed getting size from resource %d: %w", r.readerIndex, err)
 		}
@@ -198,8 +198,7 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 		}
 
 		group.Go(func() error {
-			// Check if resource supports size accuracy reporting
-			sizeAccurateResource, sizeAccurateResourceOk := r.resource.resources[readerIndex].(resource.SizeAccurateResource)
+			sized, isSized := r.resource.resources[readerIndex].(resource.Sized)
 			// TODO: Support writing directly to p if supported (all previous readers also need to have accurate resource)
 			buf := make([]byte, expectedRead)
 			totalN := 0
@@ -217,9 +216,15 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 				n, err = r.readers[readerIndex].Read(buf[totalN:])
 				totalN += n
 
-				// If underlyingResource supports accuracy reporting and its accurate, single read suffices
-				if sizeAccurateResourceOk && sizeAccurateResource.IsSizeAccurate() {
-					break
+				// With an exact size a single read suffices
+				if isSized {
+					_, sizeErr := sized.Size()
+					if sizeErr == nil {
+						break
+					}
+					if !errors.Is(sizeErr, resource.ErrSizeNotExact) {
+						return fmt.Errorf("failed getting size from resource %d: %w", readerIndex, sizeErr)
+					}
 				}
 
 				// Part reads dont require EOF
@@ -419,7 +424,7 @@ func (r *AdaptiveParallelMergerResourceReader) seekForwards(seekAmount int64) er
 			reader := r.readers[readerIndex]
 			resource := r.resource.resources[readerIndex]
 
-			resourceSizeHint, err := resource.Size()
+			resourceSizeHint, err := resource.SizeHint()
 			if err != nil {
 				return fmt.Errorf("failed getting size from resource %d: %w", readerIndex, err)
 			}
@@ -551,7 +556,7 @@ func (r *AdaptiveParallelMergerResourceReader) seekBackwards(seekAmount int64) e
 			reader := r.readers[readerIndex]
 			resource := r.resource.resources[readerIndex]
 
-			resourceSizeHint, err := resource.Size()
+			resourceSizeHint, err := resource.SizeHint()
 			if err != nil {
 				return fmt.Errorf("failed getting size from resource %d: %w", readerIndex, err)
 			}
@@ -672,15 +677,22 @@ func (r *AdaptiveParallelMergerResourceReader) seekToEnd() error {
 	return nil
 }
 
-func (r *AdaptiveParallelMergerResource) IsSizeAccurate() bool {
-	for _, re := range r.resources {
-		if sizeAccurateResource, ok := re.(resource.SizeAccurateResource); ok && sizeAccurateResource.IsSizeAccurate() {
-			if !sizeAccurateResource.IsSizeAccurate() {
-				return false
-			}
-		} else {
-			return false
+// Size is exact only once every part knows its own length, since the total is
+// their sum.
+func (r *AdaptiveParallelMergerResource) Size() (int64, error) {
+	var totalSize int64
+	for i, re := range r.resources {
+		sized, ok := re.(resource.Sized)
+		if !ok {
+			return 0, resource.ErrSizeNotExact
 		}
+
+		size, err := sized.Size()
+		if err != nil {
+			return 0, fmt.Errorf("failed getting size from resource %d: %w", i, err)
+		}
+
+		totalSize += size
 	}
-	return true
+	return totalSize, nil
 }

@@ -376,7 +376,7 @@ func (sf *simpleFile) Size() int64 {
 	if sf.isDir {
 		return 0
 	}
-	size, _ := sf.openable.Size()
+	size, _ := sf.openable.SizeHint()
 	return size
 }
 

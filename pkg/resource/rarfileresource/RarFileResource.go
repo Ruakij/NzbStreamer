@@ -165,12 +165,12 @@ func memberPath(name string) string {
 	return strings.TrimPrefix(path.Clean(name), "/")
 }
 
-func (r *RarFileResource) Size() (int64, error) {
+func (r *RarFileResource) SizeHint() (int64, error) {
 	// Without a member, report the total packed size of the volumes
 	if r.filename == "" {
 		var totalSize int64
 		for i, volume := range r.volumes.volumes {
-			size, err := volume.Size()
+			size, err := volume.SizeHint()
 			if err != nil {
 				return 0, fmt.Errorf("failed getting size from underlying resource %d: %w", i, err)
 			}
@@ -194,6 +194,35 @@ func (r *RarFileResource) Size() (int64, error) {
 
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
+	return r.size, nil
+}
+
+// Size is exact once the members header has been read, since rar records the
+// unpacked length there.
+func (r *RarFileResource) Size() (int64, error) {
+	if r.filename == "" {
+		var totalSize int64
+		for i, volume := range r.volumes.volumes {
+			sized, ok := volume.(resource.Sized)
+			if !ok {
+				return 0, resource.ErrSizeNotExact
+			}
+
+			size, err := sized.Size()
+			if err != nil {
+				return 0, fmt.Errorf("failed getting size from underlying resource %d: %w", i, err)
+			}
+			totalSize += size
+		}
+		return totalSize, nil
+	}
+
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	if r.size < 0 {
+		return 0, resource.ErrSizeNotExact
+	}
+
 	return r.size, nil
 }
 

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 )
 
 // GetSegmentFunc returns the decoded content of one segment. Fetching, decoding
@@ -12,11 +14,13 @@ type GetSegmentFunc func(group, id string) ([]byte, error)
 
 // NzbPostResource allows reading the post-content from a Newsserver
 type NzbPostResource struct {
-	ID            string
-	Group         string
-	SizeHint      int64
-	SizeHintExact bool
-	GetSegment    GetSegmentFunc
+	ID    string
+	Group string
+	// Length is the nzb hint until the segment has been decoded once, which is
+	// what LengthExact reports.
+	Length      int64
+	LengthExact bool
+	GetSegment  GetSegmentFunc
 }
 
 type NzbPostResourceReader struct {
@@ -32,12 +36,16 @@ func (r *NzbPostResource) Open() (io.ReadCloser, error) {
 	}, nil
 }
 
-func (r *NzbPostResource) Size() (int64, error) {
-	return r.SizeHint, nil
+func (r *NzbPostResource) SizeHint() (int64, error) {
+	return r.Length, nil
 }
 
-func (r *NzbPostResource) IsSizeAccurate() bool {
-	return r.SizeHintExact
+func (r *NzbPostResource) Size() (int64, error) {
+	if !r.LengthExact {
+		return 0, resource.ErrSizeNotExact
+	}
+
+	return r.Length, nil
 }
 
 func (r *NzbPostResourceReader) Close() error {
@@ -70,10 +78,8 @@ func (r *NzbPostResourceReader) loadPostFromServer() error {
 	}
 
 	// The nzb only hinted at the size; now it is known
-	if size := int64(len(body)); size != r.resource.SizeHint {
-		r.resource.SizeHint = size
-		r.resource.SizeHintExact = true
-	}
+	r.resource.Length = int64(len(body))
+	r.resource.LengthExact = true
 
 	r.dataReader = bytes.NewReader(body)
 

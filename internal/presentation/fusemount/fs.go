@@ -88,7 +88,7 @@ func (n *dirNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOu
 var _ = fs.NodeGetattrer((*fileNode)(nil))
 
 func (n *fileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	size, err := n.openable.Size()
+	size, err := n.openable.SizeHint()
 	if err != nil {
 		return syscall.EIO
 	}
@@ -203,7 +203,7 @@ type FileSystem struct {
 var _ = presentation.Presenter((*FileSystem)(nil))
 
 func (fsManager *FileSystem) AddFile(fullpath string, modTime time.Time, openable presentation.Openable) error {
-	size, err := openable.Size()
+	size, err := openable.SizeHint()
 	if err != nil {
 		return fmt.Errorf("adding file failed: %w", err)
 	}

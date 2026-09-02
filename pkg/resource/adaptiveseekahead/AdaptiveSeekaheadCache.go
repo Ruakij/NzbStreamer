@@ -67,8 +67,8 @@ func (r *AdaptiveSeekahead) Open() (io.ReadSeekCloser, error) {
 	}, nil
 }
 
-func (r *AdaptiveSeekahead) Size() (int64, error) {
-	size, err := r.underlyingResource.Size()
+func (r *AdaptiveSeekahead) SizeHint() (int64, error) {
+	size, err := r.underlyingResource.SizeHint()
 	if err != nil {
 		return 0, fmt.Errorf("failed getting size from underlying resource: %w", err)
 	}

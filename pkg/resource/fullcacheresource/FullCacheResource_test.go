@@ -23,7 +23,7 @@ func (r *countingResource) Open() (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(r.content)), nil
 }
 
-func (r *countingResource) Size() (int64, error) { return int64(len(r.content)), nil }
+func (r *countingResource) SizeHint() (int64, error) { return int64(len(r.content)), nil }
 
 func newTestResource(t *testing.T, key string, content []byte) (*fullcacheresource.FullCacheResource, *countingResource, *diskcache.Cache) {
 	t.Helper()

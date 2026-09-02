@@ -59,7 +59,7 @@ type volumeFile struct {
 }
 
 func (f *volumeFile) Stat() (fs.FileInfo, error) {
-	size, err := f.resource.Size()
+	size, err := f.resource.SizeHint()
 	if err != nil {
 		return nil, fmt.Errorf("failed getting size of volume %s: %w", f.name, err)
 	}

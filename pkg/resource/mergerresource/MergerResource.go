@@ -48,10 +48,10 @@ func (r *MergerResource) Open() (io.ReadSeekCloser, error) {
 	}, nil
 }
 
-func (r *MergerResource) Size() (int64, error) {
+func (r *MergerResource) SizeHint() (int64, error) {
 	var totalSize int64
 	for i, resource := range r.resources {
-		size, err := resource.Size()
+		size, err := resource.SizeHint()
 		if err != nil {
 			return totalSize, fmt.Errorf("failed getting size from underlying resource %d: %w", i, err)
 		}
@@ -109,7 +109,7 @@ func (r *MergerResourceReader) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekCurrent:
 		newIndex = r.index + offset
 	case io.SeekEnd:
-		resourceSize, err := r.resource.Size()
+		resourceSize, err := r.resource.SizeHint()
 		if err != nil {
 			return 0, err
 		}

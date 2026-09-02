@@ -52,10 +52,10 @@ func (r *ParallelMergerResource) Open() (io.ReadSeekCloser, error) {
 	}, nil
 }
 
-func (r *ParallelMergerResource) Size() (int64, error) {
+func (r *ParallelMergerResource) SizeHint() (int64, error) {
 	var totalSize int64
 	for i, resource := range r.resources {
-		size, err := resource.Size()
+		size, err := resource.SizeHint()
 		if err != nil {
 			return totalSize, fmt.Errorf("failed getting size from underlying resource %d: %w", i, err)
 		}
@@ -82,7 +82,7 @@ func (r *ParallelMergerResourceReader) Read(p []byte) (int, error) {
 	readResponses := make([]*readResponse, 0, 1)
 
 	for r.readerIndex < len(r.readers) {
-		resourceSize, err := r.resource.resources[r.readerIndex].Size()
+		resourceSize, err := r.resource.resources[r.readerIndex].SizeHint()
 		if err != nil {
 			return 0, fmt.Errorf("failed getting size from underlying resource %d: %w", r.readerIndex, err)
 		}
@@ -167,7 +167,7 @@ func (r *ParallelMergerResourceReader) Close() error {
 }
 
 func (r *ParallelMergerResourceReader) Seek(offset int64, whence int) (int64, error) {
-	resourceSize, err := r.resource.Size()
+	resourceSize, err := r.resource.SizeHint()
 	if err != nil {
 		return 0, err
 	}
@@ -222,7 +222,7 @@ func (r *ParallelMergerResourceReader) getReaderIndexAndByteIndexAtByteIndex(ind
 	var byteIndex int64 = 0
 	for readerIndex := range r.readers {
 		resource := r.resource.resources[readerIndex]
-		size, err := resource.Size()
+		size, err := resource.SizeHint()
 		if err != nil {
 			return 0, 0, fmt.Errorf("failed getting size from underlying resource %d: %w", readerIndex, err)
 		}
