@@ -1,11 +1,11 @@
 package folderwatcher
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +16,8 @@ import (
 )
 
 var logger = slog.With("Module", "FolderWatcher")
+
+var ErrUnknownListener = errors.New("unknown listener id")
 
 // FolderWatcher notifies listeners about new files in directory
 type folderWatcher struct {
@@ -168,6 +170,9 @@ func (fw *folderWatcher) processFile(filename string) {
 	}
 
 	for _, hook := range fw.addHooks {
+		if hook == nil {
+			continue
+		}
 		err := hook(nzbData)
 		if err != nil {
 			logger.Error("Error executing hook:", "filename", filename, "err", err)
@@ -193,8 +198,14 @@ func (fw *folderWatcher) RemoveListener(listenerID int) error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
-	_ = slices.Delete(fw.addHooks, listenerID, listenerID)
-	_ = slices.Delete(fw.removeHooks, listenerID, listenerID)
+	if listenerID < 0 || listenerID >= len(fw.addHooks) {
+		return fmt.Errorf("%w: %d", ErrUnknownListener, listenerID)
+	}
+
+	// Clear the slot rather than removing it, so the ids handed out earlier keep
+	// pointing at the same listener
+	fw.addHooks[listenerID] = nil
+	fw.removeHooks[listenerID] = nil
 
 	return nil
 }
