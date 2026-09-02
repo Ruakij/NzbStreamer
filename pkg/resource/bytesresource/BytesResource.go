@@ -31,9 +31,9 @@ func (r *BytesResource) Size() (int64, error) {
 	return int64(len(r.Content)), nil
 }
 
+// Close releases nothing: the content belongs to the resource, which outlives
+// every reader of it and may be opened again.
 func (r *BytesResourceReader) Close() error {
-	r.resource.Content = nil
-	r.resource = nil
 	return nil
 }
 
