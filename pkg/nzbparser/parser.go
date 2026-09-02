@@ -58,20 +58,7 @@ func ParseNzb(inputStream io.Reader) (*NzbData, error) {
 			nzb.Meta["Name"] = nzb.Meta["Title"]
 		} else {
 			// lastly try to guess it via file
-			// Prefer having a dot in basename
-			for i := range nzb.Files {
-				file := &nzb.Files[i]
-
-				baseFilename := getBaseFilename(file.Filename)
-				if strings.Contains(baseFilename, ".") {
-					nzb.Meta["Name"] = baseFilename
-				}
-			}
-			// Take any if there still no match
-			if _, ok := nzb.Meta["Name"]; !ok {
-				baseFilename := getBaseFilename(nzb.Files[0].Filename)
-				nzb.Meta["Name"] = baseFilename
-			}
+			nzb.Meta["Name"] = guessName(nzb.Files)
 		}
 	}
 	nzb.MetaName = nzb.Meta["Name"]
