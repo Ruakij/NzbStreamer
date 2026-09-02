@@ -3,6 +3,7 @@ package adaptiveparallelmergerresource_test
 import (
 	"bytes"
 	"io"
+	"sync/atomic"
 	"testing"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
@@ -380,5 +381,89 @@ func TestSeekBackward(t *testing.T) {
 	if string(data) != "lo" {
 		t.Errorf("expected 'lo', got: %s", data)
 		return
+	}
+}
+
+// countingSeekEndResource counts the Seek(0, io.SeekEnd) its readers get, which
+// for a real segment is what triggers a download.
+type countingSeekEndResource struct {
+	content    []byte
+	seekEnds   *atomic.Int64
+	underlying resource.ReadSeekCloseableResource
+}
+
+type countingSeekEndReader struct {
+	resource *countingSeekEndResource
+	reader   io.ReadSeekCloser
+}
+
+func newCountingSeekEndResource(data []byte, seekEnds *atomic.Int64) *countingSeekEndResource {
+	return &countingSeekEndResource{
+		content:    data,
+		seekEnds:   seekEnds,
+		underlying: &bytesresource.BytesResource{Content: data},
+	}
+}
+
+func (r *countingSeekEndResource) Open() (io.ReadSeekCloser, error) {
+	reader, err := r.underlying.Open()
+	return &countingSeekEndReader{resource: r, reader: reader}, err
+}
+
+func (r *countingSeekEndResource) SizeHint() (int64, error) { return r.Size() }
+func (r *countingSeekEndResource) Size() (int64, error)     { return int64(len(r.content)), nil }
+
+func (r *countingSeekEndReader) Close() error               { return r.reader.Close() }
+func (r *countingSeekEndReader) Read(p []byte) (int, error) { return r.reader.Read(p) }
+
+func (r *countingSeekEndReader) Seek(offset int64, whence int) (int64, error) {
+	if whence == io.SeekEnd {
+		r.resource.seekEnds.Add(1)
+	}
+	return r.reader.Seek(offset, whence)
+}
+
+func TestSeekAsksResourcesThatKnowTheirSize(t *testing.T) {
+	t.Parallel()
+
+	var seekEnds atomic.Int64
+	resources := []resource.ReadSeekCloseableResource{
+		newCountingSeekEndResource([]byte("Hel"), &seekEnds),
+		newCountingSeekEndResource([]byte("lo"), &seekEnds),
+		newCountingSeekEndResource([]byte("World"), &seekEnds),
+	}
+
+	readSeeker, err := adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(resources).Open()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer readSeeker.Close()
+
+	offset, err := readSeeker.Seek(0, io.SeekEnd)
+	if err != nil {
+		t.Fatalf("failed to SeekEnd: %v", err)
+	}
+	if offset != 10 {
+		t.Errorf("expected offset 10, got %d", offset)
+	}
+
+	offset, err = readSeeker.Seek(4, io.SeekStart)
+	if err != nil {
+		t.Fatalf("failed to SeekStart: %v", err)
+	}
+	if offset != 4 {
+		t.Errorf("expected offset 4, got %d", offset)
+	}
+
+	data, err := io.ReadAll(readSeeker)
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+	if string(data) != "oWorld" {
+		t.Errorf("expected content oWorld, got %s", data)
+	}
+
+	if n := seekEnds.Load(); n != 0 {
+		t.Errorf("expected no reader to be seeked to its end, got %d", n)
 	}
 }

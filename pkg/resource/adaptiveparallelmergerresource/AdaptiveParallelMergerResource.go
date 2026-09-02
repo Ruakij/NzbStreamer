@@ -71,6 +71,28 @@ func (r *AdaptiveParallelMergerResource) SizeHint() (int64, error) {
 	return totalSize, nil
 }
 
+// partSize is the length of resource i. A resource that knows it exactly answers
+// for free; the rest have to be seeked to their end, which for an uncached
+// segment means downloading it.
+func (r *AdaptiveParallelMergerResourceReader) partSize(i int) (int64, error) {
+	if sized, ok := r.resource.resources[i].(resource.Sized); ok {
+		size, err := sized.Size()
+		if err == nil {
+			return size, nil
+		}
+		if !errors.Is(err, resource.ErrSizeNotExact) {
+			return 0, fmt.Errorf("failed getting size from resource %d: %w", i, err)
+		}
+	}
+
+	size, err := r.readers[i].Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, fmt.Errorf("failed seeking resource %d to end: %w", i, err)
+	}
+
+	return size, nil
+}
+
 type readResponse struct {
 	index           int
 	readerIndex     int
@@ -414,7 +436,6 @@ func (r *AdaptiveParallelMergerResourceReader) seekForwards(seekAmount int64) er
 
 	for totalSeeked < seekAmount && readerIndex < len(r.readers) {
 		for expectedTotalSeek < seekAmount && readerIndex < len(r.readers) {
-			reader := r.readers[readerIndex]
 			resource := r.resource.resources[readerIndex]
 
 			resourceSizeHint, err := resource.SizeHint()
@@ -438,7 +459,7 @@ func (r *AdaptiveParallelMergerResourceReader) seekForwards(seekAmount int64) er
 			localReaderIndex := readerIndex
 			localReaderByteIndex := readerByteIndex
 			r.readerGroup.Go(func() error {
-				size, err := reader.Seek(0, io.SeekEnd)
+				size, err := r.partSize(localReaderIndex)
 
 				responsesLock.RLock()
 				responses[localIndex] = &seekResponse{
@@ -546,7 +567,6 @@ func (r *AdaptiveParallelMergerResourceReader) seekBackwards(seekAmount int64) e
 
 	for (totalSeeked < seekAmount && readerIndex >= 0) || processIndex < len(responses) {
 		for expectedTotalSeek < seekAmount && readerIndex >= 0 {
-			reader := r.readers[readerIndex]
 			resource := r.resource.resources[readerIndex]
 
 			resourceSizeHint, err := resource.SizeHint()
@@ -566,7 +586,7 @@ func (r *AdaptiveParallelMergerResourceReader) seekBackwards(seekAmount int64) e
 			localIndex := index
 			localReaderIndex := readerIndex
 			r.readerGroup.Go(func() error {
-				size, err := reader.Seek(0, io.SeekEnd)
+				size, err := r.partSize(localReaderIndex)
 
 				responsesLock.RLock()
 				responses[localIndex] = &seekResponse{
@@ -643,15 +663,18 @@ func (r *AdaptiveParallelMergerResourceReader) seekToEnd() error {
 
 	for i := r.readerIndex; i < len(r.readers); i++ {
 		r.readerGroup.Go(func() error {
-			size, err := r.readers[i].Seek(0, io.SeekEnd)
+			size, err := r.partSize(i)
 			if err != nil {
 				//nolint:wrapcheck // Error is handled outside
 				return err
 			}
 			seekAmountAtomic.Add(size)
 
-			// Last reader sets readerByteIndex
+			// Last reader sets readerByteIndex and has to sit where it says
 			if i == len(r.readers)-1 {
+				if _, err := r.readers[i].Seek(size, io.SeekStart); err != nil {
+					return fmt.Errorf("failed seeking resource %d to %d: %w", i, size, err)
+				}
 				r.readerByteIndex = size
 			}
 
