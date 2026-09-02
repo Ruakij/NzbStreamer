@@ -36,14 +36,6 @@ type CacheConfig struct {
 	MaxSize int64  `env:"CACHE_MAX_SIZE, default=0"`  // Maximum cache size in bytes, if unset allows unlimited size (not recommended)
 }
 
-type ReadaheadCacheConfig struct {
-	AvgSpeedTime time.Duration `env:"READAHEAD_CACHE_AVG_SPEED_TIME, default=0.5s"` // Time over which average read speed is calculated
-	Time         time.Duration `env:"READAHEAD_CACHE_TIME, default=1s"`             // Readahead time
-	MinSize      int           `env:"READAHEAD_CACHE_MIN_SIZE, default=1048576"`    // Minimum readahead amount in bytes
-	LowBuffer    int           `env:"READAHEAD_CACHE_LOW_BUFFER, default=1048576"`  // Buffer size that triggers readahead in bytes
-	MaxSize      int           `env:"READAHEAD_CACHE_MAX_SIZE, default=16777216"`   // Maximum readahead amount in bytes; Disables readahead-cache when 0
-}
-
 type PrefetchConfig struct {
 	Time        time.Duration `env:"PREFETCH_TIME, default=1s"`         // How far ahead of the read position to stay warm, in read-time
 	MinSegments int           `env:"PREFETCH_MIN_SEGMENTS, default=8"`  // Segments warmed ahead before a read speed can be measured
@@ -73,14 +65,13 @@ type LoggingConfig struct {
 }
 
 type Config struct {
-	Usenet         UsenetConfig
-	Mount          MountConfig
-	Webdav         WebdavConfig
-	Cache          CacheConfig
-	ReadaheadCache ReadaheadCacheConfig
-	Prefetch       PrefetchConfig
-	NzbConfig      NzbConfig
-	Filesystem     FilesystemConfig
-	FolderWatcher  FolderWatcherConfig
-	Logging        LoggingConfig
+	Usenet        UsenetConfig
+	Mount         MountConfig
+	Webdav        WebdavConfig
+	Cache         CacheConfig
+	Prefetch      PrefetchConfig
+	NzbConfig     NzbConfig
+	Filesystem    FilesystemConfig
+	FolderWatcher FolderWatcherConfig
+	Logging       LoggingConfig
 }

@@ -111,7 +111,6 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 
 	// Setup services
 	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpClient)
-	factory.SetAdaptiveReadaheadCacheSettings(c.ReadaheadCache.AvgSpeedTime, c.ReadaheadCache.Time, c.ReadaheadCache.MinSize, c.ReadaheadCache.LowBuffer, c.ReadaheadCache.MaxSize)
 
 	// store := folderStore.NewFolderStore()
 	store := stubstore.NewStubStore()

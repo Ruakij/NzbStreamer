@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path"
 	"slices"
-	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbfileanalyzer"
@@ -14,7 +13,6 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/adaptiveparallelmergerresource"
-	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/adaptivereadaheadcache"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/fullcacheresource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/nzbpostresource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/rarfileresource"
@@ -24,17 +22,6 @@ import (
 type NzbFileFactory struct {
 	cache      *diskcache.Cache
 	nntpClient *nntpclient.Client
-
-	// Over how much time average speed is calculated
-	adaptiveReadaheadCacheAvgSpeedTime time.Duration
-	// How far ahead to read in time
-	adaptiveReadaheadCacheTime time.Duration
-	// Lowest expected speed					Can help at beginning speeding up
-	adaptiveReadaheadCacheMinSize int
-	// Low-Buffer (When to load more data)		Helps with continuous data-flow
-	adaptiveReadaheadCacheLowBuffer int
-	// Max expected speed + Low-Buffer			Max speed per iteration
-	adaptiveReadaheadCacheMaxSize int
 }
 
 func NewNzbFileFactory(cache *diskcache.Cache, nntpClient *nntpclient.Client) *NzbFileFactory {
@@ -42,14 +29,6 @@ func NewNzbFileFactory(cache *diskcache.Cache, nntpClient *nntpclient.Client) *N
 		cache:      cache,
 		nntpClient: nntpClient,
 	}
-}
-
-func (f *NzbFileFactory) SetAdaptiveReadaheadCacheSettings(adaptiveReadaheadCacheAvgSpeedTime, adaptiveReadaheadCacheTime time.Duration, adaptiveReadaheadCacheMinSize, adaptiveReadaheadCacheLowBuffer, adaptiveReadaheadCacheMaxSize int) {
-	f.adaptiveReadaheadCacheAvgSpeedTime = adaptiveReadaheadCacheAvgSpeedTime
-	f.adaptiveReadaheadCacheTime = adaptiveReadaheadCacheTime
-	f.adaptiveReadaheadCacheMinSize = adaptiveReadaheadCacheMinSize
-	f.adaptiveReadaheadCacheLowBuffer = adaptiveReadaheadCacheLowBuffer
-	f.adaptiveReadaheadCacheMaxSize = adaptiveReadaheadCacheMaxSize
 }
 
 func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData) (map[string]presentation.Openable, error) {
@@ -62,7 +41,7 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData
 		return files, err
 	}
 
-	return f.wrapWithCache(files), nil
+	return files, nil
 }
 
 // buildRawFiles creates the initial map of raw file resources
@@ -131,26 +110,6 @@ func (f *NzbFileFactory) processSpecialFiles(groupFilename string, groupedFiles 
 		}
 	}
 	return err
-}
-
-// wrapWithCache wraps files with adaptive readahead cache if enabled
-func (f *NzbFileFactory) wrapWithCache(files map[string]presentation.Openable) map[string]presentation.Openable {
-	if f.adaptiveReadaheadCacheMaxSize <= 1 {
-		return files
-	}
-
-	wrappedFiles := make(map[string]presentation.Openable, len(files))
-	for path, file := range files {
-		wrappedFiles[path] = adaptivereadaheadcache.NewAdaptiveReadaheadCache(
-			file,
-			f.adaptiveReadaheadCacheAvgSpeedTime,
-			f.adaptiveReadaheadCacheTime,
-			f.adaptiveReadaheadCacheMinSize,
-			f.adaptiveReadaheadCacheMaxSize,
-			f.adaptiveReadaheadCacheLowBuffer,
-		)
-	}
-	return wrappedFiles
 }
 
 func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, sizer nzbfileanalyzer.SegmentSizer) *adaptiveparallelmergerresource.AdaptiveParallelMergerResource {

@@ -122,12 +122,6 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | **Cache**
 | `CACHE_PATH`                      | .cache                 | Path for segment-cache                           |
 | `CACHE_MAX_SIZE`                  | 0                      | Maximum cache size in bytes, if unset allows unlimited size (not recommended) |
-| **Readahead-Cache**
-| `READAHEAD_CACHE_AVG_SPEED_TIME`  | 0.5s                   | Time over which average read speed is calculated |
-| `READAHEAD_CACHE_TIME`            | 1s                     | Readahead time                                   |
-| `READAHEAD_CACHE_MIN_SIZE`        | 1048576                | Minimum readahead amount in bytes                |
-| `READAHEAD_CACHE_LOW_BUFFER`      | 1048576                | Buffer size that triggers readahead in bytes     |
-| `READAHEAD_CACHE_MAX_SIZE`        | 16777216               | Maximum readahead amount in bytes; Disables readahead-cache when 0                |
 | **Prefetch**
 | `PREFETCH_TIME`                   | 1s                     | How far ahead of the read position to stay warm, in read-time |
 | `PREFETCH_MIN_SEGMENTS`           | 8                      | Segments warmed ahead before a read speed can be measured |
@@ -173,7 +167,7 @@ Specially video-files like mkv are problematic as some metadata required for pla
         -   [ ] Unknown sizes
         -   [ ] Periodic rescan
 -   Cache
-    -   [x] Readahead cache
+    -   [x] Segment-prefetch
     -   [x] Segment-Cache
         -   [x] Max Size
         -   [ ] Max TTL
