@@ -6,7 +6,6 @@ import (
 )
 
 type CacheItemHeader struct {
-	lock    *sync.RWMutex
 	ModTime time.Time
 	Size    int64
 }

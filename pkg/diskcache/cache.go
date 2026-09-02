@@ -78,7 +78,6 @@ func (c *Cache) loadExistingItems() error {
 		}
 
 		c.items[file.Name()] = CacheItemHeader{
-			lock:    &sync.RWMutex{},
 			ModTime: info.ModTime(),
 			Size:    info.Size(),
 		}
@@ -100,15 +99,11 @@ func (c *Cache) maxSizeEvict(requiredSpace int64) error {
 			return ErrCouldNotMakeEnoughSpace
 		}
 
-		header, exists := c.items[key]
-		if !exists {
+		if _, exists := c.items[key]; !exists {
 			return ErrItemNotFound
 		}
 
-		header.lock.Lock()
-		err := c.removeFile(key)
-		header.lock.Unlock()
-		if err != nil {
+		if err := c.removeFile(key); err != nil {
 			return err
 		}
 	}
@@ -195,10 +190,7 @@ func (c *Cache) SetWithReader(key string, reader io.Reader) (int64, error) {
 	c.mu.Lock()
 	header, exists := c.items[key]
 	if !exists {
-		header = CacheItemHeader{
-			lock:    &sync.RWMutex{},
-			ModTime: time.Now(),
-		}
+		header = CacheItemHeader{ModTime: time.Now()}
 	}
 	header.Size = totalWritten
 	c.items[key] = header
@@ -216,13 +208,9 @@ func (c *Cache) Remove(key string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	header, exists := c.items[key]
-	if !exists {
+	if _, exists := c.items[key]; !exists {
 		return ErrItemNotFound
 	}
-
-	header.lock.Lock()
-	defer header.lock.Unlock()
 
 	return c.removeFile(key)
 }
@@ -239,52 +227,32 @@ func (c *Cache) removeFile(key string) error {
 	return nil
 }
 
-func (c *Cache) GetWithReader(key string) (io.ReadSeekCloser, *CacheItemHeader, error) {
+// Open returns the item's file and size. Callers may hold the file for as long as
+// they like: eviction only unlinks, so an open descriptor keeps working.
+func (c *Cache) Open(key string) (*os.File, int64, error) {
 	c.mu.Lock()
-
 	header, exists := c.items[key]
 	if !exists {
 		c.mu.Unlock()
-		return nil, nil, ErrItemNotFound
+		return nil, 0, ErrItemNotFound
 	}
-	filePath := filepath.Join(c.options.CacheDir, key)
-
-	header.lock.RLock()
-
-	// Update access-time
 	header.ModTime = time.Now()
 	c.items[key] = header
-
 	c.mu.Unlock()
 
-	// Update access-time on disk
-	err := os.Chtimes(filePath, header.ModTime, header.ModTime)
-	if err != nil {
-		header.lock.RUnlock()
-		return nil, nil, fmt.Errorf("failed changing access&modification times: %w", err)
+	filePath := filepath.Join(c.options.CacheDir, key)
+
+	// Mirror access-time to disk so LRU order survives a restart
+	if err := os.Chtimes(filePath, header.ModTime, header.ModTime); err != nil {
+		return nil, 0, fmt.Errorf("failed changing access&modification times: %w", err)
 	}
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		header.lock.RUnlock()
-		return nil, nil, fmt.Errorf("failed opening file for item '%s': %w", key, err)
+		return nil, 0, fmt.Errorf("failed opening file for item '%s': %w", key, err)
 	}
 
-	return &CacheItemReader{
-		lock:             header.lock,
-		underlyingReader: file,
-	}, &header, nil
-}
-
-func (c *Cache) Get(key string) ([]byte, *CacheItemHeader, error) {
-	reader, header, err := c.GetWithReader(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer reader.Close()
-
-	data, err := io.ReadAll(reader)
-	return data, header, fmt.Errorf("failed reading all data from item '%s': %w", key, err)
+	return file, header.Size, nil
 }
 
 func (c *Cache) Exists(key string) (bool, CacheItemHeader) {

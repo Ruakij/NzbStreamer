@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
@@ -14,6 +15,20 @@ var (
 	mutexMapMutex sync.Mutex             = sync.Mutex{}
 	mutexMap      map[string]*sync.Mutex = make(map[string]*sync.Mutex)
 )
+
+// keyMutex serializes fetch-and-store for a cache-key, so concurrent readers of the
+// same segment download it once.
+func keyMutex(key string) *sync.Mutex {
+	mutexMapMutex.Lock()
+	defer mutexMapMutex.Unlock()
+
+	mu, exists := mutexMap[key]
+	if !exists {
+		mu = &sync.Mutex{}
+		mutexMap[key] = mu
+	}
+	return mu
+}
 
 // FullCacheResource caches underlying Record by fully reading its content into cache
 type FullCacheResource struct {
@@ -32,14 +47,6 @@ type FullCacheResourceOptions struct {
 }
 
 func NewFullCacheResource(underlyingResource resource.ReadCloseableResource, cacheKey string, cache *diskcache.Cache, options *FullCacheResourceOptions) *FullCacheResource {
-	// Create cache-keyed mutex if not exists
-	mutexMapMutex.Lock()
-	_, exists := mutexMap[cacheKey]
-	if !exists {
-		mutexMap[cacheKey] = &sync.Mutex{}
-	}
-	mutexMapMutex.Unlock()
-
 	return &FullCacheResource{
 		UnderlyingResource: underlyingResource,
 		options:            options,
@@ -52,7 +59,9 @@ func NewFullCacheResource(underlyingResource resource.ReadCloseableResource, cac
 type FullCacheResourceReader struct {
 	resource         *FullCacheResource
 	underlyingReader io.ReadCloser
-	index            int64
+	// Cache-file kept open for the readers lifetime; reads are positional, so no seeking
+	cacheFile *os.File
+	index     int64
 }
 
 func (r *FullCacheResource) Open() (io.ReadSeekCloser, error) {
@@ -68,10 +77,7 @@ func (r *FullCacheResource) Open() (io.ReadSeekCloser, error) {
 }
 
 func (r *FullCacheResource) Size() (int64, error) {
-	mutexMapMutex.Lock()
-	mu := mutexMap[r.CacheKey]
-	mutexMapMutex.Unlock()
-
+	mu := keyMutex(r.CacheKey)
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -102,10 +108,7 @@ func (r *FullCacheResource) Size() (int64, error) {
 
 // IsSizeAccurate checks if the underlying reader supports accurate size reporting.
 func (r *FullCacheResource) IsSizeAccurate() bool {
-	mutexMapMutex.Lock()
-	mu := mutexMap[r.CacheKey]
-	mutexMapMutex.Unlock()
-
+	mu := keyMutex(r.CacheKey)
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -136,6 +139,13 @@ func (r *FullCacheResource) IsSizeAccurate() bool {
 }
 
 func (r *FullCacheResourceReader) Close() error {
+	if r.cacheFile != nil {
+		err := r.cacheFile.Close()
+		r.cacheFile = nil
+		if err != nil {
+			return fmt.Errorf("failed closing cache-file: %w", err)
+		}
+	}
 	if r.underlyingReader != nil {
 		err := r.underlyingReader.Close()
 		r.underlyingReader = nil
@@ -192,47 +202,55 @@ func (r *FullCacheResourceReader) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 
-	mutexMapMutex.Lock()
-	mu := mutexMap[r.resource.CacheKey]
-	mutexMapMutex.Unlock()
+	if r.cacheFile == nil {
+		if err := r.openCacheFile(); err != nil {
+			return 0, err
+		}
+	}
 
+	n, err := r.cacheFile.ReadAt(p, r.index)
+	r.index += int64(n)
+
+	return n, err
+}
+
+// openCacheFile ensures the segment is cached and keeps its file open for subsequent reads.
+func (r *FullCacheResourceReader) openCacheFile() error {
+	mu := keyMutex(r.resource.CacheKey)
 	mu.Lock()
 	defer mu.Unlock()
 
-	reader, header, err := r.resource.Cache.GetWithReader(r.resource.CacheKey)
+	file, size, err := r.resource.Cache.Open(r.resource.CacheKey)
 	if errors.Is(err, diskcache.ErrItemNotFound) {
-		n, err := r.resource.Cache.SetWithReader(r.resource.CacheKey, r.underlyingReader)
-		if err != nil {
-			return int(n), err
+		// Item was evicted between reads, or was never fetched
+		if r.underlyingReader == nil {
+			r.underlyingReader, err = r.resource.UnderlyingResource.Open()
+			if err != nil {
+				return fmt.Errorf("failed reopening underlying resource: %w", err)
+			}
+		}
+
+		if _, err := r.resource.Cache.SetWithReader(r.resource.CacheKey, r.underlyingReader); err != nil {
+			return err
 		}
 		// Free resources, we wont need it anymore
 		if err := r.underlyingReader.Close(); err != nil {
-			return 0, fmt.Errorf("failed closing underlying reader: %w", err)
+			return fmt.Errorf("failed closing underlying reader: %w", err)
 		}
 		r.underlyingReader = nil
 
-		reader, header, err = r.resource.Cache.GetWithReader(r.resource.CacheKey)
+		file, size, err = r.resource.Cache.Open(r.resource.CacheKey)
 		if err != nil {
-			return 0, fmt.Errorf("failed getting item from cache immediately after writing: %w", err)
+			return fmt.Errorf("failed getting item from cache immediately after writing: %w", err)
 		}
 	} else if err != nil {
-		return 0, fmt.Errorf("failed getting item from cache: %w", err)
+		return fmt.Errorf("failed getting item from cache: %w", err)
 	}
 
-	defer reader.Close()
-
-	_, err = reader.Seek(r.index, io.SeekStart)
-	if err != nil {
-		return 0, fmt.Errorf("failed seeking cache-reader to %d: %w", r.index, err)
-	}
-
-	n, err := reader.Read(p)
-	r.index += int64(n)
-
-	// Update cachedSize on read
-	r.resource.cachedSize = header.Size
+	r.cacheFile = file
+	r.resource.cachedSize = size
 	r.resource.cachedSizeAccurate = true
 	r.resource.cachedSizeAccurateCached = true
 
-	return n, err
+	return nil
 }
