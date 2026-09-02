@@ -53,7 +53,7 @@ func (f *NzbFileFactory) SetAdaptiveReadaheadCacheSettings(adaptiveReadaheadCach
 }
 
 func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData) (map[string]presentation.Openable, error) {
-	rawFiles := f.buildRawFiles(nzbData)
+	rawFiles := f.buildRawFiles(nzbData, nzbfileanalyzer.NewSegmentSizer(nzbData))
 	groupedFilenames := f.groupFiles(rawFiles)
 
 	files := make(map[string]presentation.Openable, len(rawFiles))
@@ -66,11 +66,11 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData
 }
 
 // buildRawFiles creates the initial map of raw file resources
-func (f *NzbFileFactory) buildRawFiles(nzbData *nzbparser.NzbData) map[string]resource.ReadSeekCloseableResource {
+func (f *NzbFileFactory) buildRawFiles(nzbData *nzbparser.NzbData, sizer nzbfileanalyzer.SegmentSizer) map[string]resource.ReadSeekCloseableResource {
 	rawFiles := make(map[string]resource.ReadSeekCloseableResource, len(nzbData.Files))
 	for i := range nzbData.Files {
 		file := &nzbData.Files[i]
-		rawFiles[file.Filename] = f.BuildFileResourceFromNzbFile(file)
+		rawFiles[file.Filename] = f.BuildFileResourceFromNzbFile(file, sizer)
 	}
 	return rawFiles
 }
@@ -153,18 +153,7 @@ func (f *NzbFileFactory) wrapWithCache(files map[string]presentation.Openable) m
 	return wrappedFiles
 }
 
-func (f *NzbFileFactory) BuildNamedFileResourcesFromNzb(nzbData *nzbparser.NzbData) map[string]resource.ReadSeekCloseableResource {
-	fileResources := make(map[string]resource.ReadSeekCloseableResource, len(nzbData.Files))
-
-	for i := range nzbData.Files {
-		file := &nzbData.Files[i]
-		fileResources[file.Filename] = f.BuildFileResourceFromNzbFile(file)
-	}
-
-	return fileResources
-}
-
-func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File) *adaptiveparallelmergerresource.AdaptiveParallelMergerResource {
+func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, sizer nzbfileanalyzer.SegmentSizer) *adaptiveparallelmergerresource.AdaptiveParallelMergerResource {
 	totalSegments := len(nzbFiles.Segments)
 	cachedSegmentResources := make([]resource.ReadSeekCloseableResource, 0, totalSegments)
 
@@ -175,7 +164,7 @@ func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File) 
 
 	for i := range nzbFiles.Segments {
 		nzbSegment := &nzbFiles.Segments[i]
-		segmentResource := f.BuildResourceFromNzbSegment(nzbSegment, nzbFiles.Groups[0])
+		segmentResource := f.BuildResourceFromNzbSegment(nzbSegment, nzbFiles.Groups[0], sizer)
 		cachedSegmentResource := fullcacheresource.NewFullCacheResource(
 			segmentResource,
 			nzbSegment.ID,
@@ -190,14 +179,8 @@ func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File) 
 	return adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(cachedSegmentResources)
 }
 
-func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbparser.Segment, groups string) *nzbpostresource.NzbPostResource {
-	// Try to get probable size
-	size := nzbfileanalyzer.GetProbableKnownSegmentSize(nzbSegment.BytesHint)
-	sizeExact := (size > 0)
-	if !sizeExact {
-		// Otherwise estimate segment-size (if its not a common size, its probably the yEnc-size, which is slightly bigger)
-		size = nzbfileanalyzer.GetEstimatedSegmentSize(nzbSegment.BytesHint)
-	}
+func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbparser.Segment, groups string, sizer nzbfileanalyzer.SegmentSizer) *nzbpostresource.NzbPostResource {
+	size, sizeExact := sizer.Size(nzbSegment.BytesHint)
 	return &nzbpostresource.NzbPostResource{
 		ID:            nzbSegment.ID,
 		Group:         groups,
