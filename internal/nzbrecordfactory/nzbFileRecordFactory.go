@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"astuart.co/nntp"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbfileanalyzer"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
@@ -23,7 +23,7 @@ import (
 
 type NzbFileFactory struct {
 	cache      *diskcache.Cache
-	nntpClient *nntp.Client
+	nntpClient *nntpclient.Client
 
 	// Over how much time average speed is calculated
 	adaptiveReadaheadCacheAvgSpeedTime time.Duration
@@ -37,7 +37,7 @@ type NzbFileFactory struct {
 	adaptiveReadaheadCacheMaxSize int
 }
 
-func NewNzbFileFactory(cache *diskcache.Cache, nntpClient *nntp.Client) *NzbFileFactory {
+func NewNzbFileFactory(cache *diskcache.Cache, nntpClient *nntpclient.Client) *NzbFileFactory {
 	return &NzbFileFactory{
 		cache:      cache,
 		nntpClient: nntpClient,
@@ -186,7 +186,7 @@ func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbparser.Segme
 		Group:         groups,
 		SizeHint:      int64(size),
 		SizeHintExact: sizeExact,
-		NntpClient:    f.nntpClient,
+		GetSegment:    f.nntpClient.GetSegment,
 	}
 }
 

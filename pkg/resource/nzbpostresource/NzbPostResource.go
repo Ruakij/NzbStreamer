@@ -4,19 +4,19 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-
-	"astuart.co/nntp"
-	"github.com/chrisfarms/yenc"
 )
+
+// GetSegmentFunc returns the decoded content of one segment. Fetching, decoding
+// and retrying all live behind it, so this package needs no news server to test.
+type GetSegmentFunc func(group, id string) ([]byte, error)
 
 // NzbPostResource allows reading the post-content from a Newsserver
 type NzbPostResource struct {
 	ID            string
 	Group         string
-	Encoding      string
 	SizeHint      int64
 	SizeHintExact bool
-	NntpClient    *nntp.Client
+	GetSegment    GetSegmentFunc
 }
 
 type NzbPostResourceReader struct {
@@ -64,24 +64,18 @@ func (r *NzbPostResourceReader) Read(p []byte) (int, error) {
 }
 
 func (r *NzbPostResourceReader) loadPostFromServer() error {
-	res, err := r.resource.NntpClient.GetArticle(r.resource.Group, r.resource.ID)
+	body, err := r.resource.GetSegment(r.resource.Group, r.resource.ID)
 	if err != nil {
-		return fmt.Errorf("failed getting article: %w", err)
-	}
-	defer res.Body.Close()
-
-	part, err := yenc.Decode(res.Body)
-	if err != nil {
-		return fmt.Errorf("failed yenc-decoding body: %w", err)
+		return fmt.Errorf("failed getting segment '%s': %w", r.resource.ID, err)
 	}
 
-	// Update size if differs
-	if part.Size != r.resource.SizeHint {
-		r.resource.SizeHint = part.Size
+	// The nzb only hinted at the size; now it is known
+	if size := int64(len(body)); size != r.resource.SizeHint {
+		r.resource.SizeHint = size
 		r.resource.SizeHintExact = true
 	}
 
-	r.dataReader = bytes.NewReader(part.Body)
+	r.dataReader = bytes.NewReader(body)
 
 	return nil
 }

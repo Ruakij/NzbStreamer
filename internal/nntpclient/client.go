@@ -1,0 +1,386 @@
+// Package nntpclient talks to a news server: it owns the connection pool and
+// turns a segments message-id into its decoded content.
+package nntpclient
+
+import (
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"strconv"
+	"time"
+
+	"astuart.co/nntp"
+	"github.com/chrisfarms/yenc"
+)
+
+const (
+	groupJoined     = 211
+	articleExists   = 223
+	noArticleWithID = 430
+)
+
+var (
+	ErrAuthFailed         = errors.New("auth failed")
+	ErrArticleNotFound    = errors.New("article not found on server")
+	ErrUnexpectedResponse = errors.New("unexpected response")
+)
+
+// errStaleConn marks a command that failed on a connection taken from the idle
+// pool. News servers close idle connections without saying so, and tcp only
+// reports it when the connection is next written to, so this is the expected
+// outcome of a pause in reading rather than a failure of the request.
+var errStaleConn = errors.New("reused connection failed")
+
+// staleIf marks a command that failed on a connection taken from the idle pool.
+func staleIf(reused bool, err error) error {
+	if !reused {
+		return err
+	}
+	return fmt.Errorf("%w: %w", errStaleConn, err)
+}
+
+type Config struct {
+	Host string
+	Port int
+	TLS  bool
+	User string
+	Pass string
+	// MaxConns bounds how many connections exist at once
+	MaxConns int
+	// Attempts a request gets before its error is reported
+	Attempts int
+	// Backoff waited after the first failed attempt, doubled after each further one
+	Backoff time.Duration
+	// Timeout for connecting and for completing a single request
+	Timeout time.Duration
+	// IdleTimeout after which an unused connection is closed; 0 keeps them open
+	IdleTimeout time.Duration
+}
+
+// Client is a pool of news server connections.
+//
+// It keeps its own pool rather than using the one in astuart.co/nntp, which
+// counts connections it hands out but never counts them back in, so a
+// connection lost to a failed command is a slot lost for the rest of the
+// process. Retrying makes that a matter of minutes.
+type Client struct {
+	config Config
+	dial   func() (*conn, error)
+	// idle holds connections that are ready for a command
+	idle chan *conn
+	// slots holds one token per connection the client is allowed to have open
+	slots chan struct{}
+}
+
+func New(config Config) *Client {
+	if config.MaxConns < 1 {
+		config.MaxConns = 1
+	}
+	if config.Attempts < 1 {
+		config.Attempts = 1
+	}
+
+	client := &Client{
+		config: config,
+		idle:   make(chan *conn, config.MaxConns),
+		slots:  make(chan struct{}, config.MaxConns),
+	}
+	client.dial = client.dialServer
+	for range config.MaxConns {
+		client.slots <- struct{}{}
+	}
+
+	if config.IdleTimeout > 0 {
+		go client.reapIdle()
+	}
+	return client
+}
+
+// reapIdle closes connections that have sat unused past IdleTimeout, so a burst
+// of reads does not hold connections open against the accounts limit for the
+// rest of the process. The next request dials again, which costs a handshake.
+func (c *Client) reapIdle() {
+	for {
+		time.Sleep(c.config.IdleTimeout / 2)
+
+		// idle is fifo and release stamps on the way in, so the head is the
+		// oldest connection and the first young one ends the pass
+		for done := false; !done; {
+			select {
+			case cn := <-c.idle:
+				if time.Since(cn.lastUsed) < c.config.IdleTimeout {
+					c.idle <- cn
+					done = true
+					continue
+				}
+				// its slot went back at release, so closing only lowers the
+				// number of connections that exist
+				cn.net.Close()
+
+			default:
+				done = true
+			}
+		}
+	}
+}
+
+// GetSegment fetches an article by message-id and yenc-decodes it.
+//
+// Fetch and decode are one operation because a body cut short by a dropped
+// connection only shows up as a decode failure, and that is exactly the case
+// worth another attempt.
+func (c *Client) GetSegment(group, id string) ([]byte, error) {
+	var body []byte
+	err := c.retry("getting segment "+id, func() error {
+		var err error
+		body, err = c.getSegment(group, id)
+		return err
+	})
+	return body, err
+}
+
+// SegmentExists reports whether an article is present without transferring its
+// body. STAT addressed by message-id needs no group selection (RFC 3977 6.2.4),
+// so any connection can serve it.
+func (c *Client) SegmentExists(id string) (bool, error) {
+	var exists bool
+	err := c.retry("stating segment "+id, func() error {
+		var err error
+		exists, err = c.segmentExists(id)
+		return err
+	})
+	return exists, err
+}
+
+// retry runs op until it succeeds or the attempts run out, waiting a doubling
+// backoff in between. A missing article is the servers final answer and is
+// reported as it is.
+func (c *Client) retry(what string, op func() error) error {
+	var err error
+	backoff := c.config.Backoff
+	replacedStale := false
+
+	for attempt := 0; attempt < c.config.Attempts; {
+		err = op()
+		if err == nil || errors.Is(err, ErrArticleNotFound) {
+			return err
+		}
+
+		// A connection the server closed while it sat idle is not a failed
+		// request. It is only ever discovered by using one, and the next attempt
+		// opens a fresh one, so it costs neither an attempt nor a wait. Once per
+		// request, because a second one means the failure is real.
+		if errors.Is(err, errStaleConn) && !replacedStale {
+			replacedStale = true
+			continue
+		}
+
+		attempt++
+		if attempt < c.config.Attempts {
+			slog.Debug("Retrying nntp request", "operation", what, "attempt", attempt, "error", err)
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+
+	return fmt.Errorf("%s failed after %d attempts: %w", what, c.config.Attempts, err)
+}
+
+func (c *Client) getSegment(group, id string) ([]byte, error) {
+	cn, reused, err := c.acquire()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := cn.selectGroup(group); err != nil {
+		c.drop(cn)
+		return nil, staleIf(reused, err)
+	}
+
+	res, err := cn.Do("ARTICLE <%s>", id)
+	if err != nil {
+		c.drop(cn)
+		return nil, staleIf(reused, fmt.Errorf("failed requesting article '%s': %w", id, err))
+	}
+	if res.Code == noArticleWithID {
+		c.release(cn)
+		return nil, fmt.Errorf("%w: '%s'", ErrArticleNotFound, id)
+	}
+	if res.Body == nil {
+		c.drop(cn)
+		return nil, fmt.Errorf("%w to article '%s': %d %s", ErrUnexpectedResponse, id, res.Code, res.Message)
+	}
+
+	part, err := yenc.Decode(res.Body)
+	if err != nil {
+		c.drop(cn)
+		return nil, fmt.Errorf("failed yenc-decoding article '%s': %w", id, err)
+	}
+
+	// The decoder stops at the yenc trailer, which sits before the terminator of
+	// the nntp response; a connection is only reusable once that is consumed too
+	if _, err := io.Copy(io.Discard, res.Body); err != nil {
+		c.drop(cn)
+		return nil, fmt.Errorf("failed draining article '%s': %w", id, err)
+	}
+
+	c.release(cn)
+	return part.Body, nil
+}
+
+func (c *Client) segmentExists(id string) (bool, error) {
+	cn, reused, err := c.acquire()
+	if err != nil {
+		return false, err
+	}
+
+	res, err := cn.Do("STAT <%s>", id)
+	if err != nil {
+		c.drop(cn)
+		return false, staleIf(reused, fmt.Errorf("failed stat for '%s': %w", id, err))
+	}
+	c.release(cn)
+
+	switch res.Code {
+	case articleExists:
+		return true, nil
+	case noArticleWithID:
+		return false, nil
+	default:
+		return false, fmt.Errorf("%w to stat '%s': %d %s", ErrUnexpectedResponse, id, res.Code, res.Message)
+	}
+}
+
+// acquire takes a connection slot and fills it with an idle connection or a new
+// one, reporting which. The slot is held until release or drop, which is what
+// bounds the client to MaxConns.
+func (c *Client) acquire() (cn *conn, reused bool, err error) {
+	<-c.slots
+
+	select {
+	case cn = <-c.idle:
+		reused = true
+
+	default:
+		cn, err = c.dial()
+		if err != nil {
+			c.slots <- struct{}{}
+			return nil, false, err
+		}
+	}
+
+	cn.deadline(c.config.Timeout)
+	return cn, reused, nil
+}
+
+// release returns a connection whose last response was read to its end, so the
+// next command on it lines up with the next response.
+func (c *Client) release(cn *conn) {
+	cn.lastUsed = time.Now()
+	c.idle <- cn
+	c.slots <- struct{}{}
+}
+
+// drop closes a connection whose position in the response stream is unknown.
+// Reusing one would read the remains of the previous response as the next one.
+func (c *Client) drop(cn *conn) {
+	cn.net.Close()
+	c.slots <- struct{}{}
+}
+
+func (c *Client) dialServer() (*conn, error) {
+	address := net.JoinHostPort(c.config.Host, strconv.Itoa(c.config.Port))
+
+	dialer := &net.Dialer{Timeout: c.config.Timeout}
+
+	var netConn net.Conn
+	var err error
+	if c.config.TLS {
+		netConn, err = tls.DialWithDialer(dialer, "tcp", address, nil)
+	} else {
+		netConn, err = dialer.Dial("tcp", address)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed connecting to %s: %w", address, err)
+	}
+
+	// The handshake reads the servers welcome line, so it needs a deadline of
+	// its own; acquire sets the one that covers the request itself
+	cn := &conn{net: netConn}
+	cn.deadline(c.config.Timeout)
+
+	_, nntpConn, err := nntp.NewConn(netConn)
+	if err != nil {
+		netConn.Close()
+		return nil, fmt.Errorf("failed nntp handshake with %s: %w", address, err)
+	}
+	cn.Conn = nntpConn
+
+	if c.config.User != "" {
+		if err := cn.authenticate(c.config.User, c.config.Pass); err != nil {
+			netConn.Close()
+			return nil, err
+		}
+	}
+	return cn, nil
+}
+
+// conn is a connection plus the group it currently has selected.
+type conn struct {
+	*nntp.Conn
+	net      net.Conn
+	group    string
+	lastUsed time.Time
+}
+
+// deadline bounds one request. Without it a server that accepts a command and
+// then says nothing holds its slot for as long as the process runs, which is
+// worse than the connection being lost outright.
+func (c *conn) deadline(timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+	c.net.SetDeadline(time.Now().Add(timeout))
+}
+
+// selectGroup issues GROUP only when the connection is not already on it.
+func (c *conn) selectGroup(group string) error {
+	if group == "" || c.group == group {
+		return nil
+	}
+
+	res, err := c.Do("GROUP %s", group)
+	if err != nil {
+		return fmt.Errorf("failed selecting group '%s': %w", group, err)
+	}
+	if res.Code != groupJoined {
+		return fmt.Errorf("%w to group '%s': %d %s", ErrUnexpectedResponse, group, res.Code, res.Message)
+	}
+
+	c.group = group
+	return nil
+}
+
+// authenticate performs AUTHINFO. nntp.Conn.Auth reports success for a password
+// the server rejected, so the response codes are checked here.
+func (c *conn) authenticate(user, pass string) error {
+	res, err := c.Do("AUTHINFO USER %s", user)
+	if err != nil {
+		return fmt.Errorf("failed sending username: %w", err)
+	}
+
+	if res.Code == nntp.PasswordNeeded {
+		res, err = c.Do("AUTHINFO PASS %s", pass)
+		if err != nil {
+			return fmt.Errorf("failed sending password: %w", err)
+		}
+	}
+
+	if res.Code != nntp.AuthAccepted {
+		return fmt.Errorf("%w: %d %s", ErrAuthFailed, res.Code, res.Message)
+	}
+	return nil
+}

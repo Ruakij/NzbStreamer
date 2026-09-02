@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/filehealth"
-	nntp "git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore/stubstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
@@ -61,11 +61,19 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	slog.SetLogLoggerLevel(c.Logging.Level)
 
 	// Setup nntpClient
-	nntpClient, err := nntp.SetupNntpClient(c.Usenet.Host, c.Usenet.Port, c.Usenet.TLS, c.Usenet.User, c.Usenet.Password, c.Usenet.MaxConn)
-	if err != nil {
-		slog.Error("Setup Usenet-Client failed", "error", err)
-		os.Exit(1)
-	}
+	nntpClient := nntpclient.New(nntpclient.Config{
+		Host:     c.Usenet.Host,
+		Port:     c.Usenet.Port,
+		TLS:      c.Usenet.TLS,
+		User:     c.Usenet.User,
+		Pass:     c.Usenet.Password,
+		MaxConns: c.Usenet.MaxConn,
+		Attempts: c.Usenet.MaxAttempts,
+		Backoff:  c.Usenet.RetryBackoff,
+		Timeout:  c.Usenet.Timeout,
+
+		IdleTimeout: c.Usenet.IdleTimeout,
+	})
 
 	// Setup cache
 	segmentCache, err := diskcache.NewCache(&diskcache.CacheOptions{
@@ -110,9 +118,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	healthChecker := filehealth.NewDefaultChecker(filehealth.CheckerConfig{
 		SegmentsPerFile: c.NzbConfig.SegmentsPerFile,
 		MaxParallel:     segmentCheckParallel,
-	}, func(id string) (bool, error) {
-		return nntp.SegmentExists(nntpClient, id)
-	})
+	}, nntpClient.SegmentExists)
 
 	service := nzbservice.NewService(store, factory, presenters, []trigger.Trigger{folderTrigger}, healthChecker)
 	service.SetBlacklist(c.Filesystem.Blacklist)

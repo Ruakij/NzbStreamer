@@ -107,6 +107,10 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `USENET_USER`*                    |                        | Usenet username                                  |
 | `USENET_PASS`*                    |                        | Usenet password                                  |
 | `USENET_MAX_CONN`                 | 20                     | Maximum Usenet connections to use                |
+| `USENET_MAX_ATTEMPTS`             | 3                      | Attempts a request gets before its error is reported |
+| `USENET_RETRY_BACKOFF`            | 1s                     | Wait after the first failed attempt, doubled after each further one |
+| `USENET_TIMEOUT`                  | 30s                    | Timeout for connecting and for completing a single request |
+| `USENET_IDLE_TIMEOUT`             | 5m                     | Time after which an unused connection is closed; 0 keeps them open |
 | **Trigger**
 | `FOLDER_WATCHER_PATH`             | .watch                 | Watch folder for adding nzbs (blackhole folder)  |
 | **Presenters**
