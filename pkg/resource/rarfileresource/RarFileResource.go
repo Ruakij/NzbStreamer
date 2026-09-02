@@ -4,248 +4,257 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
+	"strings"
+	"sync"
 
-	"git.ruekov.eu/ruakij/nzbStreamer/pkg/rardecode"
+	"github.com/nwaples/rardecode/v2"
+
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
-	"golang.org/x/sync/errgroup"
 )
 
-// RarFileResource is a utility type that allows using a byte-slice resource.
+var ErrFileNotFound = errors.New("file not found")
+
+// RarFileResource exposes one member of a rar archive as a resource. The archive
+// itself is the ordered set of volume resources it is built from; an empty
+// filename means the archive rather than a member inside it.
 type RarFileResource struct {
-	resources []resource.ReadSeekCloseableResource
-	password  string
-	filename  string
-	size      int64
+	volumes  *volumeFS
+	password string
+	filename string
+
+	mutex sync.Mutex
+	rarFS *rardecode.RarFS
+	size  int64
 }
 
-func NewRarFileResource(resources []resource.ReadSeekCloseableResource, password, filename string) *RarFileResource {
+// NewRarFileResource builds a member resource. size is the members unpacked
+// size, which its file header carries and the caller already holds from
+// listing the archive; -1 means unknown and makes Size() open the archive to
+// find out, which costs one segment per volume.
+func NewRarFileResource(volumes []resource.ReadSeekCloseableResource, password, filename string, size int64) *RarFileResource {
 	return &RarFileResource{
-		resources: resources,
-		password:  password,
-		filename:  filename,
-		size:      -1,
+		volumes:  newVolumeFS(volumes),
+		password: password,
+		filename: filename,
+		size:     size,
 	}
 }
 
-type RarFileResourceReader struct {
-	resource      *RarFileResource
-	openResources []io.Reader
-	rarReader     *rardecode.Reader
-	index         int64
+// options configures rardecode to read through the volume resources.
+//
+// SkipCheck is deliberate: verifying a members checksum requires reading all of
+// it, which is the one thing streaming exists to avoid, and the checksum wrapper
+// is not seekable, so it would cost every stored member its direct addressing.
+func (r *RarFileResource) options() []rardecode.Option {
+	return []rardecode.Option{
+		rardecode.FileSystem(r.volumes),
+		rardecode.Password(r.password),
+		rardecode.SkipCheck,
+	}
+}
+
+// GetRarFiles lists up to limit members. It reads block headers only and stops
+// once limit is reached, so it touches no more volumes than it has to.
+func (r *RarFileResource) GetRarFiles(limit int) ([]*rardecode.FileHeader, error) {
+	reader, err := rardecode.OpenReader(firstVolumeName, r.options()...)
+	if err != nil {
+		return nil, fmt.Errorf("failed opening rar archive: %w", err)
+	}
+	defer reader.Close()
+
+	headers := make([]*rardecode.FileHeader, 0, 1) // Expect at least 1 file
+	for len(headers) < limit {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed getting fileheader from rar archive: %w", err)
+		}
+		if !header.IsDir {
+			headers = append(headers, header)
+		}
+	}
+
+	return headers, nil
 }
 
 func (r *RarFileResource) Open() (io.ReadSeekCloser, error) {
-	reader, err := r.open()
+	reader, size, err := r.openMember()
 	if err != nil {
 		return nil, err
 	}
 
-	fileheader, err := skipToFile(reader.rarReader, r.filename)
-	if err != nil {
-		return nil, err
-	}
-	r.size = fileheader.UnPackedSize
+	r.mutex.Lock()
+	r.size = size
+	r.mutex.Unlock()
 
-	return reader, nil
+	// A stored member is a byte range in the volumes, so rardecode hands back a
+	// reader that seeks. A compressed one is a one-way decoder stream.
+	if seeker, ok := reader.(io.ReadSeekCloser); ok {
+		return seeker, nil
+	}
+	return &decoderSeeker{resource: r, reader: reader, size: size}, nil
 }
 
-func (r *RarFileResource) open() (*RarFileResourceReader, error) {
-	// Open all
-	openResources := make([]io.Reader, len(r.resources))
-	for i, resource := range r.resources {
-		reader, err := resource.Open()
-		openResources[i] = reader
+// openMember opens the member and reports its unpacked size.
+func (r *RarFileResource) openMember() (io.ReadCloser, int64, error) {
+	rarFS, err := r.archiveFS()
+	if err != nil {
+		return nil, 0, err
+	}
 
+	file, err := rarFS.Open(memberPath(r.filename))
+	if errors.Is(err, rardecode.ErrSolidOpen) {
+		return r.openSolidMember()
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed opening '%s' in rar archive: %w", r.filename, err)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, 0, fmt.Errorf("failed getting size of '%s': %w", r.filename, err)
+	}
+	return file, info.Size(), nil
+}
+
+// openSolidMember reaches a member whose decoder state is shared with the members
+// before it, which can only be rebuilt by decoding all of them in order.
+func (r *RarFileResource) openSolidMember() (io.ReadCloser, int64, error) {
+	reader, err := rardecode.OpenReader(firstVolumeName, r.options()...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed opening rar archive: %w", err)
+	}
+
+	for {
+		header, err := reader.Next()
 		if err != nil {
-			return nil, fmt.Errorf("failed opening underlying resource %d: %w", i, err)
+			reader.Close()
+			if errors.Is(err, io.EOF) {
+				return nil, 0, fmt.Errorf("%w: %s", ErrFileNotFound, r.filename)
+			}
+			return nil, 0, fmt.Errorf("failed getting fileheader from rar archive: %w", err)
+		}
+		if header.Name == r.filename {
+			return &readCloser{Reader: reader, Closer: reader}, header.UnPackedSize, nil
 		}
 	}
-
-	// Create RarReader
-	rarReader, err := rardecode.NewMultiReader(openResources, rardecode.Password(r.password))
-	if err != nil {
-		return nil, fmt.Errorf("failed opening rar reader: %w", err)
-	}
-
-	return &RarFileResourceReader{
-		resource:      r,
-		openResources: openResources,
-		rarReader:     rarReader,
-		index:         0,
-	}, nil
 }
 
-func (r *RarFileResource) GetRarFiles(limit int) ([]*rardecode.FileHeader, error) {
-	reader, err := r.open()
-	if err != nil {
-		return nil, err
-	}
+// archiveFS builds the member index once. It walks the block headers of every
+// volume, which is what makes a member directly addressable afterwards.
+func (r *RarFileResource) archiveFS() (*rardecode.RarFS, error) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
 
-	fileheaders := make([]*rardecode.FileHeader, 0, 1) // Expect at least 1 file
-	header, err := reader.rarReader.Next()
-	if err != nil {
-		return nil, fmt.Errorf("failed getting initial fileheader from rar reader: %w", err)
-	}
-	for err == nil {
-		if header.IsDir {
-			continue
+	if r.rarFS == nil {
+		rarFS, err := rardecode.OpenFS(firstVolumeName, r.options()...)
+		if err != nil {
+			return nil, fmt.Errorf("failed reading rar archive: %w", err)
 		}
-
-		fileheaders = append(fileheaders, header)
-		if len(fileheaders) >= limit {
-			break
-		}
-		header, err = reader.rarReader.Next()
+		r.rarFS = rarFS
 	}
+	return r.rarFS, nil
+}
 
-	return fileheaders, nil
+// memberPath normalises a member name the way rardecode keys its file tree.
+func memberPath(name string) string {
+	return strings.TrimPrefix(path.Clean(name), "/")
 }
 
 func (r *RarFileResource) Size() (int64, error) {
-	// If not filename specified, return total packed-size
+	// Without a member, report the total packed size of the volumes
 	if r.filename == "" {
 		var totalSize int64
-		for i, resource := range r.resources {
-			size, err := resource.Size()
+		for i, volume := range r.volumes.volumes {
+			size, err := volume.Size()
 			if err != nil {
-				return size, fmt.Errorf("failed getting size from underlying resource %d: %w", i, err)
+				return 0, fmt.Errorf("failed getting size from underlying resource %d: %w", i, err)
 			}
 			totalSize += size
 		}
 		return totalSize, nil
 	}
 
-	// If size unset, open reader for first time
-	if r.size < 0 {
-		reader, err := r.Open()
-		if err != nil {
-			return 0, fmt.Errorf("failed creating new multi reader: %w", err)
-		}
-		reader.Close()
+	r.mutex.Lock()
+	size := r.size
+	r.mutex.Unlock()
+	if size >= 0 {
+		return size, nil
 	}
 
+	reader, err := r.Open()
+	if err != nil {
+		return 0, fmt.Errorf("failed opening rar member: %w", err)
+	}
+	reader.Close()
+
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
 	return r.size, nil
 }
 
-func (r *RarFileResourceReader) Close() error {
-	return nil
+type readCloser struct {
+	io.Reader
+	io.Closer
 }
 
-func (r *RarFileResourceReader) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
+// decoderSeeker emulates seeking on a compressed member. Its decoder only runs
+// forwards, so a backward seek reopens the member and decodes from zero again.
+type decoderSeeker struct {
+	resource *RarFileResource
+	reader   io.ReadCloser
+	size     int64
+	index    int64
+}
 
-	n, err := r.rarReader.Read(p)
-	r.index += int64(n)
-
+func (d *decoderSeeker) Read(p []byte) (int, error) {
+	n, err := d.reader.Read(p)
+	d.index += int64(n)
 	return n, err
 }
 
-func (r *RarFileResourceReader) Seek(offset int64, whence int) (int64, error) {
-	var newIndex int64
+func (d *decoderSeeker) Close() error {
+	return d.reader.Close()
+}
 
+func (d *decoderSeeker) Seek(offset int64, whence int) (int64, error) {
+	var index int64
 	switch whence {
 	case io.SeekStart:
-		newIndex = offset
+		index = offset
 	case io.SeekCurrent:
-		newIndex = r.index + offset
+		index = d.index + offset
 	case io.SeekEnd:
-		newIndex = r.resource.size + offset
+		index = d.size + offset
 	default:
 		return 0, resource.ErrInvalidSeek
 	}
 
-	// Seek to same pos we are at
-	if newIndex == r.index {
-		return r.index, nil
-	}
-	// Out of range
-	if newIndex < 0 || newIndex > r.resource.size {
+	if index < 0 || index > d.size {
 		return 0, resource.ErrInvalidSeek
 	}
+	if index == d.index {
+		return index, nil
+	}
 
-	// We cannot actually seek, so seeking backwards is specially not natively supported
-	if newIndex < r.index {
-		// Just reopen the reader
-		group := errgroup.Group{}
-		for i, reader := range r.openResources {
-			readerIndex := i
-			localReader := reader
-			group.Go(func() (err error) {
-				// Check if reader implements seeker
-				if seeker, ok := localReader.(io.Seeker); ok {
-					_, err = seeker.Seek(0, io.SeekStart)
-					if err != nil {
-						return fmt.Errorf("failed seeking resource %d: %w", readerIndex, err)
-					}
-				} else {
-					// If it doesnt, reopen resource
-					r.openResources[readerIndex], err = r.resource.resources[readerIndex].Open()
-					if err != nil {
-						return fmt.Errorf("failed reopening resource %d: %w", readerIndex, err)
-					}
-				}
-				return nil
-			})
-		}
-		err := group.Wait()
-		if err != nil {
-			return 0, fmt.Errorf("failed waiting for resource operations: %w", err)
-		}
-
-		r.rarReader, err = rardecode.NewMultiReader(r.openResources)
+	if index < d.index {
+		reader, _, err := d.resource.openMember()
 		if err != nil {
 			return 0, err
 		}
-
-		_, err = skipToFile(r.rarReader, r.resource.filename)
-		if err != nil {
-			return 0, err
-		}
-
-		r.index = 0
+		d.reader.Close()
+		d.reader = reader
+		d.index = 0
 	}
 
-	delta := newIndex - r.index
-
-	// Skip forwards
-	// TODO: Move to library and also use in sevenzipresource
-	var err error
-	var n int
-	var totalN int64
-	buf := make([]byte, 16*1024*1024)
-	for err == nil && totalN < delta {
-		if totalN+int64(len(buf)) > delta {
-			buf = buf[:delta-totalN]
-		}
-		n, err = r.rarReader.Read(buf)
-		totalN += int64(n)
-	}
+	skipped, err := io.CopyN(io.Discard, d.reader, index-d.index)
+	d.index += skipped
 	if err != nil {
-		return 0, fmt.Errorf("failed skipping forwards in rar reader: %w", err)
+		return 0, fmt.Errorf("failed skipping forwards in rar member: %w", err)
 	}
-	if totalN != newIndex-r.index {
-		return 0, io.ErrUnexpectedEOF
-	}
-
-	r.index = newIndex
-	return r.index, nil
-}
-
-var ErrFileNotFound = errors.New("file not found")
-
-func skipToFile(reader *rardecode.Reader, filename string) (*rardecode.FileHeader, error) {
-	fileheader, err := reader.Next()
-	if err != nil {
-		return fileheader, fmt.Errorf("failed getting initial fileheader from rar reader: %w", err)
-	}
-	for err == nil {
-		if fileheader.Name == filename {
-			return fileheader, nil
-		}
-
-		fileheader, err = reader.Next()
-	}
-	return nil, ErrFileNotFound
+	return d.index, nil
 }

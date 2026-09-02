@@ -212,13 +212,13 @@ func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbparser.Segme
 func (f *NzbFileFactory) BuildRarFileFromFileResource(underlyingResources []resource.ReadSeekCloseableResource, password string) (map[string]presentation.Openable, error) {
 	resources := make(map[string]presentation.Openable, 1)
 
-	fileheaders, err := rarfileresource.NewRarFileResource(underlyingResources, password, "").GetRarFiles(1)
+	fileheaders, err := rarfileresource.NewRarFileResource(underlyingResources, password, "", -1).GetRarFiles(1)
 	if err != nil {
 		return nil, fmt.Errorf("failed creating Rar resource: %w", err)
 	}
 
 	for _, fileheader := range fileheaders {
-		resources[fileheader.Name] = rarfileresource.NewRarFileResource(underlyingResources, password, fileheader.Name)
+		resources[fileheader.Name] = rarfileresource.NewRarFileResource(underlyingResources, password, fileheader.Name, fileheader.UnPackedSize)
 	}
 
 	return resources, nil
