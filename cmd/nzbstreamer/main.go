@@ -21,6 +21,7 @@ import (
 	shutdownmanager "git.ruekov.eu/ruakij/nzbStreamer/pkg/ShutdownManager"
 	timeoutaction "git.ruekov.eu/ruakij/nzbStreamer/pkg/ShutdownManager/timeoutAction"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/adaptiveparallelmergerresource"
 	gowebdav "github.com/emersion/go-webdav"
 	"github.com/sethvargo/go-envconfig"
 )
@@ -74,6 +75,13 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 
 		IdleTimeout: c.Usenet.IdleTimeout,
 	})
+
+	// Setup prefetch, sharing the connection budget across all open files
+	prefetchMaxConn := c.Prefetch.MaxConn
+	if prefetchMaxConn <= 0 {
+		prefetchMaxConn = c.Usenet.MaxConn
+	}
+	adaptiveparallelmergerresource.SetPrefetch(prefetchMaxConn, c.Prefetch.Time, c.Prefetch.MinSegments, c.Prefetch.MaxSegments)
 
 	// Setup cache
 	segmentCache, err := diskcache.NewCache(&diskcache.CacheOptions{

@@ -128,6 +128,11 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `READAHEAD_CACHE_MIN_SIZE`        | 1048576                | Minimum readahead amount in bytes                |
 | `READAHEAD_CACHE_LOW_BUFFER`      | 1048576                | Buffer size that triggers readahead in bytes     |
 | `READAHEAD_CACHE_MAX_SIZE`        | 16777216               | Maximum readahead amount in bytes; Disables readahead-cache when 0                |
+| **Prefetch**
+| `PREFETCH_TIME`                   | 1s                     | How far ahead of the read position to stay warm, in read-time |
+| `PREFETCH_MIN_SEGMENTS`           | 8                      | Segments warmed ahead before a read speed can be measured |
+| `PREFETCH_MAX_SEGMENTS`           | 64                     | Upper bound on segments warmed ahead; 0 disables prefetching |
+| `PREFETCH_MAX_CONN`               | 0                      | Concurrent prefetches across all files; defaults to `USENET_MAX_CONN` when 0 |
 | **Nzb-Options**
 | `NZB_FILE_BLACKLIST`              | (?i)\.par2$            | Early Regex-blacklist, immediately applied after nzb-file is scanned <br>Can be used to skip unwanted files like .par2 |
 | `NZB_CHECK_SEGMENTS_PER_FILE`     | 2                      | Segments checked per file for existence, spread evenly (so first and last)<br>0 disables the check, -1 checks all segments |

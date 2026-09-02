@@ -8,6 +8,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 	"golang.org/x/sync/errgroup"
@@ -26,8 +27,12 @@ func NewAdaptiveParallelMergerResource(resources []resource.ReadSeekCloseableRes
 }
 
 type AdaptiveParallelMergerResourceReader struct {
-	resource    *AdaptiveParallelMergerResource
-	readers     []io.ReadSeekCloser
+	resource *AdaptiveParallelMergerResource
+	// Readers of resources touched so far; nil where not opened yet
+	readers   []io.ReadSeekCloser
+	readersMu sync.Mutex
+	// Lowest index that may still hold an open reader
+	openFrom    int
 	mutex       sync.RWMutex
 	readerGroup errgroup.Group
 	// Position in data
@@ -36,26 +41,74 @@ type AdaptiveParallelMergerResourceReader struct {
 	readerIndex int
 	// Active reader byte index
 	readerByteIndex int64
+	// Highest index prefetch has been issued for
+	prefetchedTo int
+	// Bytes served and since when, measuring how fast the consumer takes them.
+	// A seek starts a new run, since a jump says nothing about the next one.
+	runStart time.Time
+	runBytes int64
 }
 
-// Open prepares buffers and eagerly opens all underlying Resources
+// Open prepares buffers; underlying Resources are opened when a read reaches them,
+// so descriptors are bound by what is read rather than by the size of the file.
 func (r *AdaptiveParallelMergerResource) Open() (io.ReadSeekCloser, error) {
-	readers := make([]io.ReadSeekCloser, len(r.resources))
-	var err error
-	for i, resource := range r.resources {
-		readers[i], err = resource.Open()
-		if err != nil {
-			return nil, fmt.Errorf("failed opening resource %d: %w", i, err)
-		}
-	}
-
 	return &AdaptiveParallelMergerResourceReader{
 		resource:        r,
-		readers:         readers,
+		readers:         make([]io.ReadSeekCloser, len(r.resources)),
 		index:           0,
 		readerIndex:     0,
 		readerByteIndex: 0,
 	}, nil
+}
+
+// reader opens resource i on first use and keeps it until it falls behind the
+// read head.
+func (r *AdaptiveParallelMergerResourceReader) reader(i int) (io.ReadSeekCloser, error) {
+	r.readersMu.Lock()
+	defer r.readersMu.Unlock()
+
+	if r.readers[i] == nil {
+		reader, err := r.resource.resources[i].Open()
+		if err != nil {
+			return nil, fmt.Errorf("failed opening resource %d: %w", i, err)
+		}
+		r.readers[i] = reader
+		if i < r.openFrom {
+			r.openFrom = i
+		}
+	}
+
+	return r.readers[i], nil
+}
+
+// seekReader positions reader i, opening it if a read has not reached it yet.
+func (r *AdaptiveParallelMergerResourceReader) seekReader(i int, offset int64) error {
+	reader, err := r.reader(i)
+	if err != nil {
+		return err
+	}
+
+	if _, err := reader.Seek(offset, io.SeekStart); err != nil {
+		return fmt.Errorf("failed seeking resource %d to %d: %w", i, offset, err)
+	}
+
+	return nil
+}
+
+// closeBehind releases the readers before the read head. A backwards seek
+// reopens them, which is a fresh handle on cached bytes, not a refetch.
+func (r *AdaptiveParallelMergerResourceReader) closeBehind() {
+	r.readersMu.Lock()
+	defer r.readersMu.Unlock()
+
+	for ; r.openFrom < r.readerIndex && r.openFrom < len(r.readers); r.openFrom++ {
+		if r.readers[r.openFrom] == nil {
+			continue
+		}
+		//nolint:errcheck // Nothing to do with a failure of a reader we are done with
+		r.readers[r.openFrom].Close()
+		r.readers[r.openFrom] = nil
+	}
 }
 
 func (r *AdaptiveParallelMergerResource) SizeHint() (int64, error) {
@@ -85,7 +138,12 @@ func (r *AdaptiveParallelMergerResourceReader) partSize(i int) (int64, error) {
 		}
 	}
 
-	size, err := r.readers[i].Seek(0, io.SeekEnd)
+	reader, err := r.reader(i)
+	if err != nil {
+		return 0, err
+	}
+
+	size, err := reader.Seek(0, io.SeekEnd)
 	if err != nil {
 		return 0, fmt.Errorf("failed seeking resource %d to end: %w", i, err)
 	}
@@ -109,6 +167,11 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 
 	r.mutex.Lock()
 
+	if r.runStart.IsZero() {
+		r.runStart = time.Now()
+	}
+	r.prefetch()
+
 	totalRead := 0
 	expectedTotalRead := 0
 
@@ -128,15 +191,19 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 	// Unlock mutex, when group finished
 	// TODO: Maybe its possible to only block affected readers separately not to halt all activity? Might not be that critical though
 	defer func() {
+		r.runBytes += int64(totalRead)
+
 		// When already everything processed, dont start goroutine
 		if processIndex >= len(responses) {
 			defer r.mutex.Unlock()
 			// group should have finished, in case it hasnt, wait
 			group.Wait()
+			r.closeBehind()
 			return
 		}
 		go func() {
 			defer r.mutex.Unlock()
+			defer r.closeBehind()
 
 			// Function to process responses
 			processResponses := func() {
@@ -147,7 +214,9 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 				// group.Wait picks it up
 				for processIndex < len(responses) && responses[processIndex] != nil {
 					// Read has concluded, seek back
-					r.readers[responses[processIndex].readerIndex].Seek(0, io.SeekStart)
+					if reader, err := r.reader(responses[processIndex].readerIndex); err == nil {
+						reader.Seek(0, io.SeekStart)
+					}
 					processIndex++
 				}
 			}
@@ -213,12 +282,16 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 		}
 
 		group.Go(func() error {
+			reader, err := r.reader(readerIndex)
+			if err != nil {
+				return err
+			}
+
 			sized, isSized := r.resource.resources[readerIndex].(resource.Sized)
 			// TODO: Support writing directly to p if supported (all previous readers also need to have accurate resource)
 			buf := make([]byte, expectedRead)
 			totalN := 0
 			var n int
-			var err error
 			var prevNCount int
 			for {
 				// Check if job is cancelled while before next read
@@ -228,7 +301,7 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 				default:
 				}
 
-				n, err = r.readers[readerIndex].Read(buf[totalN:])
+				n, err = reader.Read(buf[totalN:])
 				totalN += n
 
 				// With an exact size a single read suffices
@@ -315,9 +388,8 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 			// TODO: Also move this into deferred group-finish action to not have to wait for seek?
 			if copied < actualRead {
 				// When not all was copied, we filled p, the rest is too much
-				_, err := r.readers[response.readerIndex].Seek(int64(copied), io.SeekStart)
-				if err != nil {
-					return totalRead, fmt.Errorf("failed seeking reader %d back to %d: %w", response.readerIndex, r.readerByteIndex, err)
+				if err := r.seekReader(response.readerIndex, int64(copied)); err != nil {
+					return totalRead, err
 				}
 			}
 		}
@@ -359,8 +431,13 @@ func (r *AdaptiveParallelMergerResourceReader) Close() error {
 	// TODO: Cancel everything immediately on close
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
+	r.readersMu.Lock()
+	defer r.readersMu.Unlock()
 
 	for i, reader := range r.readers {
+		if reader == nil {
+			continue
+		}
 		err := reader.Close()
 		if err != nil {
 			return fmt.Errorf("failed closing reader %d: %w", i, err)
@@ -373,6 +450,14 @@ func (r *AdaptiveParallelMergerResourceReader) Close() error {
 func (r *AdaptiveParallelMergerResourceReader) Seek(offset int64, whence int) (int64, error) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
+	// A jump has no lead to keep and says nothing about the speed of what
+	// follows, so both are re-established from wherever this lands
+	defer func() {
+		r.prefetchedTo = r.readerIndex
+		r.runStart = time.Time{}
+		r.runBytes = 0
+		r.closeBehind()
+	}()
 
 	var newIndex int64
 
@@ -504,9 +589,8 @@ func (r *AdaptiveParallelMergerResourceReader) seekForwards(seekAmount int64) er
 						// If reader is still current one, add its readerByteIndex
 						seekOffset += r.readerByteIndex
 					}
-					_, err := r.readers[response.readerIndex].Seek(seekOffset, io.SeekStart)
-					if err != nil {
-						return fmt.Errorf("failed to SeekStart resource %d to %d bytes: %w", response.readerIndex, seekOffset, err)
+					if err := r.seekReader(response.readerIndex, seekOffset); err != nil {
+						return err
 					}
 
 					r.readerIndex = response.readerIndex
@@ -516,9 +600,8 @@ func (r *AdaptiveParallelMergerResourceReader) seekForwards(seekAmount int64) er
 				}
 			} else {
 				// Already reached, seek reader back
-				_, err := r.readers[response.readerIndex].Seek(0, io.SeekStart)
-				if err != nil {
-					return fmt.Errorf("failed to SeekStart resource %d to %d bytes: %w", response.readerIndex, 0, err)
+				if err := r.seekReader(response.readerIndex, 0); err != nil {
+					return err
 				}
 			}
 
@@ -628,9 +711,8 @@ func (r *AdaptiveParallelMergerResourceReader) seekBackwards(seekAmount int64) e
 				if totalSeeked >= seekAmount {
 					// Seek affected reader back
 					seekPos := totalSeeked - seekAmount
-					_, err := r.readers[response.readerIndex].Seek(seekPos, io.SeekStart)
-					if err != nil {
-						return fmt.Errorf("failed to SeekStart resource %d to %d bytes: %w", response.readerIndex, seekPos, err)
+					if err := r.seekReader(response.readerIndex, seekPos); err != nil {
+						return err
 					}
 
 					r.readerIndex = response.readerIndex
@@ -639,9 +721,8 @@ func (r *AdaptiveParallelMergerResourceReader) seekBackwards(seekAmount int64) e
 					r.index -= seekAmount
 				} else {
 					// Otherwise seek to 0
-					_, err := r.readers[response.readerIndex].Seek(0, io.SeekStart)
-					if err != nil {
-						return fmt.Errorf("failed to SeekStart resource %d to %d bytes: %w", response.readerIndex, 0, err)
+					if err := r.seekReader(response.readerIndex, 0); err != nil {
+						return err
 					}
 				}
 			}
@@ -672,8 +753,8 @@ func (r *AdaptiveParallelMergerResourceReader) seekToEnd() error {
 
 			// Last reader sets readerByteIndex and has to sit where it says
 			if i == len(r.readers)-1 {
-				if _, err := r.readers[i].Seek(size, io.SeekStart); err != nil {
-					return fmt.Errorf("failed seeking resource %d to %d: %w", i, size, err)
+				if err := r.seekReader(i, size); err != nil {
+					return err
 				}
 				r.readerByteIndex = size
 			}

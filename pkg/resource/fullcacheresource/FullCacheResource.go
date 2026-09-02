@@ -76,12 +76,37 @@ func (r *FullCacheResource) Open() (io.ReadSeekCloser, error) {
 }
 
 func (r *FullCacheResource) SizeHint() (int64, error) {
+	size, _, err := r.size()
+	return size, err
+}
+
+// Prefetch stores the content in the cache without handing out a reader. A
+// demand read arriving later finds the file and does no fetch of its own.
+func (r *FullCacheResource) Prefetch() error {
 	mu := keyMutex(r.CacheKey)
 	mu.Lock()
 	defer mu.Unlock()
 
-	size, _, err := r.size()
-	return size, err
+	if exists, _ := r.Cache.Exists(r.CacheKey); exists {
+		return nil
+	}
+
+	underlyingReader, err := r.UnderlyingResource.Open()
+	if err != nil {
+		return fmt.Errorf("failed opening underlying resource: %w", err)
+	}
+	size, err := r.Cache.SetWithReader(r.CacheKey, underlyingReader)
+	if err != nil {
+		return fmt.Errorf("failed storing item in cache: %w", errors.Join(err, underlyingReader.Close()))
+	}
+	if err := underlyingReader.Close(); err != nil {
+		return fmt.Errorf("failed closing underlying reader: %w", err)
+	}
+
+	r.cachedSize = size
+	r.cachedSizeExact = true
+
+	return nil
 }
 
 // Size is exact once the content sits in the cache, since the cache header then

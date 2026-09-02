@@ -44,6 +44,13 @@ type ReadaheadCacheConfig struct {
 	MaxSize      int           `env:"READAHEAD_CACHE_MAX_SIZE, default=16777216"`   // Maximum readahead amount in bytes; Disables readahead-cache when 0
 }
 
+type PrefetchConfig struct {
+	Time        time.Duration `env:"PREFETCH_TIME, default=1s"`         // How far ahead of the read position to stay warm, in read-time
+	MinSegments int           `env:"PREFETCH_MIN_SEGMENTS, default=8"`  // Segments warmed ahead before a read speed can be measured
+	MaxSegments int           `env:"PREFETCH_MAX_SEGMENTS, default=64"` // Upper bound on segments warmed ahead; 0 disables prefetching
+	MaxConn     int           `env:"PREFETCH_MAX_CONN, default=0"`      // Concurrent prefetches across all files; defaults to USENET_MAX_CONN when 0
+}
+
 type FolderWatcherConfig struct {
 	Path string `env:"FOLDER_WATCHER_PATH, default=.watch"` // Watch folder for adding nzbs (blackhole folder)
 }
@@ -71,6 +78,7 @@ type Config struct {
 	Webdav         WebdavConfig
 	Cache          CacheConfig
 	ReadaheadCache ReadaheadCacheConfig
+	Prefetch       PrefetchConfig
 	NzbConfig      NzbConfig
 	Filesystem     FilesystemConfig
 	FolderWatcher  FolderWatcherConfig
