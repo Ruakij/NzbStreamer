@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sync/atomic"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 )
@@ -14,19 +15,33 @@ type GetSegmentFunc func(group, id string) ([]byte, error)
 
 // NzbPostResource allows reading the post-content from a Newsserver
 type NzbPostResource struct {
-	ID    string
-	Group string
-	// Length is the nzb hint until the segment has been decoded once, which is
-	// what LengthExact reports.
-	Length      int64
-	LengthExact bool
-	GetSegment  GetSegmentFunc
+	ID         string
+	Group      string
+	GetSegment GetSegmentFunc
+
+	// length is the nzb hint until the segment has been decoded once, which is
+	// what lengthExact reports. Every reader of the segment settles them, so
+	// they are read and written concurrently.
+	length      atomic.Int64
+	lengthExact atomic.Bool
 }
 
 type NzbPostResourceReader struct {
 	resource   *NzbPostResource
 	dataReader io.Reader
 	index      int
+}
+
+func New(id, group string, lengthHint int64, lengthExact bool, getSegment GetSegmentFunc) *NzbPostResource {
+	r := &NzbPostResource{
+		ID:         id,
+		Group:      group,
+		GetSegment: getSegment,
+	}
+	r.length.Store(lengthHint)
+	r.lengthExact.Store(lengthExact)
+
+	return r
 }
 
 func (r *NzbPostResource) Open() (io.ReadCloser, error) {
@@ -37,15 +52,15 @@ func (r *NzbPostResource) Open() (io.ReadCloser, error) {
 }
 
 func (r *NzbPostResource) SizeHint() (int64, error) {
-	return r.Length, nil
+	return r.length.Load(), nil
 }
 
 func (r *NzbPostResource) Size() (int64, error) {
-	if !r.LengthExact {
+	if !r.lengthExact.Load() {
 		return 0, resource.ErrSizeNotExact
 	}
 
-	return r.Length, nil
+	return r.length.Load(), nil
 }
 
 func (r *NzbPostResourceReader) Close() error {
@@ -78,8 +93,8 @@ func (r *NzbPostResourceReader) loadPostFromServer() error {
 	}
 
 	// The nzb only hinted at the size; now it is known
-	r.resource.Length = int64(len(body))
-	r.resource.LengthExact = true
+	r.resource.length.Store(int64(len(body)))
+	r.resource.lengthExact.Store(true)
 
 	r.dataReader = bytes.NewReader(body)
 

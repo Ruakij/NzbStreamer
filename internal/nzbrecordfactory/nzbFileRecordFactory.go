@@ -140,13 +140,7 @@ func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, 
 
 func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbparser.Segment, groups string, sizer nzbfileanalyzer.SegmentSizer) *nzbpostresource.NzbPostResource {
 	size, sizeExact := sizer.Size(nzbSegment.BytesHint)
-	return &nzbpostresource.NzbPostResource{
-		ID:          nzbSegment.ID,
-		Group:       groups,
-		Length:      int64(size),
-		LengthExact: sizeExact,
-		GetSegment:  f.nntpClient.GetSegment,
-	}
+	return nzbpostresource.New(nzbSegment.ID, groups, int64(size), sizeExact, f.nntpClient.GetSegment)
 }
 
 // -- Special files --
