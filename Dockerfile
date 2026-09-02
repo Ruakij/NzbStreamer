@@ -1,5 +1,5 @@
 # ---- Build ----
-FROM golang:1.23-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /build
 
 # Install build dependencies
@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 go build \
     -o nzbstreamer ./cmd/nzbstreamer
 
 # ---- Release ----
-FROM alpine:3.19 AS release
+FROM alpine:3.22 AS release
 WORKDIR /app
 
 # Install runtime dependencies

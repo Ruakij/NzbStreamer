@@ -266,12 +266,12 @@ func (fs *FS) ReadDir(ctx context.Context, name string, recursive bool) ([]webda
 }
 
 // Implement Create from the interface — note that it's read-only, hence no-op
-func (fs *FS) Create(ctx context.Context, name string, body io.ReadCloser) (*webdav.FileInfo, bool, error) {
+func (fs *FS) Create(ctx context.Context, name string, body io.ReadCloser, options *webdav.CreateOptions) (*webdav.FileInfo, bool, error) {
 	return nil, false, ErrReadOnlyFilesystem
 }
 
 // Implement RemoveAll from the interface as no-op because it's read-only
-func (fs *FS) RemoveAll(ctx context.Context, name string) error {
+func (fs *FS) RemoveAll(ctx context.Context, name string, options *webdav.RemoveAllOptions) error {
 	return ErrReadOnlyFilesystem
 }
 
