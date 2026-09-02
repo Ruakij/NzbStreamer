@@ -121,18 +121,11 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 				responsesLock.Lock()
 				defer responsesLock.Unlock()
 
-				for processIndex < len(responses) {
-					if responses[processIndex] == nil {
-						processIndex++
-						continue
-					}
-					response := responses[processIndex]
-
+				// Stop at the first reader still running; the pass after
+				// group.Wait picks it up
+				for processIndex < len(responses) && responses[processIndex] != nil {
 					// Read has concluded, seek back
-					r.readers[response.readerIndex].Seek(0, io.SeekStart)
-
-					// Delete to skip in the next step
-					responses[processIndex] = nil
+					r.readers[responses[processIndex].readerIndex].Seek(0, io.SeekStart)
 					processIndex++
 				}
 			}
