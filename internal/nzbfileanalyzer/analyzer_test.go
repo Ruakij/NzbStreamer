@@ -41,6 +41,24 @@ func TestWireConventionResolvesToKnownSize(t *testing.T) {
 	}
 }
 
+// Escape overhead depends on the bytes being escaped, so full segments of one
+// nzb carry hints that differ from each other. Every one of them still resolves
+// to the same known size. The hints are from a real nzb of 716800-byte segments.
+func TestWireConventionResolvesEveryFullSegment(t *testing.T) {
+	hints := []int{739565, 739557, 739490, 739351, 739345, 739445}
+	sizer := NewSegmentSizer(nzbWith(hints...))
+
+	if sizer.Convention() != ConventionWire {
+		t.Fatalf("convention = %v, want ConventionWire", sizer.Convention())
+	}
+	for _, hint := range hints {
+		size, exact := sizer.Size(hint)
+		if size != 716800 || !exact {
+			t.Errorf("Size(%d) = %d, %v; want 716800, true", hint, size, exact)
+		}
+	}
+}
+
 // A short tail segment carries a hint of its own, which no convention can turn
 // into an exact size.
 func TestTailSegmentIsEstimated(t *testing.T) {

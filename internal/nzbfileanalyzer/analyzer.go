@@ -42,15 +42,14 @@ const (
 // its neighbours about what the same attribute means.
 type SegmentSizer struct {
 	convention SizeConvention
-	// fullHint is the hint a full segment carries, fullSize its decoded size
-	fullHint int
+	// fullSize is the decoded size of a full segment
 	fullSize int
 }
 
 // NewSegmentSizer determines the convention of an nzb.
 func NewSegmentSizer(nzbData *nzbparser.NzbData) SegmentSizer {
 	hint := mostCommonHint(nzbData)
-	sizer := SegmentSizer{fullHint: hint, fullSize: hint}
+	sizer := SegmentSizer{fullSize: hint}
 
 	for _, known := range knownSizes {
 		switch {
@@ -77,17 +76,28 @@ func (s SegmentSizer) Convention() SizeConvention {
 
 // Size returns the decoded size a segment contributes to its file, and whether
 // that is exact rather than an upper-bounded estimate.
+//
+// yEnc escaping depends on the bytes being escaped, so every full segment of a
+// wire-counted nzb carries a slightly different hint. What identifies one is the
+// hint landing in the overhead range above the known size, not matching any
+// particular other hint.
 func (s SegmentSizer) Size(hint int) (int, bool) {
 	switch {
 	case s.convention == ConventionContent:
 		return hint, true
-	case s.convention == ConventionWire && hint == s.fullHint:
+	case s.convention == ConventionWire && s.isFullWireHint(hint):
 		return s.fullSize, true
 	}
 	// A short tail segment, or an nzb whose convention stayed unknown. Content is
 	// never larger than wire, so the low end of the overhead range is the
 	// smallest size the hint can stand for.
 	return int(float32(hint) * (1 - yEncOverheadMax)), false
+}
+
+// isFullWireHint reports whether a hint is the wire size of a full segment, which
+// is fullSize plus an escape overhead that never exceeds yEncOverheadMax.
+func (s SegmentSizer) isFullWireHint(hint int) bool {
+	return hint > s.fullSize && hint <= int(float32(s.fullSize)*(1+yEncOverheadMax))
 }
 
 // mostCommonHint returns the bytes-hint shared by the most segments in the nzb,
