@@ -114,7 +114,7 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `USENET_TIMEOUT`                  | 30s                    | Timeout for connecting and for completing a single request |
 | `USENET_IDLE_TIMEOUT`             | 2m                     | Time after which an unused connection is closed |
 | **Trigger**
-| `FOLDER_WATCHER_PATH`             | .watch                 | Watch folder for adding nzbs (blackhole folder)  |
+| `FOLDER_WATCHER_PATH`             | .watch                 | Watch folder for adding nzbs; files stay where they are |
 | **Presenters**
 | `WEBDAV_ADDRESS`                  | :8080                  | Address for WebDAV server; Disabled when unset   |
 | `WEBDAV_USERNAME`                 |                        | Username for WebDAV basic auth; Authentication disabled when unset |
@@ -146,9 +146,9 @@ Specially video-files like mkv are problematic as some metadata required for pla
 # 5. Feature-List
 
 -   Triggers
-    -   [x] Blackhole-folder
+    -   [x] Watch-folder
     -   [ ] SabNzb-API
-        -   [x] Optionally store loaded Nzb in folder
+        -   [ ] Optionally store loaded Nzb in folder
 -   Presenters
     -   [x] WebDAV
     -   [x] FUSE

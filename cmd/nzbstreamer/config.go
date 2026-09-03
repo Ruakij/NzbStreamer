@@ -44,7 +44,7 @@ type PrefetchConfig struct {
 }
 
 type FolderWatcherConfig struct {
-	Path string `env:"FOLDER_WATCHER_PATH, default=.watch"` // Watch folder for adding nzbs (blackhole folder)
+	Path string `env:"FOLDER_WATCHER_PATH, default=.watch"` // Watch folder for adding nzbs; files stay where they are
 }
 
 type NzbConfig struct {
