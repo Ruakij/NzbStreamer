@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -192,7 +193,7 @@ func (fs *FS) Open(ctx context.Context, name string) (io.ReadCloser, error) {
 
 	node, err := fs.pathWalker(fs.requestPath(name))
 	if err != nil {
-		return nil, err
+		return nil, webdav.NewHTTPError(http.StatusNotFound, err)
 	}
 
 	fileReader := &simpleFileReader{
@@ -221,7 +222,7 @@ func (fs *FS) Stat(ctx context.Context, name string) (*webdav.FileInfo, error) {
 
 	node, err := fs.pathWalker(fs.requestPath(name))
 	if err != nil {
-		return nil, err
+		return nil, webdav.NewHTTPError(http.StatusNotFound, err)
 	}
 
 	var mimeType string
@@ -250,7 +251,7 @@ func (fs *FS) ReadDir(ctx context.Context, name string, recursive bool) ([]webda
 
 	node, err := fs.pathWalker(fs.requestPath(name))
 	if err != nil {
-		return nil, err
+		return nil, webdav.NewHTTPError(http.StatusNotFound, err)
 	}
 
 	if !node.File.isDir {
