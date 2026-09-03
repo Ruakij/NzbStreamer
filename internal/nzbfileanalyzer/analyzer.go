@@ -135,12 +135,6 @@ func (s SegmentSizer) SettleWith(hint, size int) SegmentSizer {
 // FetchSizeFunc downloads one article and returns its decoded length.
 type FetchSizeFunc func(group, messageID string) (int, error)
 
-// maxProbeAttempts bounds what one nzb costs. A candidate that cannot be fetched
-// or whose length fits neither convention is worth trying past, a whole nzb of
-// them is not: an nzb that answers nothing in three articles is one where the
-// estimates are the cheaper answer.
-const maxProbeAttempts = 3
-
 // SettleByProbing resolves an unknown convention by downloading a full segment,
 // for an nzb where nothing already known could settle it. It picks a segment
 // carrying the hint the sizer took for a full one, so the length it learns is the
@@ -148,15 +142,17 @@ const maxProbeAttempts = 3
 //
 // This is the one thing in the add path that reads a body rather than checking
 // that one exists. It costs an article, once per nzb ever, against every full
-// segment in it becoming exact. The error is what the last attempt failed with,
-// and it is reported only when no attempt settled anything.
-func (s SegmentSizer) SettleByProbing(nzbData *nzbparser.NzbData, fetchSize FetchSizeFunc) (SegmentSizer, error) {
-	if s.convention != ConventionUnknown {
+// segment in it becoming exact. A candidate that cannot be fetched or whose
+// length fits neither convention is tried past, up to maxAttempts of them, since
+// one dead article says nothing about the nzb. The error is what the last attempt
+// failed with, and it is reported only when no attempt settled anything.
+func (s SegmentSizer) SettleByProbing(nzbData *nzbparser.NzbData, fetchSize FetchSizeFunc, maxAttempts int) (SegmentSizer, error) {
+	if s.convention != ConventionUnknown || maxAttempts <= 0 {
 		return s, nil
 	}
 
 	var lastErr error
-	for _, candidate := range s.probeCandidates(nzbData) {
+	for _, candidate := range s.probeCandidates(nzbData, maxAttempts) {
 		size, err := fetchSize(candidate.group, candidate.id)
 		if err != nil {
 			lastErr = fmt.Errorf("failed fetching segment %s: %w", candidate.id, err)
@@ -179,8 +175,8 @@ type probeCandidate struct {
 
 // probeCandidates picks the segments worth probing: the ones carrying the hint
 // the sizer took for a full segment, since only those can settle anything.
-func (s SegmentSizer) probeCandidates(nzbData *nzbparser.NzbData) []probeCandidate {
-	candidates := make([]probeCandidate, 0, maxProbeAttempts)
+func (s SegmentSizer) probeCandidates(nzbData *nzbparser.NzbData, maxAttempts int) []probeCandidate {
+	candidates := make([]probeCandidate, 0, maxAttempts)
 
 	for i := range nzbData.Files {
 		file := &nzbData.Files[i]
@@ -194,7 +190,7 @@ func (s SegmentSizer) probeCandidates(nzbData *nzbparser.NzbData) []probeCandida
 			}
 
 			candidates = append(candidates, probeCandidate{group: file.Groups[0], id: segment.ID})
-			if len(candidates) == maxProbeAttempts {
+			if len(candidates) == maxAttempts {
 				return candidates
 			}
 		}

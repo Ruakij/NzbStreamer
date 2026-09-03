@@ -139,7 +139,7 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `PREFETCH_MAX_CONN`               | 0                      | Concurrent prefetches across all files; defaults to `USENET_MAX_CONN` when 0 |
 | **Nzb-Options**
 | `NZB_FILE_BLACKLIST`              |                        | Early Regex-blacklist, applied after the nzb-file is scanned <br>A file dropped here is not health-checked either, and .par2 dropped here leaves the check without its repair-capacity estimate |
-| `NZB_PROBE_SIZE_CONVENTION`       | true                   | Download one segment of an nzb whose segment-size hints do not identify what they count, making its sizes exact; without it they stay estimates until a read has measured them |
+| `NZB_PROBE_SIZE_CONVENTION`       | 3                      | Segments of an nzb whose size hints do not identify what they count that may be downloaded to settle it, making its sizes exact <br>A segment that settles nothing costs the next attempt; 0 leaves the sizes as estimates until a read has measured them |
 | **Health-Probing**
 | `PROBE_INITIAL_FILE_PERCENT`      | 0.5                    | Segments checked per content file on the first pass, as a percentage of its segments, spread evenly (so first and last)<br>0 disables checking |
 | `PROBE_INITIAL_FILE_MIN_SEGMENTS` | 2                      | Floor on that sample, so a short file is not rounded down to nothing |

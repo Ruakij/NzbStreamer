@@ -179,7 +179,7 @@ func TestProbingTriesPastACandidateThatSettlesNothing(t *testing.T) {
 		}
 	}
 
-	settled, err := NewSegmentSizer(nzbData).SettleByProbing(nzbData, fetch)
+	settled, err := NewSegmentSizer(nzbData).SettleByProbing(nzbData, fetch, 3)
 	if err != nil {
 		t.Fatalf("SettleByProbing: %v", err)
 	}
@@ -193,12 +193,21 @@ func TestProbingTriesPastACandidateThatSettlesNothing(t *testing.T) {
 	// Nothing settled in those three attempts leaves the sizer as it was, and
 	// reports why rather than looking like a success
 	stubborn := func(_, _ string) (int, error) { return 0, errors.New("article not found") }
-	unsettled, err := NewSegmentSizer(nzbData).SettleByProbing(nzbData, stubborn)
+	unsettled, err := NewSegmentSizer(nzbData).SettleByProbing(nzbData, stubborn, 3)
 	if err == nil {
 		t.Errorf("a probe that answered nothing reported no error")
 	}
 	if unsettled.Convention() != ConventionUnknown {
 		t.Errorf("convention = %v, want ConventionUnknown", unsettled.Convention())
+	}
+
+	// No attempts at all is what switches probing off, and it costs no article
+	refuse := func(_, _ string) (int, error) {
+		t.Error("probing fetched an article when it was allowed no attempts")
+		return 0, nil
+	}
+	if _, err := NewSegmentSizer(nzbData).SettleByProbing(nzbData, refuse, 0); err != nil {
+		t.Errorf("probing with no attempts reported %v", err)
 	}
 }
 

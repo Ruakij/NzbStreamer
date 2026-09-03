@@ -36,17 +36,17 @@ type NzbFileFactory struct {
 	cache      *diskcache.Cache
 	getSegment nzbpostresource.GetSegmentFunc
 	sizeStore  SegmentSizeStore
-	// Whether an nzb whose hints do not identify their convention may have one
-	// segment decoded to find out
-	probeConvention bool
+	// How many segments an nzb whose hints do not identify their convention may
+	// have decoded to find out; 0 or less leaves it on estimates
+	probeAttempts int
 }
 
 // getSegment is the whole of what the factory needs from a news server.
-func NewNzbFileFactory(cache *diskcache.Cache, getSegment nzbpostresource.GetSegmentFunc, sizeStore SegmentSizeStore, probeConvention bool) *NzbFileFactory {
+func NewNzbFileFactory(cache *diskcache.Cache, getSegment nzbpostresource.GetSegmentFunc, sizeStore SegmentSizeStore, probeAttempts int) *NzbFileFactory {
 	f := &NzbFileFactory{
-		cache:           cache,
-		sizeStore:       sizeStore,
-		probeConvention: probeConvention,
+		cache:         cache,
+		sizeStore:     sizeStore,
+		probeAttempts: probeAttempts,
 	}
 
 	// Decoding is what turns a segments size hint into a fact, and this is where
@@ -143,7 +143,7 @@ func (f *NzbFileFactory) knownSizes(nzbData *nzbparser.NzbData) map[string]int64
 // made with.
 func (f *NzbFileFactory) sizer(nzbData *nzbparser.NzbData, known map[string]int64) nzbfileanalyzer.SegmentSizer {
 	sizer := settleConvention(nzbData, nzbfileanalyzer.NewSegmentSizer(nzbData), known)
-	if sizer.Convention() != nzbfileanalyzer.ConventionUnknown || !f.probeConvention {
+	if sizer.Convention() != nzbfileanalyzer.ConventionUnknown || f.probeAttempts <= 0 {
 		return sizer
 	}
 
@@ -152,7 +152,7 @@ func (f *NzbFileFactory) sizer(nzbData *nzbparser.NzbData, known map[string]int6
 		return len(body), err
 	}
 
-	probed, err := sizer.SettleByProbing(nzbData, fetchSize)
+	probed, err := sizer.SettleByProbing(nzbData, fetchSize, f.probeAttempts)
 	if err != nil {
 		// Estimated sizes are the state this nzb was already in, so a failed
 		// probe costs measurement on a later seek and never correctness

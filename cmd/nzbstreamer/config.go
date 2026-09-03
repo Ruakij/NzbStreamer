@@ -61,7 +61,7 @@ type FolderWatcherConfig struct {
 
 type NzbConfig struct {
 	FileBlacklist       []regexp.Regexp `env:"NZB_FILE_BLACKLIST, default="` // Early Regex-blacklist, applied after the nzb-file is scanned; a file dropped here is not health-checked either
-	ProbeSizeConvention bool            `env:"NZB_PROBE_SIZE_CONVENTION, default=true"`  // Download one segment of an nzb whose segment-size hints do not identify what they count, making its sizes exact; without it they stay estimates until a read has measured them
+	ProbeSizeConvention int             `env:"NZB_PROBE_SIZE_CONVENTION, default=3"` // Segments of an nzb whose size hints do not identify what they count that may be downloaded to settle it, making its sizes exact; one that settles nothing costs the next attempt, 0 leaves the sizes as estimates until a read has measured them
 }
 
 type ProbeConfig struct {
