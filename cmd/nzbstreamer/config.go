@@ -6,18 +6,32 @@ import (
 	"time"
 )
 
-type UsenetConfig struct {
-	Host     string `env:"USENET_HOST, required"`       // Usenet server host
-	Port     int    `env:"USENET_PORT, default=563"`    // Usenet server port
-	TLS      bool   `env:"USENET_TLS, default=true"`    // Use TLS for Usenet connection
-	User     string `env:"USENET_USER, required"`       // Usenet username
-	Password string `env:"USENET_PASS, required"`       // Usenet password
-	MaxConn  int    `env:"USENET_MAX_CONN, default=20"` // Maximum Usenet connections to use
+// UsenetServerConfig is one news server. It is read under a prefix: USENET_ for
+// the first server and USENET_<n>_ for every further one, so the variable names
+// of a single-server setup are unchanged.
+type UsenetServerConfig struct {
+	Host        string        `env:"HOST, required"`             // Usenet server host
+	Port        int           `env:"PORT, default=563"`          // Usenet server port
+	TLS         bool          `env:"TLS, default=true"`          // Use TLS for Usenet connection
+	User        string        `env:"USER, required"`             // Usenet username
+	Password    string        `env:"PASS, required"`             // Usenet password
+	MaxConn     int           `env:"MAX_CONN, default=20"`       // Maximum Usenet connections to use
+	Priority    int           `env:"PRIORITY"`                   // Priority, lower is chosen first; servers sharing a priority share the load round robin. Defaults to 1 for the unindexed server and to its index for the others
+	QuotaBytes  int64         `env:"QUOTA_BYTES"`                // Bytes this server may serve per period; 0 is unmetered. A server whose quota is spent is skipped as if it were not configured
+	QuotaPeriod time.Duration `env:"QUOTA_PERIOD, default=720h"` // How long a quota lasts before it resets; the reset happens on the first fetch after it ends
+}
 
+// UsenetConfig is what every server shares: they are properties of how this
+// program behaves, not of an account. The servers themselves are read by
+// usenetServers.
+type UsenetConfig struct {
 	MaxAttempts  int           `env:"USENET_MAX_ATTEMPTS, default=3"`   // Attempts a request gets before its error is reported
 	RetryBackoff time.Duration `env:"USENET_RETRY_BACKOFF, default=1s"` // Wait after the first failed attempt, doubled after each further one
 	Timeout      time.Duration `env:"USENET_TIMEOUT, default=30s"`      // Timeout for connecting and for completing a single request
 	IdleTimeout  time.Duration `env:"USENET_IDLE_TIMEOUT, default=2m"`  // Time after which an unused connection is closed; 0 or less falls back to the default
+
+	BreakerFailures int           `env:"USENET_BREAKER_FAILURES, default=3"`  // Consecutive failed requests that disable a server, so the others carry the load instead of every request descending past it; 0 never disables one for failures. Rejected credentials disable it for the rest of the process whatever this is set to, and the accounts connection limit is only logged, since using fewer connections is the only fix for it
+	BreakerCooldown time.Duration `env:"USENET_BREAKER_COOLDOWN, default=5m"` // How long a disabled server is skipped for; the first request after it decides whether it is disabled again
 }
 
 type HTTPConfig struct {
@@ -54,8 +68,8 @@ type PrefetchConfig struct {
 	Time        time.Duration `env:"PREFETCH_TIME, default=1s"`         // How far ahead of the read position to stay warm, in read-time
 	MinSegments int           `env:"PREFETCH_MIN_SEGMENTS, default=4"`  // Segments warmed ahead before a read speed can be measured
 	MaxSegments int           `env:"PREFETCH_MAX_SEGMENTS, default=16"` // Upper bound on segments warmed ahead; 0 disables prefetching
-	MaxConn     int           `env:"PREFETCH_MAX_CONN, default=0"`      // Concurrent prefetches across all files; defaults to USENET_MAX_CONN when 0
-	QueueMargin int           `env:"PREFETCH_QUEUE_MARGIN, default=-1"` // How many fetches may be waiting for a free connection before prefetch stops queueing more; 0 queues only while none are, negative defaults to a quarter of USENET_MAX_CONN. Higher overcommits the connections and can keep them better utilized, at the cost of later requests waiting longer or being refused by the backpressure
+	MaxConn     int           `env:"PREFETCH_MAX_CONN, default=0"`      // Concurrent prefetches across all files; defaults to the sum of the servers connections when 0
+	QueueMargin int           `env:"PREFETCH_QUEUE_MARGIN, default=-1"` // How many fetches may be waiting for a free connection before prefetch stops queueing more; 0 queues only while none are, negative defaults to a quarter of the connections of the servers currently in play. Higher overcommits the connections and can keep them better utilized, at the cost of later requests waiting longer or being refused by the backpressure
 }
 
 type FolderWatcherConfig struct {
@@ -78,7 +92,7 @@ type ProbeConfig struct {
 	Par2Safety               float64 `env:"PROBE_PAR2_SAFETY, default=0.9"`                 // Fraction of the estimated par2 capacity to trust, since the capacity is itself estimated
 	UndecidedAccept          bool    `env:"PROBE_UNDECIDED_ACCEPT, default=true"`           // Accept a file the second pass still cannot decide
 	Confidence               float64 `env:"PROBE_CONFIDENCE, default=0.95"`                 // Confidence of the interval the verdict is taken from; lower means fewer escalations and more wrong calls
-	Parallel                 int     `env:"PROBE_PARALLEL, default=0"`                      // Concurrent segment-checks; defaults to USENET_MAX_CONN when 0
+	Parallel                 int     `env:"PROBE_PARALLEL, default=0"`                      // Concurrent segment-checks; defaults to the sum of the servers connections when 0
 }
 
 type FilesystemConfig struct {

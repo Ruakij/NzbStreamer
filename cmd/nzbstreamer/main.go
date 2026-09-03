@@ -97,34 +97,76 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	// Setup logging
 	slog.SetLogLoggerLevel(c.Logging.Level)
 
-	// Setup nntpClient
-	nntpClient := nntpclient.New(nntpclient.Config{
-		Host:     c.Usenet.Host,
-		Port:     c.Usenet.Port,
-		TLS:      c.Usenet.TLS,
-		User:     c.Usenet.User,
-		Pass:     c.Usenet.Password,
-		MaxConns: c.Usenet.MaxConn,
-		Attempts: c.Usenet.MaxAttempts,
-		Backoff:  c.Usenet.RetryBackoff,
-		Timeout:  c.Usenet.Timeout,
+	servers, err := usenetServers(ctx)
+	if err != nil {
+		slog.Error("Failed reading Env-variables for the news servers", "error", err)
+		os.Exit(1)
+	}
 
-		IdleTimeout: c.Usenet.IdleTimeout,
+	// Setup services
+	store, err := sqlstore.New(c.Metadata.Path)
+	if err != nil {
+		slog.Error("Metadata store creation failed", "error", err)
+		os.Exit(1)
+	}
+	// start returns while the presenters keep running, so closing the store is a
+	// shutdown step rather than a defer; it is what flushes the sizes the read
+	// path has learned
+	sm.AddService()
+	go func() {
+		defer sm.ServiceDone()
+		<-ctx.Done()
+		if err := store.Close(); err != nil {
+			slog.Error("Failed closing metadata store", "error", err)
+		}
+	}()
+
+	// Setup nntp pool: one client per server, ordered by priority
+	poolServers := make([]nntpclient.ServerConfig, 0, len(servers))
+	totalConns := 0
+	for _, server := range servers {
+		slog.Info("Using news server", "host", server.Host, "priority", server.Priority, "connections", server.MaxConn)
+		poolServers = append(poolServers, nntpclient.ServerConfig{
+			Server: nntpclient.New(nntpclient.Config{
+				Host:     server.Host,
+				Port:     server.Port,
+				TLS:      server.TLS,
+				User:     server.User,
+				Pass:     server.Password,
+				MaxConns: server.MaxConn,
+				Attempts: c.Usenet.MaxAttempts,
+				Backoff:  c.Usenet.RetryBackoff,
+				Timeout:  c.Usenet.Timeout,
+
+				IdleTimeout: c.Usenet.IdleTimeout,
+			}),
+			Name:        server.Host,
+			Priority:    server.Priority,
+			QuotaBytes:  server.QuotaBytes,
+			QuotaPeriod: server.QuotaPeriod,
+		})
+		totalConns += server.MaxConn
+	}
+	nntpPool := nntpclient.NewPool(poolServers, store, nntpclient.BreakerConfig{
+		Failures: c.Usenet.BreakerFailures,
+		Cooldown: c.Usenet.BreakerCooldown,
 	})
 
 	// Setup prefetch, sharing the connections and the queue for them across all
-	// open files
+	// open files. Any server may serve any fetch, so the concurrency is the sum;
+	// the queue margin is the pool's, since which servers a fetch queues on
+	// changes when a quota runs out.
 	prefetchMaxConn := c.Prefetch.MaxConn
 	if prefetchMaxConn <= 0 {
-		prefetchMaxConn = c.Usenet.MaxConn
+		prefetchMaxConn = totalConns
 	}
 	adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{
 		Concurrency: prefetchMaxConn,
 		LeadTime:    c.Prefetch.Time,
 		MinLead:     c.Prefetch.MinSegments,
 		MaxLead:     c.Prefetch.MaxSegments,
-		Queued:      nntpClient.Waiting,
-		QueueMargin: prefetchQueueMargin(c.Prefetch.QueueMargin, c.Usenet.MaxConn),
+		Queued:      nntpPool.Waiting,
+		QueueMargin: prefetchQueueMargin(c.Prefetch.QueueMargin, nntpPool.Conns()),
 	})
 
 	// Setup cache
@@ -151,31 +193,14 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	}
 
 	// Setup services
-	store, err := sqlstore.New(c.Metadata.Path)
-	if err != nil {
-		slog.Error("Metadata store creation failed", "error", err)
-		os.Exit(1)
-	}
-	// start returns while the presenters keep running, so closing the store is a
-	// shutdown step rather than a defer; it is what flushes the sizes the read
-	// path has learned
-	sm.AddService()
-	go func() {
-		defer sm.ServiceDone()
-		<-ctx.Done()
-		if err := store.Close(); err != nil {
-			slog.Error("Failed closing metadata store", "error", err)
-		}
-	}()
-
-	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpClient.GetSegment, store, c.NzbConfig.ProbeSizeConvention)
+	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpPool.GetSegment, store, c.NzbConfig.ProbeSizeConvention)
 
 	folderTrigger := folderwatcher.NewFolderWatcher(c.FolderWatcher.Path, c.FolderWatcher.Consume)
 
 	// Setup health checker
 	probeParallel := c.Probe.Parallel
 	if probeParallel <= 0 {
-		probeParallel = c.Usenet.MaxConn
+		probeParallel = totalConns
 	}
 	healthChecker := filehealth.NewDefaultChecker(filehealth.CheckerConfig{
 		InitialFilePercent:       c.Probe.InitialFilePercent,
@@ -188,7 +213,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		UndecidedAccept:          c.Probe.UndecidedAccept,
 		Confidence:               c.Probe.Confidence,
 		MaxParallel:              probeParallel,
-	}, nntpClient.SegmentExists)
+	}, nntpPool.SegmentExists)
 
 	service := nzbservice.NewService(store, factory, presenters, []trigger.Trigger{folderTrigger}, healthChecker)
 	service.SetBlacklist(c.Filesystem.Blacklist)

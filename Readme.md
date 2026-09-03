@@ -49,10 +49,10 @@ services:
         ports:
             - 127.0.0.1:8080:8080
         environment:
-            USENET_HOST: your_usenet_host
-            USENET_PORT: 563
-            USENET_USER: your_usenet_user
-            USENET_PASS: your_usenet_pass
+            USENET_1_HOST: your_usenet_host
+            USENET_1_PORT: 563
+            USENET_1_USER: your_usenet_user
+            USENET_1_PASS: your_usenet_pass
             FILESYSTEM_BLACKLIST: "(?i)\\.par2$,(?i)\\.r(ar)?\\d*$,(?i)\\.7z(ip)?\\d*$,(?i)\\.z\\d*$,(?i)\\.zip$,(?i)((^|\\W)(sample|preview)\\W)"
             MOUNT_PATH: /mount
         security_opt:
@@ -111,17 +111,32 @@ Specially video-files like mkv are problematic as some metadata required for pla
 
 | Name                              | Default                | Description                                      |
 |-----------------------------------|------------------------|--------------------------------------------------|
-| **Usenet**
-| `USENET_HOST`*                    |                        | Usenet server host                               |
-| `USENET_PORT`                     | 563                    | Usenet server port                               |
-| `USENET_TLS`                      | true                   | Use TLS for Usenet connection                    |
-| `USENET_USER`*                    |                        | Usenet username                                  |
-| `USENET_PASS`*                    |                        | Usenet password                                  |
-| `USENET_MAX_CONN`                 | 20                     | Maximum Usenet connections to use                |
+| **Usenet server**, once per server, `n` counting up from 1
+| `USENET_n_HOST`*                  |                        | Usenet server host                               |
+| `USENET_n_PORT`                   | 563                    | Usenet server port                               |
+| `USENET_n_TLS`                    | true                   | Use TLS for Usenet connection                    |
+| `USENET_n_USER`*                  |                        | Usenet username                                  |
+| `USENET_n_PASS`*                  |                        | Usenet password                                  |
+| `USENET_n_MAX_CONN`               | 20                     | Maximum Usenet connections to use                |
+| `USENET_n_PRIORITY`               | n                      | Priority, lower is chosen first; servers sharing a priority share the load round robin |
+| `USENET_n_QUOTA_BYTES`            | 0                      | Bytes this server may serve per period; 0 is unmetered |
+| `USENET_n_QUOTA_PERIOD`           | 720h                   | Quota-lifetime |
+| **Usenet**, shared by every server
 | `USENET_MAX_ATTEMPTS`             | 3                      | Attempts a request gets before its error is reported |
 | `USENET_RETRY_BACKOFF`            | 1s                     | Wait after the first failed attempt, doubled after each further one |
 | `USENET_TIMEOUT`                  | 30s                    | Timeout for connecting and for completing a single request |
 | `USENET_IDLE_TIMEOUT`             | 2m                     | Time after which an unused connection is closed |
+| `USENET_BREAKER_FAILURES`         | 3                      | Consecutive failures which disables uisng a server for cooldown-time; 0 never disables |
+| `USENET_BREAKER_COOLDOWN`         | 5m                     | How long a disabled server waits for |
+
+One server is `USENET_1_HOST` and its siblings; add more by counting up. The
+unindexed form (`USENET_HOST`) is nr. 1 too.
+
+`PRIORITY` decides the order: lower is chosen first, higher ones are the fallback. Servers sharing a priority are used simultaniously via round robin.
+Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORITY` to 2.
+
+| Name                              | Default                | Description                                      |
+|-----------------------------------|------------------------|--------------------------------------------------|
 | **Trigger**
 | `FOLDER_WATCHER_PATH`             | .watch                 | Watch folder for adding nzbs                     |
 | `FOLDER_WATCHER_CONSUME`          | true                   | Delete an nzb file once it has been added; the metadata database keeps it |
@@ -146,8 +161,8 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `PREFETCH_TIME`                   | 1s                     | How far ahead of the read position to stay warm, in read-time |
 | `PREFETCH_MIN_SEGMENTS`           | 4                      | Segments warmed ahead before a read speed can be measured |
 | `PREFETCH_MAX_SEGMENTS`           | 16                     | Upper bound on segments warmed ahead; 0 disables prefetching |
-| `PREFETCH_MAX_CONN`               | 0                      | Concurrent prefetches across all files; defaults to `USENET_MAX_CONN` when 0 |
-| `PREFETCH_QUEUE_MARGIN`           | -1                     | How many fetches may be waiting for a free connection before prefetch stops queueing more; 0 queues only while none are, negative defaults to a quarter of `USENET_MAX_CONN` <br>Higher overcommits the connections and can keep them better utilized, at the cost of later requests waiting longer or being refused by the backpressure |
+| `PREFETCH_MAX_CONN`               | 0                      | Concurrent prefetches across all files; defaults to the sum of the servers connections when 0 |
+| `PREFETCH_QUEUE_MARGIN`           | -1                     | How many fetches may be waiting for a free connection before prefetch stops queueing more; 0 queues only while none are, negative defaults to a quarter of the connections of the servers currently active <br>Higher overcommits the connections and can keep them better utilized, at the cost of later requests waiting longer or being refused by the backpressure |
 | **Nzb-Options**
 | `NZB_FILE_BLACKLIST`              |                        | Early Regex-blacklist, applied after the nzb-file is scanned <br>A file dropped here is not health-checked either, and .par2 dropped here leaves the check without its repair-capacity estimate |
 | `NZB_PROBE_SIZE_CONVENTION`       | 3                      | Segments of an nzb whose size hints do not identify what they count that may be downloaded to settle it, making its sizes exact <br>A segment that settles nothing costs the next attempt; 0 leaves the sizes as estimates until a read has measured them |
@@ -161,7 +176,7 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `PROBE_PAR2_SAFETY`               | 0.9                    | Fraction of the estimated par2 capacity to trust, since the capacity is itself estimated |
 | `PROBE_UNDECIDED_ACCEPT`          | true                   | Accept a file the second pass still cannot decide |
 | `PROBE_CONFIDENCE`                | 0.95                   | Confidence of the interval the verdict is taken from; lower means fewer escalations and more wrong calls |
-| `PROBE_PARALLEL`                  | 0                      | Concurrent segment-checks; defaults to `USENET_MAX_CONN` when 0 |
+| `PROBE_PARALLEL`                  | 0                      | Concurrent segment-checks; defaults to the sum of the servers connections when 0 |
 | **Filesystem-Options**
 | `FILESYSTEM_BLACKLIST`            | (?i)\.par2$            | Late Regex-blacklist, applied on the actual file added to the filesystem; includes files from archives <br>Can be used to hide archive-files, but leaving unpacked files. Hides .par2 by default, after the health check has counted it |
 | `FILESYSTEM_FLATTEN_MAX_DEPTH`    | 1                      | Unpacks files from folders e.g. archives where possible <br>Can be used to hide archive-group-folder |

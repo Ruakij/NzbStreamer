@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -18,14 +19,27 @@ import (
 	"github.com/chrisfarms/yenc"
 )
 
+// Response codes, from RFC 3977 and the AUTHINFO from RFC 4643.
 const (
-	groupJoined     = 211
-	articleExists   = 223
-	noArticleWithID = 430
+	serverReady       = 200
+	serverReadyNoPost = 201
+	groupJoined       = 211
+	articleExists     = 223
+	authAccepted      = 281
+	passwordNeeded    = 381
+	authRejected      = 481
+	noArticleWithID   = 430
+	connsExceeded     = 502
 )
 
 var (
-	ErrAuthFailed         = errors.New("auth failed")
+	// ErrAuthFailed is the server rejecting the credentials, which no retry and
+	// no waiting is going to change
+	ErrAuthFailed = errors.New("auth failed")
+	// ErrTooManyConnections is the account already using all the connections it
+	// is allowed. Nothing here can help but using fewer, so it is a transient
+	// state of this process rather than a fault of the server
+	ErrTooManyConnections = errors.New("too many connections for this account")
 	ErrArticleNotFound    = errors.New("article not found on server")
 	ErrUnexpectedResponse = errors.New("unexpected response")
 )
@@ -84,6 +98,11 @@ type Client struct {
 // this request will get.
 func (c *Client) Waiting() int {
 	return int(c.waiting.Load())
+}
+
+// Conns reports how many connections this client may have open at once.
+func (c *Client) Conns() int {
+	return c.config.MaxConns
 }
 
 func New(config Config) *Client {
@@ -191,8 +210,8 @@ func (c *Client) SegmentExists(id string) (bool, error) {
 }
 
 // retry runs op until it succeeds or the attempts run out, waiting a doubling
-// backoff in between. A missing article is the servers final answer and is
-// reported as it is.
+// backoff in between. A missing article is the servers final answer, and so are
+// rejected credentials: both are reported as they are rather than retried.
 func (c *Client) retry(what string, op func() error) error {
 	var err error
 	backoff := c.config.Backoff
@@ -200,7 +219,7 @@ func (c *Client) retry(what string, op func() error) error {
 
 	for attempt := 0; attempt < c.config.Attempts; {
 		err = op()
-		if err == nil || errors.Is(err, ErrArticleNotFound) {
+		if err == nil || errors.Is(err, ErrArticleNotFound) || errors.Is(err, ErrAuthFailed) {
 			return err
 		}
 
@@ -369,10 +388,14 @@ func (c *Client) dialServer() (*conn, error) {
 	cn := &conn{net: netConn}
 	cn.deadline(c.config.Timeout)
 
-	_, nntpConn, err := nntp.NewConn(netConn)
+	welcome, nntpConn, err := nntp.NewConn(netConn)
 	if err != nil {
 		netConn.Close()
 		return nil, fmt.Errorf("failed nntp handshake with %s: %w", address, err)
+	}
+	if err := greeting(welcome); err != nil {
+		netConn.Close()
+		return nil, fmt.Errorf("%s refused the connection: %w", address, err)
 	}
 	cn.Conn = nntpConn
 
@@ -383,6 +406,30 @@ func (c *Client) dialServer() (*conn, error) {
 		}
 	}
 	return cn, nil
+}
+
+// greeting reads the code off the welcome line. nntp.NewConn hands it back
+// without looking at it, and a server that is out of connections says so there
+// rather than to the first command, which would then read the greeting as its
+// own response.
+func greeting(welcome string) error {
+	fields := strings.Fields(welcome)
+	if len(fields) == 0 {
+		return fmt.Errorf("%w: empty welcome line", ErrUnexpectedResponse)
+	}
+	code, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return fmt.Errorf("%w: unreadable welcome line %q", ErrUnexpectedResponse, welcome)
+	}
+
+	switch code {
+	case serverReady, serverReadyNoPost:
+		return nil
+	case connsExceeded:
+		return fmt.Errorf("%w: %s", ErrTooManyConnections, strings.TrimSpace(welcome))
+	default:
+		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, strings.TrimSpace(welcome))
+	}
 }
 
 // conn is a connection plus the group it currently has selected.
@@ -468,15 +515,26 @@ func (c *conn) authenticate(user, pass string) error {
 		return fmt.Errorf("failed sending username: %w", err)
 	}
 
-	if res.Code == nntp.PasswordNeeded {
+	if res.Code == passwordNeeded {
 		res, err = c.Do("AUTHINFO PASS %s", pass)
 		if err != nil {
 			return fmt.Errorf("failed sending password: %w", err)
 		}
 	}
 
-	if res.Code != nntp.AuthAccepted {
+	// A rejection and a full account arrive the same way and are opposite
+	// things: one will answer identically forever, the other passes on its own.
+	// Anything else is a protocol answer this does not understand - 482 out of
+	// sequence among them - which is worth another attempt rather than the
+	// verdict that the credentials are wrong.
+	switch res.Code {
+	case authAccepted:
+		return nil
+	case authRejected:
 		return fmt.Errorf("%w: %d %s", ErrAuthFailed, res.Code, res.Message)
+	case connsExceeded:
+		return fmt.Errorf("%w: %d %s", ErrTooManyConnections, res.Code, res.Message)
+	default:
+		return fmt.Errorf("%w to AUTHINFO: %d %s", ErrUnexpectedResponse, res.Code, res.Message)
 	}
-	return nil
 }

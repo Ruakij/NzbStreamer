@@ -106,8 +106,10 @@ func (s *Store) flushLoop() {
 		select {
 		case <-ticker.C:
 			s.flushSegmentSizes()
+			s.flushServerUsage()
 		case <-s.closing:
 			s.flushSegmentSizes()
+			s.flushServerUsage()
 			return
 		}
 	}

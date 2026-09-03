@@ -27,10 +27,12 @@ var logger = slog.With("Module", "SqlStore")
 type Store struct {
 	db *sql.DB
 
-	// Segment sizes are learned on the read path, so they are buffered here and
-	// written by flushLoop instead of by the read
+	// Segment sizes are learned on the read path and quota usage is charged on
+	// it, so both are buffered here and written by flushLoop instead of by the
+	// read
 	pendingMutex sync.Mutex
 	pending      map[string]int64
+	pendingUsage map[string]usage
 	closing      chan struct{}
 	flusherDone  sync.WaitGroup
 	closeOnce    sync.Once
@@ -75,9 +77,10 @@ func New(path string) (*Store, error) {
 	}
 
 	store := &Store{
-		db:      db,
-		pending: make(map[string]int64),
-		closing: make(chan struct{}),
+		db:           db,
+		pending:      make(map[string]int64),
+		pendingUsage: make(map[string]usage),
+		closing:      make(chan struct{}),
 	}
 	store.flusherDone.Add(1)
 	go store.flushLoop()
