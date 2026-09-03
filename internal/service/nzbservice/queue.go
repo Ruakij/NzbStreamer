@@ -147,6 +147,16 @@ func (s *Service) Cancel(id string) error {
 // replaced, since an nzb that was removed or that failed may be added again and
 // the later attempt is the one worth reporting.
 func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
+	// An nzb that is already presented is refused before anything is written,
+	// since accepting it would replace the record of the add that built it and
+	// then fail on its own duplicate check
+	s.mutex.Lock()
+	_, present := s.nzbFiledata[nzbData.MetaName]
+	s.mutex.Unlock()
+	if present {
+		return ErrNzbAlreadyExists
+	}
+
 	s.queueMutex.Lock()
 
 	if existing := s.find(nzbData.MetaName); existing != nil {

@@ -10,6 +10,7 @@ package sabnzbd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -200,7 +201,13 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request, query map[stri
 	}
 
 	id, err := h.service.Add(nzbData, first(query, "cat", "category"))
-	if err != nil {
+	switch {
+	// The add is idempotent here: an nzb that is already presented is what the
+	// client wanted, and reporting a failure would make it fail the grab and
+	// blacklist a release that is sitting in the mount
+	case errors.Is(err, nzbservice.ErrNzbAlreadyExists):
+		id = nzbData.MetaName
+	case err != nil:
 		writeError(w, err.Error())
 		return
 	}

@@ -31,10 +31,14 @@ type fakeService struct {
 	added     []string
 	cancelled []string
 	deleted   []string
+	addErr    error
 }
 
 func (s *fakeService) Add(nzbData *nzbparser.NzbData, category string) (string, error) {
 	s.added = append(s.added, nzbData.MetaName+"/"+category)
+	if s.addErr != nil {
+		return "", s.addErr
+	}
 	return nzbData.MetaName, nil
 }
 
@@ -116,9 +120,8 @@ func TestAClientCanValidateThisAsADownloadClient(t *testing.T) {
 	}
 }
 
-func TestAddingAnNzbReturnsTheIdToTrackItUnder(t *testing.T) {
-	service := &fakeService{}
-	handler := sabnzbd.NewHandler(service, sabnzbd.Config{})
+func addfile(t *testing.T, handler *sabnzbd.Handler) (bool, []string) {
+	t.Helper()
 
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
@@ -145,11 +148,31 @@ func TestAddingAnNzbReturnsTheIdToTrackItUnder(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("response was not json: %v (%s)", err, recorder.Body)
 	}
-	if !response.Status || len(response.Ids) != 1 || response.Ids[0] != "Some.Release" {
-		t.Fatalf("addfile answered %+v", response)
+	return response.Status, response.Ids
+}
+
+func TestAddingAnNzbReturnsTheIdToTrackItUnder(t *testing.T) {
+	service := &fakeService{}
+	handler := sabnzbd.NewHandler(service, sabnzbd.Config{})
+
+	status, ids := addfile(t, handler)
+	if !status || len(ids) != 1 || ids[0] != "Some.Release" {
+		t.Fatalf("addfile answered %v %v", status, ids)
 	}
 	if len(service.added) != 1 || service.added[0] != "Some.Release/tv" {
 		t.Errorf("service saw %v", service.added)
+	}
+}
+
+// An *arr fails the grab and blacklists the release when an add reports a
+// failure, so one that is already presented is answered as the success it is.
+func TestAddingAnNzbThatIsAlreadyThereSucceeds(t *testing.T) {
+	service := &fakeService{addErr: nzbservice.ErrNzbAlreadyExists}
+	handler := sabnzbd.NewHandler(service, sabnzbd.Config{})
+
+	status, ids := addfile(t, handler)
+	if !status || len(ids) != 1 || ids[0] != "Some.Release" {
+		t.Fatalf("addfile answered %v %v", status, ids)
 	}
 }
 

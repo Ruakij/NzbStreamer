@@ -25,7 +25,10 @@ func Setup() *FileSystem {
 	return &FileSystem{root: root}
 }
 
-func (fsManager *FileSystem) Mount(ctx context.Context, path string, mountOptions []string) error {
+// Mount attaches the tree at path. The root inode only accepts children once it
+// is mounted, so this happens before anything is added to the filesystem; Serve
+// then runs until the context ends.
+func (fsManager *FileSystem) Mount(path string, mountOptions []string) error {
 	server, err := fs.Mount(path, fsManager.root, &fs.Options{
 		MountOptions: fuse.MountOptions{
 			FsName:        "nzbstreamer",
@@ -40,6 +43,13 @@ func (fsManager *FileSystem) Mount(ctx context.Context, path string, mountOption
 	}
 	logger.Info("Mounted", "path", path)
 
+	fsManager.server = server
+	return nil
+}
+
+func (fsManager *FileSystem) Serve(ctx context.Context) error {
+	server := fsManager.server
+
 	mountWaitCtx := make(chan struct{})
 	go func() {
 		server.Wait()
@@ -49,8 +59,7 @@ func (fsManager *FileSystem) Mount(ctx context.Context, path string, mountOption
 	select {
 	case <-ctx.Done():
 		logger.Debug("Context cancelled, unmounting")
-		err = server.Unmount()
-		if err != nil {
+		if err := server.Unmount(); err != nil {
 			return fmt.Errorf("unmounting failed: %w", err)
 		}
 	case <-mountWaitCtx:

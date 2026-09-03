@@ -212,7 +212,8 @@ func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 
 // FileSystem manages the root directory and dynamic file modifications.
 type FileSystem struct {
-	root *dirNode
+	root   *dirNode
+	server *fuse.Server
 }
 
 var _ = presentation.Presenter((*FileSystem)(nil))

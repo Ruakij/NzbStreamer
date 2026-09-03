@@ -358,6 +358,9 @@ func TestFailedAddLeavesTheNzbAddable(t *testing.T) {
 	if err := service.AddNzb(nzbData); !errors.Is(err, nzbservice.ErrNzbAlreadyExists) {
 		t.Errorf("adding an nzb twice returned %v, expected it to be rejected", err)
 	}
+	if got := store.stage(nzbData.MetaName); got != string(nzbservice.StageCompleted) {
+		t.Errorf("the rejected add changed the record of the one that succeeded to %q", got)
+	}
 }
 
 func TestRemovingAnNzbDiscardsWhatItAccumulated(t *testing.T) {

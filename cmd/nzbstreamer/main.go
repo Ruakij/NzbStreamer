@@ -178,6 +178,24 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	service.SetPathFlatteningDepth(c.Filesystem.FlattenMaxDepth)
 	service.SetFilenameReplacementBelowLevensteinRatio(c.Filesystem.FixFilenameThreshold)
 
+	// Mount before the service restores its tree: an inode only takes children
+	// once the filesystem it belongs to is mounted
+	if c.Mount.Path != "" {
+		if err = mount.Mount(c.Mount.Path, c.Mount.Options); err != nil {
+			slog.Error("Mounting failed", "error", err)
+			os.Exit(1)
+		}
+		sm.AddService()
+		go func() {
+			defer sm.ServiceDone()
+			if err := mount.Serve(ctx); err != nil {
+				slog.Error("Error in mount", "error", err)
+				os.Exit(1)
+			}
+			slog.Info("Mount exited")
+		}()
+	}
+
 	// Start services
 	if err = service.Init(); err != nil {
 		os.Exit(1)
@@ -214,18 +232,4 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		}
 		slog.Info("Http server exited")
 	}()
-
-	// Mount
-	if c.Mount.Path != "" {
-		sm.AddService()
-		go func() {
-			defer sm.ServiceDone()
-			err := mount.Mount(ctx, c.Mount.Path, c.Mount.Options)
-			if err != nil {
-				slog.Error("Error in mount", "error", err)
-				os.Exit(1)
-			}
-			slog.Info("Mount exited")
-		}()
-	}
 }
