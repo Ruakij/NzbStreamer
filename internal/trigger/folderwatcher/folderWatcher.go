@@ -1,6 +1,8 @@
 package folderwatcher
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,32 +23,47 @@ var ErrUnknownListener = errors.New("unknown listener id")
 
 // FolderWatcher notifies listeners about new files in directory
 type folderWatcher struct {
-	watchFolder    string
-	addHooks       []func(nzbData *nzbparser.NzbData) error
-	removeHooks    []func(nzbData *nzbparser.NzbData) error
-	mu             sync.Mutex
-	wg             sync.WaitGroup
-	stopChan       chan struct{}
-	processedFiles map[string]struct{} // Store processed file names
+	watchFolder string
+	addHooks    []func(nzbData *nzbparser.NzbData) error
+	removeHooks []func(nzbData *nzbparser.NzbData) error
+	mu          sync.Mutex
+	wg          sync.WaitGroup
+	stopChan    chan struct{}
+	// Content hashes already handed to the hooks, so a file re-appearing under
+	// another name is one release and a name reused by another release is two.
+	// It lives only as long as the process, so a restart re-offers what is still
+	// in the folder and the listeners reject what they already hold.
+	processed map[string]string
+	// What each file looked like during the previous scan; a file that has not
+	// changed since then is done being written
+	sighted map[string]fileStat
+}
+
+type fileStat struct {
+	size  int64
+	mtime time.Time
 }
 
 // NewFolderWatcher creates a new instance of folderWatcher
 func NewFolderWatcher(folder string) *folderWatcher {
 	return &folderWatcher{
-		watchFolder:    folder,
-		processedFiles: make(map[string]struct{}), // Initialize the map
-		stopChan:       make(chan struct{}),
+		watchFolder: folder,
+		processed:   make(map[string]string),
+		sighted:     make(map[string]fileStat),
+		stopChan:    make(chan struct{}),
 	}
 }
 
 const PollingScanTime = 15 * time.Second
 
 func (fw *folderWatcher) Init() {
-	go fw.scanDirectory()
+	// Polling runs regardless, because a file only counts as written once a later
+	// scan sees it unchanged and the last write may be the last event
+	fw.startPeriodicScan(PollingScanTime)
+
 	err := fw.startFsNotifyScan()
 	if err != nil {
 		logger.Error("Error when setting up FsNotifyScan, continuing with polling", "error", err)
-		fw.startPeriodicScan(PollingScanTime)
 	}
 }
 
@@ -81,6 +98,8 @@ func (fw *folderWatcher) startPeriodicScan(interval time.Duration) {
 	go func() {
 		defer ticker.Stop()
 
+		fw.scanDirectory()
+
 		for {
 			select {
 			case <-fw.stopChan:
@@ -104,35 +123,58 @@ func (fw *folderWatcher) scanDirectory() {
 	}
 
 	group := errgroup.Group{}
+	sighted := make(map[string]fileStat, len(files))
 
 	for _, file := range files {
-		if !file.IsDir() && strings.ToLower(filepath.Ext(file.Name())) == ".nzb" {
-			// Check if the file has been processed
-			if _, processed := fw.processedFiles[file.Name()]; !processed {
-				fw.processedFiles[file.Name()] = struct{}{}
-				group.Go(func() error {
-					fw.processFile(file.Name())
-					return nil
-				})
-			}
+		if file.IsDir() || strings.ToLower(filepath.Ext(file.Name())) != ".nzb" {
+			continue
 		}
+
+		info, err := file.Info()
+		if err != nil {
+			logger.Error("Failed to stat file", "filename", file.Name(), "err", err)
+			continue
+		}
+
+		stat := fileStat{size: info.Size(), mtime: info.ModTime()}
+		sighted[file.Name()] = stat
+		if fw.sighted[file.Name()] != stat {
+			continue
+		}
+
+		content, err := os.ReadFile(filepath.Join(fw.watchFolder, file.Name()))
+		if err != nil {
+			logger.Error("Failed to read file", "filename", file.Name(), "err", err)
+			continue
+		}
+
+		// Keyed by content, so a broken or half-written file gets another chance
+		// once it is rewritten, while an unchanged one is not retried forever
+		sum := sha256.Sum256(content)
+		hash := string(sum[:])
+		if seenAs, done := fw.processed[hash]; done {
+			if seenAs != file.Name() {
+				logger.Debug("Skipping file already processed under another name", "filename", file.Name(), "seenAs", seenAs)
+			}
+			continue
+		}
+		fw.processed[hash] = file.Name()
+
+		group.Go(func() error {
+			fw.processFile(file.Name(), content)
+			return nil
+		})
 	}
+
+	fw.sighted = sighted
 
 	//nolint:errcheck // because there will never be an error
 	_ = group.Wait()
 }
 
 // processFile triggers the addHooks for the file
-func (fw *folderWatcher) processFile(filename string) {
-	filePath := filepath.Join(fw.watchFolder, filename)
-	file, err := os.Open(filePath)
-	if err != nil {
-		logger.Error("Failed to open file", "filename", filename, "err", err)
-		return
-	}
-	defer file.Close() // Ensure the file is closed after processing
-
-	nzbData, err := nzbparser.ParseNzb(file, filename)
+func (fw *folderWatcher) processFile(filename string, content []byte) {
+	nzbData, err := nzbparser.ParseNzb(bytes.NewReader(content), filename)
 	if err != nil {
 		logger.Error("Failed to parse nzb", "filename", filename, "err", err)
 		return
