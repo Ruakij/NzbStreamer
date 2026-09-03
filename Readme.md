@@ -1,7 +1,13 @@
-NzbStreamer
-===
+# NzbStreamer
 
-Presents files described by NZBs from Newsservers on-demand as WebDAV or FUSE with caching & unpacking multi-part-rar and -7z containers.  
+[![CI](https://github.com/Ruakij/NzbStreamer/actions/workflows/ci.yaml/badge.svg)](https://github.com/Ruakij/NzbStreamer/actions/workflows/ci.yaml)
+[![Version](https://img.shields.io/github/v/release/Ruakij/NzbStreamer?label=Version&color=green)](https://github.com/Ruakij/NzbStreamer/releases)
+[![Image](https://img.shields.io/badge/Image-ghcr.io-blue)](https://github.com/Ruakij/NzbStreamer/pkgs/container/nzbstreamer)
+[![Presenters](https://img.shields.io/badge/Presenters-WebDAV%20%7C%20FUSE-orange)](#4-routes)
+[![Go](https://img.shields.io/github/go-mod/go-version/Ruakij/NzbStreamer?label=Go)](go.mod)
+[![License](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENCE)
+
+**Presents files described by NZBs from Newsservers on-demand as WebDAV or FUSE, unpacking multi-part rar and 7z containers on the way.**
 
 <img src="docs/Popeye.png" height="100" width="auto"/>
 
