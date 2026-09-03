@@ -1,6 +1,7 @@
 package nzbfileanalyzer
 
 import (
+	"errors"
 	"testing"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
@@ -149,6 +150,55 @@ func TestAnImplausiblePairSettlesNothing(t *testing.T) {
 
 	if got := sizer.SettleWith(500000, 250000); got.Convention() != ConventionUnknown {
 		t.Errorf("an implausible pair settled the convention as %v", got.Convention())
+	}
+}
+
+// A probe carries on past a candidate that answers nothing, since one dead
+// article says nothing about the nzb, and gives up once it has spent what an
+// unknown convention is worth.
+func TestProbingTriesPastACandidateThatSettlesNothing(t *testing.T) {
+	const hint = 500000
+
+	nzbData := nzbWith(hint, hint, hint, hint, 120000)
+	nzbData.Files[0].Groups = []string{"alt.binaries.test"}
+	for i := range nzbData.Files[0].Segments {
+		nzbData.Files[0].Segments[i].ID = string(rune('a' + i))
+	}
+
+	fetched := []string{}
+	fetch := func(_, id string) (int, error) {
+		fetched = append(fetched, id)
+		switch id {
+		case "a":
+			return 0, errors.New("article not found")
+		case "b":
+			// A length that fits neither convention
+			return 250000, nil
+		default:
+			return hint, nil
+		}
+	}
+
+	settled, err := NewSegmentSizer(nzbData).SettleByProbing(nzbData, fetch)
+	if err != nil {
+		t.Fatalf("SettleByProbing: %v", err)
+	}
+	if settled.Convention() != ConventionContent {
+		t.Errorf("convention = %v, want ConventionContent", settled.Convention())
+	}
+	if len(fetched) != 3 {
+		t.Errorf("fetched %v, want three attempts", fetched)
+	}
+
+	// Nothing settled in those three attempts leaves the sizer as it was, and
+	// reports why rather than looking like a success
+	stubborn := func(_, _ string) (int, error) { return 0, errors.New("article not found") }
+	unsettled, err := NewSegmentSizer(nzbData).SettleByProbing(nzbData, stubborn)
+	if err == nil {
+		t.Errorf("a probe that answered nothing reported no error")
+	}
+	if unsettled.Convention() != ConventionUnknown {
+		t.Errorf("convention = %v, want ConventionUnknown", unsettled.Convention())
 	}
 }
 
