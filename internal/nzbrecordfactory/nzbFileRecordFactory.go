@@ -243,7 +243,7 @@ func (f *NzbFileFactory) processSpecialFiles(groupFilename string, groupedFiles 
 	switch extension {
 	case ".rar", ".r":
 		specialFiles, err = f.BuildRarFileFromFileResource(groupedFiles, password)
-	case ".7z", ".z", ".zip":
+	case ".7z", ".z":
 		specialFiles, err = f.Build7zFileFromFileResource(groupedFiles, password)
 		if err != nil && extension == ".z" {
 			// Handle potential zip fallback
@@ -321,8 +321,8 @@ func (f *NzbFileFactory) Build7zFileFromFileResource(underlyingResources []resou
 		return nil, fmt.Errorf("failed creating 7z resource: %w", err)
 	}
 
-	for filepath, fileinfo := range files {
-		resources[path.Join(filepath, fileinfo.Name())] = sevenzipfileresource.NewSevenzipFileResource(mergedResource, password, "")
+	for member := range files {
+		resources[member] = sevenzipfileresource.NewSevenzipFileResource(mergedResource, password, member)
 	}
 
 	return resources, nil
