@@ -1,0 +1,9 @@
+vulnerabilities:
+  - id: CVE-2026-14456
+    statement: |
+      openssl in the alpine base image, which ships libcrypto3 and libssl3 for
+      busybox's ssl_client whether anything links them or not. Alpine 3.24 has
+      not rebuilt with the fixed 3.5.8-r0 yet. Nothing here executes that code:
+      the binary is CGO_ENABLED=0 and speaks TLS through crypto/tls, and the
+      flaw is a DoS in a QUIC server.
+    expired_at: 2026-10-15

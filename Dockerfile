@@ -22,8 +22,9 @@ RUN CGO_ENABLED=0 go build \
 FROM alpine:3.24 AS release
 WORKDIR /app
 
-# Install runtime dependencies
-RUN apk add --no-cache fuse ca-certificates
+# ca-certificates-bundle is the root store without the openssl tooling that
+# ca-certificates drags in; a CGO_ENABLED=0 binary uses crypto/tls, not libssl
+RUN apk add --no-cache fuse ca-certificates-bundle
 
 # Copy binary from build stage
 COPY --from=build /build/nzbstreamer .
