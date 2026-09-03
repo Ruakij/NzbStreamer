@@ -60,7 +60,10 @@ func NewNzbFileFactory(cache *diskcache.Cache, getSegment nzbpostresource.GetSeg
 }
 
 func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData) (map[string]presentation.Openable, error) {
-	rawFiles := f.buildRawFiles(nzbData, nzbfileanalyzer.NewSegmentSizer(nzbData), f.knownSizes(nzbData))
+	known := f.knownSizes(nzbData)
+	sizer := f.sizer(nzbData, known)
+
+	rawFiles := f.buildRawFiles(nzbData, sizer, known)
 	groupedFilenames := f.groupFiles(rawFiles)
 
 	files := make(map[string]presentation.Openable, len(rawFiles))
@@ -123,6 +126,58 @@ func (f *NzbFileFactory) knownSizes(nzbData *nzbparser.NzbData) map[string]int64
 	}
 
 	return sizes
+}
+
+// sizer decides what this nzbs bytes-hints count. Most nzbs answer that from
+// their hints alone; one that does not is settled from a decoded segment, taken
+// from the store if it holds one and fetched if it does not.
+func (f *NzbFileFactory) sizer(nzbData *nzbparser.NzbData, known map[string]int64) nzbfileanalyzer.SegmentSizer {
+	sizer := settleConvention(nzbData, nzbfileanalyzer.NewSegmentSizer(nzbData), known)
+	if sizer.Convention() != nzbfileanalyzer.ConventionUnknown {
+		return sizer
+	}
+
+	decode := func(group, id string) (int, error) {
+		body, err := f.getSegment(group, id)
+		return len(body), err
+	}
+
+	probed, err := sizer.SettleByProbing(nzbData, decode)
+	if err != nil {
+		// Estimated sizes are the state this nzb was already in, so a failed
+		// probe costs measurement on a later seek and never correctness
+		logger.Warn("Failed probing size convention", "nzb", nzbData.MetaName, "error", err)
+		return sizer
+	}
+
+	logger.Debug("Probed size convention", "nzb", nzbData.MetaName, "convention", probed.Convention())
+	return probed
+}
+
+// settleConvention identifies what an nzbs bytes-attribute counts, for one whose
+// hints alone could not say, from a segment the stack has already decoded. One
+// such segment makes every full segment in the nzb exact.
+func settleConvention(nzbData *nzbparser.NzbData, sizer nzbfileanalyzer.SegmentSizer, known map[string]int64) nzbfileanalyzer.SegmentSizer {
+	if sizer.Convention() != nzbfileanalyzer.ConventionUnknown {
+		return sizer
+	}
+
+	for i := range nzbData.Files {
+		for _, segment := range nzbData.Files[i].Segments {
+			size, ok := known[segment.ID]
+			if !ok {
+				continue
+			}
+
+			sizer = sizer.SettleWith(segment.BytesHint, int(size))
+			if sizer.Convention() != nzbfileanalyzer.ConventionUnknown {
+				logger.Debug("Settled size convention from a decoded segment", "nzb", nzbData.MetaName, "convention", sizer.Convention())
+				return sizer
+			}
+		}
+	}
+
+	return sizer
 }
 
 // buildRawFiles creates the initial map of raw file resources

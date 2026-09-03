@@ -103,3 +103,60 @@ func TestConventionSpansAllFiles(t *testing.T) {
 		t.Errorf("convention = %v, want ConventionContent", sizer.Convention())
 	}
 }
+
+// An nzb whose segment size is not one of the known ones stays unknown until a
+// decoded length says what its hint counted.
+func TestSettlingAnUnknownConvention(t *testing.T) {
+	const hint = 500000
+
+	sizer := NewSegmentSizer(nzbWith(hint, hint, hint, 120000))
+	if sizer.Convention() != ConventionUnknown {
+		t.Fatalf("convention = %v, want ConventionUnknown", sizer.Convention())
+	}
+
+	content := sizer.SettleWith(hint, hint)
+	if content.Convention() != ConventionContent {
+		t.Errorf("a decoded length equal to the hint gave %v", content.Convention())
+	}
+	if size, exact := content.Size(hint); size != hint || !exact {
+		t.Errorf("Size(%d) = %d, %v; want %d, true", hint, size, exact, hint)
+	}
+
+	// The same hint standing for 480000 decoded bytes plus yEnc overhead
+	wire := sizer.SettleWith(hint, 480000)
+	if wire.Convention() != ConventionWire {
+		t.Errorf("a decoded length below the hint gave %v", wire.Convention())
+	}
+	if size, exact := wire.Size(hint); size != 480000 || !exact {
+		t.Errorf("Size(%d) = %d, %v; want 480000, true", hint, size, exact)
+	}
+}
+
+// Settling on a tail segment would take its decoded length for a full one, so
+// only the hint the sizer identified as full is allowed to settle it.
+func TestOnlyAFullSegmentSettlesTheConvention(t *testing.T) {
+	sizer := NewSegmentSizer(nzbWith(500000, 500000, 120000))
+
+	if got := sizer.SettleWith(120000, 120000); got.Convention() != ConventionUnknown {
+		t.Errorf("a tail segment settled the convention as %v", got.Convention())
+	}
+}
+
+// A pair that fits neither convention - a gap far wider than yEnc overhead -
+// says the hint means something else entirely, so it settles nothing.
+func TestAnImplausiblePairSettlesNothing(t *testing.T) {
+	sizer := NewSegmentSizer(nzbWith(500000, 500000, 120000))
+
+	if got := sizer.SettleWith(500000, 250000); got.Convention() != ConventionUnknown {
+		t.Errorf("an implausible pair settled the convention as %v", got.Convention())
+	}
+}
+
+// An nzb that already knows its convention is not open to being told otherwise.
+func TestSettlingLeavesAKnownConventionAlone(t *testing.T) {
+	sizer := NewSegmentSizer(nzbWith(768000, 768000, 400000))
+
+	if got := sizer.SettleWith(768000, 750000); got.Convention() != ConventionContent {
+		t.Errorf("convention = %v, want ConventionContent", got.Convention())
+	}
+}

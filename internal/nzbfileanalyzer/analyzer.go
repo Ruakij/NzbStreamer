@@ -1,6 +1,8 @@
 package nzbfileanalyzer
 
 import (
+	"fmt"
+
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
 
@@ -19,6 +21,17 @@ const (
 	// payload plus its header and trailer lines and the escape overhead.
 	ConventionWire
 )
+
+func (c SizeConvention) String() string {
+	switch c {
+	case ConventionContent:
+		return "content"
+	case ConventionWire:
+		return "wire"
+	default:
+		return "unknown"
+	}
+}
 
 // Segment sizes commonly chosen by posting tools. They are exact multiples of
 // 1024, which a yEnc-encoded length essentially never is, so a hint landing on
@@ -92,6 +105,69 @@ func (s SegmentSizer) Size(hint int) (int, bool) {
 	// never larger than wire, so the low end of the overhead range is the
 	// smallest size the hint can stand for.
 	return int(float32(hint) * (1 - yEncOverheadMax)), false
+}
+
+// SettleWith resolves a convention the nzb alone could not identify, from one
+// segment whose decoded length is known: comparing that length against its own
+// hint says directly which of the two the producer counted.
+//
+// Only the hint of a full segment can settle it, since the wire case needs the
+// decoded size of a full segment to be exact about the rest. That is the hint
+// the sizer already holds - the most common one, which belongs to a full segment
+// because every file has at most one short one. A hint that is not it, or a pair
+// that fits neither convention, leaves the sizer unknown.
+func (s SegmentSizer) SettleWith(hint, size int) SegmentSizer {
+	if s.convention != ConventionUnknown || hint != s.fullSize || size <= 0 {
+		return s
+	}
+
+	switch {
+	case size == hint:
+		s.convention = ConventionContent
+	case hint > size && hint >= int(float32(size)*(1+yEncOverheadMin)) && hint <= int(float32(size)*(1+yEncOverheadMax)):
+		s.convention = ConventionWire
+		s.fullSize = size
+	}
+
+	return s
+}
+
+// DecodeFunc returns the decoded length of one article.
+type DecodeFunc func(group, messageID string) (int, error)
+
+// SettleByProbing resolves an unknown convention by decoding a single full
+// segment, for an nzb where nothing already known could settle it. It picks a
+// segment carrying the hint the sizer took for a full one, so the length it
+// learns is the decoded size of a full segment.
+//
+// This is the one thing in the add path that reads a body rather than checking
+// that one exists. It costs a single article, once per nzb ever, against every
+// full segment in it becoming exact.
+func (s SegmentSizer) SettleByProbing(nzbData *nzbparser.NzbData, decode DecodeFunc) (SegmentSizer, error) {
+	if s.convention != ConventionUnknown {
+		return s, nil
+	}
+
+	for i := range nzbData.Files {
+		file := &nzbData.Files[i]
+		if len(file.Groups) == 0 {
+			continue
+		}
+
+		for _, segment := range file.Segments {
+			if segment.BytesHint != s.fullSize {
+				continue
+			}
+
+			size, err := decode(file.Groups[0], segment.ID)
+			if err != nil {
+				return s, fmt.Errorf("failed decoding segment %s: %w", segment.ID, err)
+			}
+			return s.SettleWith(segment.BytesHint, size), nil
+		}
+	}
+
+	return s, nil
 }
 
 // isFullWireHint reports whether a hint is the wire size of a full segment, which
