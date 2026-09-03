@@ -137,6 +137,7 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `NZB_CHECK_SEGMENTS_PER_FILE`     | 2                      | Segments checked per file for existence, spread evenly (so first and last)<br>0 disables the check, -1 checks all segments |
 | `NZB_CHECK_SEGMENTS_PARALLEL`     | 0                      | Concurrent segment-checks; defaults to `USENET_MAX_CONN` when 0 |
 | `NZB_FILES_HEALTHY_THRESHOLD`     | 1.0                    | Above this percentage-threshold, files with missing segments are allowed |
+| `NZB_PROBE_SIZE_CONVENTION`       | true                   | Download one segment of an nzb whose segment-size hints do not identify what they count, making its sizes exact; without it they stay estimates until a read has measured them |
 | **Filesystem-Options**
 | `FILESYSTEM_BLACKLIST`            |                        | Late Regex-blacklist, applied on the actual file added to the filesystem; includes files from archives <br>Can be used to hide archive-files, but leaving unpacked files |
 | `FILESYSTEM_FLATTEN_MAX_DEPTH`    | 1                      | Unpacks files from folders e.g. archives where possible <br>Can be used to hide archive-group-folder |

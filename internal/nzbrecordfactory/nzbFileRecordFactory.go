@@ -36,13 +36,17 @@ type NzbFileFactory struct {
 	cache      *diskcache.Cache
 	getSegment nzbpostresource.GetSegmentFunc
 	sizeStore  SegmentSizeStore
+	// Whether an nzb whose hints do not identify their convention may have one
+	// segment decoded to find out
+	probeConvention bool
 }
 
 // getSegment is the whole of what the factory needs from a news server.
-func NewNzbFileFactory(cache *diskcache.Cache, getSegment nzbpostresource.GetSegmentFunc, sizeStore SegmentSizeStore) *NzbFileFactory {
+func NewNzbFileFactory(cache *diskcache.Cache, getSegment nzbpostresource.GetSegmentFunc, sizeStore SegmentSizeStore, probeConvention bool) *NzbFileFactory {
 	f := &NzbFileFactory{
-		cache:     cache,
-		sizeStore: sizeStore,
+		cache:           cache,
+		sizeStore:       sizeStore,
+		probeConvention: probeConvention,
 	}
 
 	// Decoding is what turns a segments size hint into a fact, and this is where
@@ -129,20 +133,26 @@ func (f *NzbFileFactory) knownSizes(nzbData *nzbparser.NzbData) map[string]int64
 }
 
 // sizer decides what this nzbs bytes-hints count. Most nzbs answer that from
-// their hints alone; one that does not is settled from a decoded segment, taken
-// from the store if it holds one and fetched if it does not.
+// their hints alone; one that does not is settled from a segment that has been
+// downloaded: one the store already has a length for, or one downloaded to find out.
+//
+// The store answers on every build after the first read of the nzb, so probing
+// costs one segment once rather than one per start. With probing off the nzb
+// serves estimates until a read has measured a full segment, and settles on the
+// build after that - the resources of a built stack keep the sizes they were
+// made with.
 func (f *NzbFileFactory) sizer(nzbData *nzbparser.NzbData, known map[string]int64) nzbfileanalyzer.SegmentSizer {
 	sizer := settleConvention(nzbData, nzbfileanalyzer.NewSegmentSizer(nzbData), known)
-	if sizer.Convention() != nzbfileanalyzer.ConventionUnknown {
+	if sizer.Convention() != nzbfileanalyzer.ConventionUnknown || !f.probeConvention {
 		return sizer
 	}
 
-	decode := func(group, id string) (int, error) {
+	fetchSize := func(group, id string) (int, error) {
 		body, err := f.getSegment(group, id)
 		return len(body), err
 	}
 
-	probed, err := sizer.SettleByProbing(nzbData, decode)
+	probed, err := sizer.SettleByProbing(nzbData, fetchSize)
 	if err != nil {
 		// Estimated sizes are the state this nzb was already in, so a failed
 		// probe costs measurement on a later seek and never correctness
@@ -155,7 +165,7 @@ func (f *NzbFileFactory) sizer(nzbData *nzbparser.NzbData, known map[string]int6
 }
 
 // settleConvention identifies what an nzbs bytes-attribute counts, for one whose
-// hints alone could not say, from a segment the stack has already decoded. One
+// hints alone could not say, from a segment the stack has already downloaded. One
 // such segment makes every full segment in the nzb exact.
 func settleConvention(nzbData *nzbparser.NzbData, sizer nzbfileanalyzer.SegmentSizer, known map[string]int64) nzbfileanalyzer.SegmentSizer {
 	if sizer.Convention() != nzbfileanalyzer.ConventionUnknown {
@@ -171,7 +181,7 @@ func settleConvention(nzbData *nzbparser.NzbData, sizer nzbfileanalyzer.SegmentS
 
 			sizer = sizer.SettleWith(segment.BytesHint, int(size))
 			if sizer.Convention() != nzbfileanalyzer.ConventionUnknown {
-				logger.Debug("Settled size convention from a decoded segment", "nzb", nzbData.MetaName, "convention", sizer.Convention())
+				logger.Debug("Settled size convention from a downloaded segment", "nzb", nzbData.MetaName, "convention", sizer.Convention())
 				return sizer
 			}
 		}

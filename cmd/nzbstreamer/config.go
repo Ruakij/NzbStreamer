@@ -57,6 +57,7 @@ type NzbConfig struct {
 	SegmentsPerFile       int             `env:"NZB_CHECK_SEGMENTS_PER_FILE, default=2"`   // Segments checked per file for existence, spread evenly; 0 disables the check, -1 checks all
 	SegmentCheckParallel  int             `env:"NZB_CHECK_SEGMENTS_PARALLEL, default=0"`   // Concurrent segment-checks; defaults to USENET_MAX_CONN when 0
 	FilesHealthyThreshold float32         `env:"NZB_FILES_HEALTHY_THRESHOLD, default=1.0"` // Above this percentage-threshold, files with missing segments are allowed
+	ProbeSizeConvention   bool            `env:"NZB_PROBE_SIZE_CONVENTION, default=true"`  // Download one segment of an nzb whose segment-size hints do not identify what they count, making its sizes exact; without it they stay estimates until a read has measured them
 }
 
 type FilesystemConfig struct {

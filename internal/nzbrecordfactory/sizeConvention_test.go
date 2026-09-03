@@ -68,7 +68,7 @@ func TestProbingSettlesTheConvention(t *testing.T) {
 		return make([]byte, 480000), nil
 	}
 
-	factory := NewNzbFileFactory(nil, getSegment, store)
+	factory := NewNzbFileFactory(nil, getSegment, store, true)
 	nzbData := unknownConventionNzb()
 
 	sizer := factory.sizer(nzbData, nil)
@@ -92,7 +92,7 @@ func TestAKnownConventionIsNotProbed(t *testing.T) {
 		return nil, nil
 	}
 
-	factory := NewNzbFileFactory(nil, getSegment, nil)
+	factory := NewNzbFileFactory(nil, getSegment, nil, true)
 	nzbData := unknownConventionNzb()
 	for i := range nzbData.Files[0].Segments[:2] {
 		nzbData.Files[0].Segments[i].BytesHint = 768000
@@ -110,7 +110,34 @@ func TestAStoredLengthIsNotProbed(t *testing.T) {
 		return nil, nil
 	}
 
-	factory := NewNzbFileFactory(nil, getSegment, nil)
+	factory := NewNzbFileFactory(nil, getSegment, nil, true)
+	nzbData := unknownConventionNzb()
+
+	sizer := factory.sizer(nzbData, map[string]int64{"a@example.com": 480000})
+	if sizer.Convention() != nzbfileanalyzer.ConventionWire {
+		t.Errorf("convention = %v, want ConventionWire", sizer.Convention())
+	}
+}
+
+// With probing off the nzb costs no traffic and keeps its estimates.
+func TestProbingCanBeDisabled(t *testing.T) {
+	getSegment := func(string, string) ([]byte, error) {
+		t.Fatal("probing is off, so nothing may be fetched")
+		return nil, nil
+	}
+
+	factory := NewNzbFileFactory(nil, getSegment, nil, false)
+	nzbData := unknownConventionNzb()
+
+	if got := factory.sizer(nzbData, nil).Convention(); got != nzbfileanalyzer.ConventionUnknown {
+		t.Errorf("convention = %v, want ConventionUnknown", got)
+	}
+}
+
+// A length a read has already measured settles it even with probing off, which
+// is what makes the nzb exact from the next build on.
+func TestAStoredLengthSettlesItWithProbingOff(t *testing.T) {
+	factory := NewNzbFileFactory(nil, nil, nil, false)
 	nzbData := unknownConventionNzb()
 
 	sizer := factory.sizer(nzbData, map[string]int64{"a@example.com": 480000})

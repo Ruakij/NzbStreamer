@@ -46,7 +46,7 @@ func TestAKnownSizeIsExactWithoutFetching(t *testing.T) {
 		return nil, nil
 	}
 
-	factory := NewNzbFileFactory(nil, getSegment, store)
+	factory := NewNzbFileFactory(nil, getSegment, store, true)
 	nzbData := &nzbparser.NzbData{Files: []nzbparser.File{{
 		Groups:   []string{"alt.binaries.test"},
 		Segments: []nzbparser.Segment{{ID: "a@example.com", BytesHint: 999999}},
@@ -72,7 +72,7 @@ func TestFetchingRecordsTheDecodedLength(t *testing.T) {
 		return make([]byte, 4242), nil
 	}
 
-	factory := NewNzbFileFactory(nil, getSegment, store)
+	factory := NewNzbFileFactory(nil, getSegment, store, true)
 	nzbData := &nzbparser.NzbData{Files: []nzbparser.File{{
 		Groups:   []string{"alt.binaries.test"},
 		Segments: []nzbparser.Segment{{ID: "a@example.com", BytesHint: 999999}},

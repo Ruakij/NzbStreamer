@@ -132,10 +132,10 @@ func (s SegmentSizer) SettleWith(hint, size int) SegmentSizer {
 	return s
 }
 
-// DecodeFunc returns the decoded length of one article.
-type DecodeFunc func(group, messageID string) (int, error)
+// FetchSizeFunc downloads one article and returns its decoded length.
+type FetchSizeFunc func(group, messageID string) (int, error)
 
-// SettleByProbing resolves an unknown convention by decoding a single full
+// SettleByProbing resolves an unknown convention by downloading a single full
 // segment, for an nzb where nothing already known could settle it. It picks a
 // segment carrying the hint the sizer took for a full one, so the length it
 // learns is the decoded size of a full segment.
@@ -143,7 +143,7 @@ type DecodeFunc func(group, messageID string) (int, error)
 // This is the one thing in the add path that reads a body rather than checking
 // that one exists. It costs a single article, once per nzb ever, against every
 // full segment in it becoming exact.
-func (s SegmentSizer) SettleByProbing(nzbData *nzbparser.NzbData, decode DecodeFunc) (SegmentSizer, error) {
+func (s SegmentSizer) SettleByProbing(nzbData *nzbparser.NzbData, fetchSize FetchSizeFunc) (SegmentSizer, error) {
 	if s.convention != ConventionUnknown {
 		return s, nil
 	}
@@ -159,9 +159,9 @@ func (s SegmentSizer) SettleByProbing(nzbData *nzbparser.NzbData, decode DecodeF
 				continue
 			}
 
-			size, err := decode(file.Groups[0], segment.ID)
+			size, err := fetchSize(file.Groups[0], segment.ID)
 			if err != nil {
-				return s, fmt.Errorf("failed decoding segment %s: %w", segment.ID, err)
+				return s, fmt.Errorf("failed fetching segment %s: %w", segment.ID, err)
 			}
 			return s.SettleWith(segment.BytesHint, size), nil
 		}

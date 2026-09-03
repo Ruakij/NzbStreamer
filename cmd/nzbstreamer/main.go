@@ -127,7 +127,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		}
 	}()
 
-	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpClient.GetSegment, store)
+	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpClient.GetSegment, store, c.NzbConfig.ProbeSizeConvention)
 
 	folderTrigger := folderwatcher.NewFolderWatcher(c.FolderWatcher.Path, c.FolderWatcher.Consume)
 
