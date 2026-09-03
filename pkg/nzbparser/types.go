@@ -33,6 +33,9 @@ type NzbData struct {
 	MetaName string            `xml:"-"`
 	RawMeta  []metadataEntry   `xml:"head>meta"`
 	Files    []File            `xml:"file"`
+	// The bytes this was parsed from, so a store can keep the nzb itself rather
+	// than a re-encoding of what the parser understood
+	Raw []byte `xml:"-"`
 }
 
 // Internal XML Metadata entries

@@ -106,8 +106,11 @@ func (s *Service) Init() error {
 	}
 	logger.Info("Loaded Nzb store", "items", len(nzbData))
 
+	// Restoring is not adding: the posts were checked when they were added and the
+	// record is already in the store, so neither the health check nor the write
+	// happens again
 	for _, nzb := range nzbData {
-		err := s.AddNzb(&nzb)
+		err := s.addNzb(&nzb, false)
 		if err != nil {
 			logger.Error("Couldnt add nzb", "error", err)
 		}
@@ -133,7 +136,13 @@ var (
 )
 
 // Add parsed nzb-data
-func (s *Service) AddNzb(nzbData *nzbparser.NzbData) (err error) {
+func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
+	return s.addNzb(nzbData, true)
+}
+
+// addNzb builds the tree for an nzb. isNew separates an add from restoring what
+// the store already holds.
+func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	logger.Debug("Adding nzb", "MetaName", nzbData.MetaName)
 
 	s.mutex.Lock()
@@ -145,11 +154,12 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) (err error) {
 	s.mutex.Unlock()
 
 	// The entry reserves the name for this add, so an add that fails has to give
-	// it back; keeping it would make the nzb un-re-addable
+	// it back along with whatever it already presented; keeping either would make
+	// the nzb un-re-addable
 	defer func() {
 		if err != nil {
 			s.mutex.Lock()
-			delete(s.nzbFiledata, nzbData.MetaName)
+			s.unregister(nzbData.MetaName)
 			s.mutex.Unlock()
 		}
 	}()
@@ -166,7 +176,10 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) (err error) {
 	}
 
 	// Verify the posts still exist before building anything on top of them
-	healthErrors := s.healthChecker.CheckFiles(nzbData)
+	var healthErrors []error
+	if isNew {
+		healthErrors = s.healthChecker.CheckFiles(nzbData)
+	}
 	if len(healthErrors) > 0 {
 		for _, err := range healthErrors {
 			logger.Warn("Unhealthy file detected",
@@ -226,6 +239,12 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) (err error) {
 		}
 	}
 	s.mutex.Unlock()
+
+	if isNew {
+		if err := s.store.Set(nzbData); err != nil {
+			return fmt.Errorf("failed storing nzb %s: %w", nzbData.MetaName, err)
+		}
+	}
 
 	logger.Info("Added nzb", "MetaName", nzbData.MetaName)
 
@@ -348,25 +367,30 @@ func (s *Service) RemoveNzb(nzbData *nzbparser.NzbData) error {
 
 	logger.Debug("Removing nzb", "MetaName", nzbData.MetaName)
 
-	// Get tracked files
-	files := s.nzbFiles[nzbData.MetaName]
+	s.unregister(nzbData.MetaName)
 
-	// Remove from all presenters
-	for _, filepath := range files {
+	if err := s.store.Delete(nzbData); err != nil {
+		return fmt.Errorf("failed removing nzb %s from store: %w", nzbData.MetaName, err)
+	}
+
+	logger.Info("Removed nzb", "MetaName", nzbData.MetaName)
+	return nil
+}
+
+// unregister takes an nzb's files back out of the presenters and drops its
+// tracking entries. Caller holds the mutex.
+func (s *Service) unregister(metaName string) {
+	for _, filepath := range s.nzbFiles[metaName] {
 		for _, presenter := range s.presenters {
 			if err := presenter.RemoveFile(filepath); err != nil {
 				logger.Error("Failed removing file from presenter",
-					"nzb", nzbData.MetaName,
+					"nzb", metaName,
 					"file", filepath,
 					"error", err)
 			}
 		}
 	}
 
-	// Clean up tracking data
-	delete(s.nzbFiledata, nzbData.MetaName)
-	delete(s.nzbFiles, nzbData.MetaName)
-
-	logger.Info("Removed nzb", "MetaName", nzbData.MetaName)
-	return nil
+	delete(s.nzbFiledata, metaName)
+	delete(s.nzbFiles, metaName)
 }

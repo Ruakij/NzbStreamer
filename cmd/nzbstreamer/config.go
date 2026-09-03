@@ -36,6 +36,10 @@ type CacheConfig struct {
 	MaxSize int64  `env:"CACHE_MAX_SIZE, default=0"`  // Maximum cache size in bytes, if unset allows unlimited size (not recommended)
 }
 
+type MetadataConfig struct {
+	Path string `env:"METADATA_PATH, default=.metadata/metadata.db"` // Path for the metadata database; WAL puts two sibling files next to it
+}
+
 type PrefetchConfig struct {
 	Time        time.Duration `env:"PREFETCH_TIME, default=1s"`         // How far ahead of the read position to stay warm, in read-time
 	MinSegments int           `env:"PREFETCH_MIN_SEGMENTS, default=8"`  // Segments warmed ahead before a read speed can be measured
@@ -44,7 +48,8 @@ type PrefetchConfig struct {
 }
 
 type FolderWatcherConfig struct {
-	Path string `env:"FOLDER_WATCHER_PATH, default=.watch"` // Watch folder for adding nzbs; files stay where they are
+	Path    string `env:"FOLDER_WATCHER_PATH, default=.watch"`   // Watch folder for adding nzbs
+	Consume bool   `env:"FOLDER_WATCHER_CONSUME, default=true"`  // Delete an nzb file once it has been added; the metadata database keeps it
 }
 
 type NzbConfig struct {
@@ -69,6 +74,7 @@ type Config struct {
 	Mount         MountConfig
 	Webdav        WebdavConfig
 	Cache         CacheConfig
+	Metadata      MetadataConfig
 	Prefetch      PrefetchConfig
 	NzbConfig     NzbConfig
 	Filesystem    FilesystemConfig

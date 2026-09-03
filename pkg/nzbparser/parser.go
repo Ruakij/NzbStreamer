@@ -1,6 +1,7 @@
 package nzbparser
 
 import (
+	"bytes"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -35,7 +36,8 @@ func charsetReader(charset string, input io.Reader) (io.Reader, error) {
 // ParseNzb reads an nzb. filename is the name of the file it was read from, which
 // decides what the nzb is called; pass empty for a source that has none.
 func ParseNzb(inputStream io.Reader, filename string) (*NzbData, error) {
-	decoder := xml.NewDecoder(inputStream)
+	var raw bytes.Buffer
+	decoder := xml.NewDecoder(io.TeeReader(inputStream, &raw))
 	decoder.CharsetReader = charsetReader
 	var nzb NzbData
 
@@ -43,6 +45,9 @@ func ParseNzb(inputStream io.Reader, filename string) (*NzbData, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed decoding nzb: %w", err)
 	}
+	// Whatever the decoder pulled through, which is the document plus at most the
+	// tail of its last read; re-parsing it ignores the remainder
+	nzb.Raw = raw.Bytes()
 
 	// Parse meta
 	nzb.Meta = make(map[string]string, len(nzb.RawMeta))

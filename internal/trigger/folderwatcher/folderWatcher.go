@@ -24,6 +24,9 @@ var ErrUnknownListener = errors.New("unknown listener id")
 // FolderWatcher notifies listeners about new files in directory
 type folderWatcher struct {
 	watchFolder string
+	// Whether a file is deleted once every listener has taken it, which is what
+	// makes the folder a blackhole rather than a library
+	consume     bool
 	addHooks    []func(nzbData *nzbparser.NzbData) error
 	removeHooks []func(nzbData *nzbparser.NzbData) error
 	mu          sync.Mutex
@@ -45,9 +48,10 @@ type fileStat struct {
 }
 
 // NewFolderWatcher creates a new instance of folderWatcher
-func NewFolderWatcher(folder string) *folderWatcher {
+func NewFolderWatcher(folder string, consume bool) *folderWatcher {
 	return &folderWatcher{
 		watchFolder: folder,
+		consume:     consume,
 		processed:   make(map[string]string),
 		sighted:     make(map[string]fileStat),
 		stopChan:    make(chan struct{}),
@@ -161,7 +165,11 @@ func (fw *folderWatcher) scanDirectory() {
 		fw.processed[hash] = file.Name()
 
 		group.Go(func() error {
-			fw.processFile(file.Name(), content)
+			if fw.processFile(file.Name(), content) && fw.consume {
+				if err := os.Remove(filepath.Join(fw.watchFolder, file.Name())); err != nil {
+					logger.Error("Failed to delete processed file", "filename", file.Name(), "err", err)
+				}
+			}
 			return nil
 		})
 	}
@@ -172,12 +180,13 @@ func (fw *folderWatcher) scanDirectory() {
 	_ = group.Wait()
 }
 
-// processFile triggers the addHooks for the file
-func (fw *folderWatcher) processFile(filename string, content []byte) {
+// processFile triggers the addHooks for the file and reports whether every one of
+// them took it
+func (fw *folderWatcher) processFile(filename string, content []byte) bool {
 	nzbData, err := nzbparser.ParseNzb(bytes.NewReader(content), filename)
 	if err != nil {
 		logger.Error("Failed to parse nzb", "filename", filename, "err", err)
-		return
+		return false
 	}
 
 	warnings, errors := nzbData.CheckPlausability()
@@ -200,7 +209,7 @@ func (fw *folderWatcher) processFile(filename string, content []byte) {
 			msg.WriteString(fmt.Sprintf("%v", err))
 		}
 		logger.Warn("Errors while checking Nzb", "filename", filename, "msg", msg.String())
-		return
+		return false
 	}
 
 	fw.wg.Add(1)
@@ -208,9 +217,10 @@ func (fw *folderWatcher) processFile(filename string, content []byte) {
 
 	if len(fw.addHooks) == 0 {
 		logger.Warn("Cannot notify, no listeners found", "filename", filename)
-		return
+		return false
 	}
 
+	accepted := true
 	for _, hook := range fw.addHooks {
 		if hook == nil {
 			continue
@@ -218,8 +228,11 @@ func (fw *folderWatcher) processFile(filename string, content []byte) {
 		err := hook(nzbData)
 		if err != nil {
 			logger.Error("Error executing hook:", "filename", filename, "err", err)
+			accepted = false
 		}
 	}
+
+	return accepted
 }
 
 // AddListener adds listener hooks and returns an ID

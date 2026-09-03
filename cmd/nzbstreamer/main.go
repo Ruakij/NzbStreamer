@@ -11,7 +11,7 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/filehealth"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
-	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore/stubstore"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore/sqlstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/fusemount"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/webdav"
@@ -112,10 +112,13 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	// Setup services
 	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpClient.GetSegment)
 
-	// store := folderStore.NewFolderStore()
-	store := stubstore.NewStubStore()
+	store, err := sqlstore.New(c.Metadata.Path)
+	if err != nil {
+		slog.Error("Metadata store creation failed", "error", err)
+		os.Exit(1)
+	}
 
-	folderTrigger := folderwatcher.NewFolderWatcher(c.FolderWatcher.Path)
+	folderTrigger := folderwatcher.NewFolderWatcher(c.FolderWatcher.Path, c.FolderWatcher.Consume)
 
 	// Setup health checker
 	segmentCheckParallel := c.NzbConfig.SegmentCheckParallel

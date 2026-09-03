@@ -114,7 +114,8 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `USENET_TIMEOUT`                  | 30s                    | Timeout for connecting and for completing a single request |
 | `USENET_IDLE_TIMEOUT`             | 2m                     | Time after which an unused connection is closed |
 | **Trigger**
-| `FOLDER_WATCHER_PATH`             | .watch                 | Watch folder for adding nzbs; files stay where they are |
+| `FOLDER_WATCHER_PATH`             | .watch                 | Watch folder for adding nzbs                     |
+| `FOLDER_WATCHER_CONSUME`          | true                   | Delete an nzb file once it has been added; the metadata database keeps it |
 | **Presenters**
 | `WEBDAV_ADDRESS`                  | :8080                  | Address for WebDAV server; Disabled when unset   |
 | `WEBDAV_USERNAME`                 |                        | Username for WebDAV basic auth; Authentication disabled when unset |
@@ -124,6 +125,8 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | **Cache**
 | `CACHE_PATH`                      | .cache                 | Path for segment-cache                           |
 | `CACHE_MAX_SIZE`                  | 0                      | Maximum cache size in bytes, if unset allows unlimited size (not recommended) |
+| **Metadata**
+| `METADATA_PATH`                   | .metadata/metadata.db  | Path for the metadata database; WAL puts two sibling files next to it |
 | **Prefetch**
 | `PREFETCH_TIME`                   | 1s                     | How far ahead of the read position to stay warm, in read-time |
 | `PREFETCH_MIN_SEGMENTS`           | 8                      | Segments warmed ahead before a read speed can be measured |

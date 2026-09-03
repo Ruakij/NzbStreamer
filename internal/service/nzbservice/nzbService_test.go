@@ -26,9 +26,26 @@ type healthyChecker struct{}
 
 func (healthyChecker) CheckFiles(_ *nzbparser.NzbData) []error { return nil }
 
+type fakeStore struct {
+	stored map[string]bool
+}
+
+func (s *fakeStore) List() ([]nzbparser.NzbData, error) { return nil, nil }
+
+func (s *fakeStore) Set(data *nzbparser.NzbData) error {
+	s.stored[data.MetaName] = true
+	return nil
+}
+
+func (s *fakeStore) Delete(data *nzbparser.NzbData) error {
+	delete(s.stored, data.MetaName)
+	return nil
+}
+
 func TestFailedAddLeavesTheNzbAddable(t *testing.T) {
 	factory := &fakeFactory{err: errBuildFailed}
-	service := nzbservice.NewService(nil, factory, nil, nil, healthyChecker{})
+	store := &fakeStore{stored: map[string]bool{}}
+	service := nzbservice.NewService(store, factory, nil, nil, healthyChecker{})
 
 	nzbData := &nzbparser.NzbData{
 		MetaName: "Some.Release",
@@ -39,9 +56,17 @@ func TestFailedAddLeavesTheNzbAddable(t *testing.T) {
 		t.Fatalf("first add returned %v, expected the build error", err)
 	}
 
+	if store.stored[nzbData.MetaName] {
+		t.Errorf("a failed add was persisted")
+	}
+
 	factory.err = nil
 	if err := service.AddNzb(nzbData); err != nil {
 		t.Fatalf("re-adding after a failed add returned %v", err)
+	}
+
+	if !store.stored[nzbData.MetaName] {
+		t.Errorf("a successful add was not persisted")
 	}
 
 	if err := service.AddNzb(nzbData); !errors.Is(err, nzbservice.ErrNzbAlreadyExists) {

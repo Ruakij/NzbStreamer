@@ -1,6 +1,7 @@
 package folderwatcher
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,10 +22,10 @@ func nzbContent(id string) string {
 }
 
 // watcherWithHook returns a watcher on a fresh dir plus the names it was notified about
-func watcherWithHook(t *testing.T) (*folderWatcher, *[]string) {
+func watcherWithHook(t *testing.T, consume bool) (*folderWatcher, *[]string) {
 	t.Helper()
 
-	fw := NewFolderWatcher(t.TempDir())
+	fw := NewFolderWatcher(t.TempDir(), consume)
 
 	var mu sync.Mutex
 	added := []string{}
@@ -49,7 +50,7 @@ func write(t *testing.T, fw *folderWatcher, name, content string) {
 }
 
 func TestProcessesOnlyOnceAFileStopsChanging(t *testing.T) {
-	fw, added := watcherWithHook(t)
+	fw, added := watcherWithHook(t, false)
 
 	write(t, fw, "a.nzb", nzbContent("a")[:40]) // truncated, as if caught mid-write
 	fw.scanDirectory()
@@ -74,8 +75,41 @@ func TestProcessesOnlyOnceAFileStopsChanging(t *testing.T) {
 	}
 }
 
+func TestConsumeDeletesTheFileOnceItIsAdded(t *testing.T) {
+	fw, added := watcherWithHook(t, true)
+
+	write(t, fw, "a.nzb", nzbContent("a"))
+	fw.scanDirectory()
+	fw.scanDirectory()
+
+	if len(*added) != 1 {
+		t.Fatalf("expected the file to be added, got %v", *added)
+	}
+	if _, err := os.Stat(filepath.Join(fw.watchFolder, "a.nzb")); !os.IsNotExist(err) {
+		t.Fatalf("expected the file to be gone, stat gave %v", err)
+	}
+}
+
+func TestConsumeKeepsAFileNoListenerTook(t *testing.T) {
+	fw := NewFolderWatcher(t.TempDir(), true)
+	_, err := fw.AddListener(func(*nzbparser.NzbData) error {
+		return errors.New("rejected")
+	}, nil)
+	if err != nil {
+		t.Fatalf("AddListener: %v", err)
+	}
+
+	write(t, fw, "a.nzb", nzbContent("a"))
+	fw.scanDirectory()
+	fw.scanDirectory()
+
+	if _, err := os.Stat(filepath.Join(fw.watchFolder, "a.nzb")); err != nil {
+		t.Fatalf("expected the rejected file to stay: %v", err)
+	}
+}
+
 func TestNameReusedByAnotherReleaseIsProcessedAgain(t *testing.T) {
-	fw, added := watcherWithHook(t)
+	fw, added := watcherWithHook(t, false)
 
 	write(t, fw, "release.nzb", nzbContent("first"))
 	fw.scanDirectory()
@@ -91,7 +125,7 @@ func TestNameReusedByAnotherReleaseIsProcessedAgain(t *testing.T) {
 }
 
 func TestSameContentUnderAnotherNameIsProcessedOnce(t *testing.T) {
-	fw, added := watcherWithHook(t)
+	fw, added := watcherWithHook(t, false)
 
 	write(t, fw, "a.nzb", nzbContent("a"))
 	fw.scanDirectory()
