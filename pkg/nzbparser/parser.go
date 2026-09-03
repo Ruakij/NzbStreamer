@@ -96,16 +96,23 @@ func resolveName(nzb *NzbData, filename string) string {
 	return guessName(nzb.Files)
 }
 
+// What a filename may consist of; `\w` is ascii-only in RE2, so a name carrying an
+// umlaut or any other non-ascii letter needs the unicode classes spelled out
+const (
+	nameChars      = `\p{L}\p{N}_.\-+\[\]()`
+	nameCharsSpace = nameChars + ` `
+)
+
 var subjectRegexPatterns = []*regexp.Regexp{
 	// Detailed
-	regexp.MustCompile(`^((?P<Name>.+?) +)?("(?P<Filename>[\w.\-+\[\]() ]+)"|(?P<Filename>[\w.\-+\[\]()]+)) *((?P<Encoding>[\w.\-+\[\]()]+) +)?((?P<TotalSizeHint>[0-9]+) +)?(\((?P<SegmentIndexHint>\d+)\/(?P<SegmentCountHint>\d+)\))?$`),
+	regexp.MustCompile(`^((?P<Name>.+?) +)?("(?P<Filename>[` + nameCharsSpace + `]+)"|(?P<Filename>[` + nameChars + `]+)) *((?P<Encoding>[` + nameChars + `]+) +)?((?P<TotalSizeHint>[0-9]+) +)?(\((?P<SegmentIndexHint>\d+)\/(?P<SegmentCountHint>\d+)\))?$`),
 	// Normal
-	regexp.MustCompile(`^((?P<Name>.+?) +)?("(?P<Filename>[\w.\-+\[\]() ]+)") *((?P<Encoding>[\w.\-+\[\]()]+) +)?((?P<TotalSizeHint>[0-9]+) +)?(\((?P<SegmentIndexHint>\d+)\/(?P<SegmentCountHint>\d+)\))?$`),
+	regexp.MustCompile(`^((?P<Name>.+?) +)?("(?P<Filename>[` + nameCharsSpace + `]+)") *((?P<Encoding>[` + nameChars + `]+) +)?((?P<TotalSizeHint>[0-9]+) +)?(\((?P<SegmentIndexHint>\d+)\/(?P<SegmentCountHint>\d+)\))?$`),
 	// Simple
-	regexp.MustCompile(`^.*?"(?P<Filename>[\w.\-+\[\]()]{6,})".*?$`),
-	regexp.MustCompile(`^.*?(?P<Filename>[\w.\-+\[\]()]{6,}).*?$`),
+	regexp.MustCompile(`^.*?"(?P<Filename>[` + nameChars + `]{6,})".*?$`),
+	regexp.MustCompile(`^.*?(?P<Filename>[` + nameChars + `]{6,}).*?$`),
 	// Primitive
-	regexp.MustCompile(`"(?P<Filename>[\w.\-+\[\]() ]+)"`),
+	regexp.MustCompile(`"(?P<Filename>[` + nameCharsSpace + `]+)"`),
 }
 
 type ParseResult struct {
