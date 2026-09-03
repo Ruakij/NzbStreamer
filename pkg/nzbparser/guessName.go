@@ -3,16 +3,18 @@ package nzbparser
 import (
 	"regexp"
 	"strings"
+
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/filenameops"
 )
 
-// recoveryExtensions are the files that carry no payload. They repeat the
-// release name with a volume suffix of their own, so a name guessed from one
-// describes the recovery set rather than the release.
-var recoveryExtensions = map[string]bool{
-	".par2": true,
-	".nfo":  true,
-	".sfv":  true,
-	".srr":  true,
+// metadataExtensions are the files that describe the release rather than carry
+// it. Together with the recovery set they repeat the release name with a suffix
+// of their own, so a name guessed from one describes them rather than the
+// release.
+var metadataExtensions = map[string]bool{
+	".nfo": true,
+	".sfv": true,
+	".srr": true,
 }
 
 // partSuffixRegexp matches the suffix that distinguishes one volume of a set
@@ -56,7 +58,7 @@ func guessName(files []File) string {
 // a file that suggests none.
 func candidateName(filename string) string {
 	extension := filename[len(getBaseFilename(filename)):]
-	if recoveryExtensions[strings.ToLower(extension)] {
+	if metadataExtensions[strings.ToLower(extension)] || filenameops.Classify(filename) == filenameops.ClassRecovery {
 		return ""
 	}
 
