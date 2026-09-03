@@ -68,14 +68,14 @@ func (s *fakeStore) List() ([]nzbstore.Record, error) {
 	return list, nil
 }
 
-func (s *fakeStore) Add(data *nzbparser.NzbData, stage string) error {
+func (s *fakeStore) Add(data *nzbparser.NzbData, stage, category string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
 	if _, ok := s.records[data.MetaName]; !ok {
 		s.order = append(s.order, data.MetaName)
 	}
-	s.records[data.MetaName] = nzbstore.Record{Data: data, Stage: stage}
+	s.records[data.MetaName] = nzbstore.Record{Data: data, Stage: stage, Category: category}
 	return nil
 }
 
@@ -130,7 +130,7 @@ func TestAnAddIsVisibleWhileItRunsAndAfterItFinishes(t *testing.T) {
 		Files:    []nzbparser.File{{Filename: "some.release.rar", Segments: []nzbparser.Segment{{ID: "a", BytesHint: 700000}}}},
 	}
 
-	id, err := service.Add(nzbData)
+	id, err := service.Add(nzbData, "tv")
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestAnAddIsVisibleWhileItRunsAndAfterItFinishes(t *testing.T) {
 		t.Errorf("an unfinished add is already in the history")
 	}
 
-	if _, err := service.Add(nzbData); !errors.Is(err, nzbservice.ErrNzbAlreadyExists) {
+	if _, err := service.Add(nzbData, "tv"); !errors.Is(err, nzbservice.ErrNzbAlreadyExists) {
 		t.Errorf("adding an nzb already in flight returned %v", err)
 	}
 
@@ -210,7 +210,7 @@ func TestCancellingAnAddWaitsForItAndLeavesNothingBehind(t *testing.T) {
 				Files:    []nzbparser.File{{Filename: "some.release.rar"}},
 			}
 
-			id, err := service.Add(nzbData)
+			id, err := service.Add(nzbData, "tv")
 			if err != nil {
 				t.Fatalf("Add: %v", err)
 			}
@@ -281,7 +281,7 @@ func TestARestartRestoresHistoryAndResumesAnInterruptedAdd(t *testing.T) {
 			MetaName: name,
 			Files:    []nzbparser.File{{Filename: "some.release.rar"}},
 		}
-		if err := store.Add(data, stage); err != nil {
+		if err := store.Add(data, stage, "tv"); err != nil {
 			t.Fatalf("Add: %v", err)
 		}
 	}

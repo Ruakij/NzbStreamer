@@ -124,7 +124,7 @@ func (s *Service) Init() error {
 		// the add starts again rather than picking up
 		default:
 			logger.Info("Resuming interrupted add", "MetaName", record.Data.MetaName, "stage", record.Stage)
-			if _, err := s.Add(record.Data); err != nil {
+			if _, err := s.Add(record.Data, record.Category); err != nil {
 				logger.Error("Couldnt resume add", "MetaName", record.Data.MetaName, "error", err)
 			}
 		}
@@ -152,7 +152,7 @@ var (
 // Add parsed nzb-data, and wait for it. Add() is the same thing without the
 // wait.
 func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
-	if err := s.enqueue(nzbData); err != nil {
+	if err := s.enqueue(nzbData, ""); err != nil {
 		return err
 	}
 

@@ -26,6 +26,13 @@ type WebdavConfig struct {
 	Password string `env:"WEBDAV_PASSWORD"`               // Password for WebDAV basic auth
 }
 
+type SabnzbdConfig struct {
+	Address     string   `env:"SABNZBD_ADDRESS"`                         // Address for the SABnzbd-compatible download client api, e.g. :8081; Disabled when unset
+	APIKey      string   `env:"SABNZBD_API_KEY"`                         // Api key demanded of every request; unauthenticated when unset
+	CompleteDir string   `env:"SABNZBD_COMPLETE_DIR"`                    // Path reported to a client as the completed-downloads folder, which is where it imports from; defaults to MOUNT_PATH
+	Categories  []string `env:"SABNZBD_CATEGORIES, default=*,tv,movies"` // Categories offered to a client; it refuses to save if the one it is configured with is missing
+}
+
 type MountConfig struct {
 	Path    string   `env:"MOUNT_PATH"`    // Path for FUSE mount; Disabled when unset
 	Options []string `env:"MOUNT_OPTIONS"` // Additional Options for FUSE mount; See mount.fuse3 Manpage for more information
@@ -84,6 +91,7 @@ type Config struct {
 	Usenet        UsenetConfig
 	Mount         MountConfig
 	Webdav        WebdavConfig
+	Sabnzbd       SabnzbdConfig
 	Cache         CacheConfig
 	Metadata      MetadataConfig
 	Prefetch      PrefetchConfig

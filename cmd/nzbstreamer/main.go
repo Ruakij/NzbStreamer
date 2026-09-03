@@ -5,9 +5,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/clientapi/sabnzbd"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/filehealth"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
@@ -27,6 +29,28 @@ import (
 )
 
 const ShutdownTimeout time.Duration = 3 * time.Second
+
+// completeDir is the path a download client api reports as the folder finished
+// downloads land in, which is the mount unless it is told otherwise. A client
+// imports from it, so it has to be absolute and it has to be the path as that
+// client sees it.
+func completeDir(c Config) string {
+	dir := c.Sabnzbd.CompleteDir
+	if dir == "" {
+		dir = c.Mount.Path
+	}
+	if dir == "" {
+		slog.Warn("No completed-downloads path for the sabnzbd api; set MOUNT_PATH or SABNZBD_COMPLETE_DIR, or a client cannot import what it downloads")
+		return ""
+	}
+
+	absolute, err := filepath.Abs(dir)
+	if err != nil {
+		slog.Warn("Failed making the completed-downloads path absolute", "path", dir, "error", err)
+		return dir
+	}
+	return absolute
+}
 
 func main() {
 	sm, ctx := shutdownmanager.NewShutdownManager(ShutdownTimeout, timeoutaction.Exit1)
@@ -160,6 +184,26 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		os.Exit(1)
 	}
 	folderTrigger.Init()
+
+	// Client apis
+	// Sabnzbd
+	if c.Sabnzbd.Address != "" {
+		sm.AddService()
+		go func() {
+			defer sm.ServiceDone()
+
+			err := sabnzbd.Listen(ctx, c.Sabnzbd.Address, sabnzbd.NewHandler(service, sabnzbd.Config{
+				APIKey:      c.Sabnzbd.APIKey,
+				CompleteDir: completeDir(c),
+				Categories:  c.Sabnzbd.Categories,
+			}))
+			if err != nil {
+				slog.Error("Error in sabnzbd api", "error", err)
+				os.Exit(1)
+			}
+			slog.Info("Sabnzbd api exited")
+		}()
+	}
 
 	// Start Presenters
 	// Webdav

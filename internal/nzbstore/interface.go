@@ -14,7 +14,10 @@ import (
 // The stage is a plain string here, since what its values mean belongs to the
 // service that sets them.
 type Record struct {
-	Data       *nzbparser.NzbData
+	Data *nzbparser.NzbData
+	// Category is what the client api that added it called it; empty for the
+	// watch folder, which has no notion of one
+	Category   string
 	Stage      string
 	Err        string
 	AddedAt    time.Time
@@ -25,7 +28,7 @@ type NzbStore interface {
 	List() ([]Record, error)
 	// Add records an accepted nzb, before anything is built from it, and
 	// supersedes an earlier record of the same name
-	Add(data *nzbparser.NzbData, stage string) error
+	Add(data *nzbparser.NzbData, stage, category string) error
 	// SetStage records how the add ended
 	SetStage(name, stage, errMessage string) error
 	Delete(name string) error

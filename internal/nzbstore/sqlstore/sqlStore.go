@@ -98,7 +98,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) List() ([]nzbstore.Record, error) {
-	rows, err := s.db.Query("SELECT name, raw, stage, error, added_at, finished_at FROM nzb ORDER BY added_at")
+	rows, err := s.db.Query("SELECT name, raw, stage, error, category, added_at, finished_at FROM nzb ORDER BY added_at")
 	if err != nil {
 		return nil, fmt.Errorf("failed listing nzbs: %w", err)
 	}
@@ -111,7 +111,7 @@ func (s *Store) List() ([]nzbstore.Record, error) {
 		var raw []byte
 		var addedAt int64
 		var finishedAt sql.NullInt64
-		if err := rows.Scan(&name, &raw, &record.Stage, &record.Err, &addedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&name, &raw, &record.Stage, &record.Err, &record.Category, &addedAt, &finishedAt); err != nil {
 			return nil, fmt.Errorf("failed reading nzb row: %w", err)
 		}
 
@@ -142,15 +142,15 @@ var ErrNoRaw = errors.New("nzb has no raw bytes")
 
 // Add records an accepted nzb. A name recorded before is superseded, since the
 // later attempt is the one worth reporting and the earlier one is over.
-func (s *Store) Add(data *nzbparser.NzbData, stage string) error {
+func (s *Store) Add(data *nzbparser.NzbData, stage, category string) error {
 	if len(data.Raw) == 0 {
 		return fmt.Errorf("%w: %s", ErrNoRaw, data.MetaName)
 	}
 
 	_, err := s.db.Exec(
-		"INSERT INTO nzb (name, raw, stage, added_at) VALUES (?, ?, ?, ?)"+
-			" ON CONFLICT (name) DO UPDATE SET raw = excluded.raw, stage = excluded.stage, error = '', added_at = excluded.added_at, finished_at = NULL",
-		data.MetaName, data.Raw, stage, time.Now().Unix(),
+		"INSERT INTO nzb (name, raw, stage, category, added_at) VALUES (?, ?, ?, ?, ?)"+
+			" ON CONFLICT (name) DO UPDATE SET raw = excluded.raw, stage = excluded.stage, category = excluded.category, error = '', added_at = excluded.added_at, finished_at = NULL",
+		data.MetaName, data.Raw, stage, category, time.Now().Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("failed storing nzb %s: %w", data.MetaName, err)

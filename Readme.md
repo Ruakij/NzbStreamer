@@ -122,6 +122,11 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `WEBDAV_PASSWORD`                 |                        | Password for WebDAV basic auth                   |
 | `MOUNT_PATH`                      |                        | Path for FUSE mount; Disabled when unset         |
 | `MOUNT_OPTIONS`                   |                        | Additional Options for FUSE mount; See mount.fuse3 Manpage for more information |
+| **Download-Client-Api**
+| `SABNZBD_ADDRESS`                 |                        | Address for the SABnzbd-compatible download client api, e.g. `:8081`; Disabled when unset |
+| `SABNZBD_API_KEY`                 |                        | Api key demanded of every request; unauthenticated when unset |
+| `SABNZBD_COMPLETE_DIR`            |                        | Path reported to a client as the completed-downloads folder, which is where it imports from; defaults to `MOUNT_PATH` |
+| `SABNZBD_CATEGORIES`              | *,tv,movies            | Categories offered to a client; it refuses to save if the one it is configured with is missing |
 | **Cache**
 | `CACHE_PATH`                      | .cache                 | Path for segment-cache                           |
 | `CACHE_MAX_SIZE`                  | 0                      | Maximum cache size in bytes, if unset allows unlimited size (not recommended) |

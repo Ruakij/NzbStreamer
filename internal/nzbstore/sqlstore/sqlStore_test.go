@@ -38,11 +38,11 @@ func TestAnAddAndHowItEndedSurviveReopening(t *testing.T) {
 	}
 
 	store := storeAt(t, dir)
-	if err := store.Add(data, "queued"); err != nil {
+	if err := store.Add(data, "queued", "tv"); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	// Twice, because a re-add of the same nzb must not be a primary-key conflict
-	if err := store.Add(data, "queued"); err != nil {
+	if err := store.Add(data, "queued", "tv"); err != nil {
 		t.Fatalf("Add again: %v", err)
 	}
 	if err := store.SetStage(data.MetaName, "failed", "posts are gone"); err != nil {
@@ -59,6 +59,9 @@ func TestAnAddAndHowItEndedSurviveReopening(t *testing.T) {
 	}
 
 	got := list[0]
+	if got.Category != "tv" {
+		t.Errorf("category: got %q", got.Category)
+	}
 	if got.Stage != "failed" || got.Err != "posts are gone" {
 		t.Errorf("stage: got %q %q", got.Stage, got.Err)
 	}
@@ -83,7 +86,7 @@ func TestDelete(t *testing.T) {
 	}
 
 	store := storeAt(t, t.TempDir())
-	if err := store.Add(data, "completed"); err != nil {
+	if err := store.Add(data, "completed", ""); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if err := store.Delete(data.MetaName); err != nil {

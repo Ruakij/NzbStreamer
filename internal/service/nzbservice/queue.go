@@ -31,7 +31,10 @@ const (
 // which is what identifies it everywhere else in the service and what a restart
 // derives again from the store, so a client keyed on it survives one.
 type QueueItem struct {
-	ID       string
+	ID string
+	// Category is what the client api that added it called it. Nothing here uses
+	// it; a client filters on the value it gave us.
+	Category string
 	Stage    Stage
 	Bytes    int64
 	Added    time.Time
@@ -51,8 +54,8 @@ func (i QueueItem) Done() bool {
 // Add accepts an nzb and returns the id to track it under. The work happens in
 // the background, which is the point of the queue: parsing, probing and reading
 // an archive header take seconds and a client wants the id now.
-func (s *Service) Add(nzbData *nzbparser.NzbData) (string, error) {
-	if err := s.enqueue(nzbData); err != nil {
+func (s *Service) Add(nzbData *nzbparser.NzbData, category string) (string, error) {
+	if err := s.enqueue(nzbData, category); err != nil {
 		return "", err
 	}
 
@@ -143,7 +146,7 @@ func (s *Service) Cancel(id string) error {
 // in flight is refused here rather than after the work; a finished one is
 // replaced, since an nzb that was removed or that failed may be added again and
 // the later attempt is the one worth reporting.
-func (s *Service) enqueue(nzbData *nzbparser.NzbData) error {
+func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 	s.queueMutex.Lock()
 
 	if existing := s.find(nzbData.MetaName); existing != nil {
@@ -155,17 +158,18 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData) error {
 	}
 
 	s.queue = append(s.queue, &QueueItem{
-		ID:    nzbData.MetaName,
-		Stage: StageQueued,
-		Bytes: totalBytes(nzbData),
-		Added: time.Now(),
-		done:  make(chan struct{}),
+		ID:       nzbData.MetaName,
+		Category: category,
+		Stage:    StageQueued,
+		Bytes:    totalBytes(nzbData),
+		Added:    time.Now(),
+		done:     make(chan struct{}),
 	})
 	s.queueMutex.Unlock()
 
 	// The nzb goes in with it, since what resumes an interrupted add is having
 	// the nzb to resume it from
-	if err := s.store.Add(nzbData, string(StageQueued)); err != nil {
+	if err := s.store.Add(nzbData, string(StageQueued), category); err != nil {
 		return fmt.Errorf("failed storing nzb %s: %w", nzbData.MetaName, err)
 	}
 
@@ -183,6 +187,7 @@ func (s *Service) restore(record nzbstore.Record) {
 
 	s.queue = append(s.queue, &QueueItem{
 		ID:       record.Data.MetaName,
+		Category: record.Category,
 		Stage:    Stage(record.Stage),
 		Bytes:    totalBytes(record.Data),
 		Added:    record.AddedAt,
