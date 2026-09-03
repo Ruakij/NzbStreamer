@@ -125,7 +125,7 @@ func TestLiveArchiveMetadataCost(t *testing.T) {
 
 	// pass 1: cold cache
 	start := time.Now()
-	factory := NewNzbFileFactory(liveCache(t, cacheDir), getSegment)
+	factory := NewNzbFileFactory(liveCache(t, cacheDir), getSegment, nil)
 	files, err := factory.BuildSegmentStackFromNzbData(nzb)
 	if err != nil {
 		t.Fatalf("build stack: %v", err)
@@ -183,7 +183,7 @@ func TestLiveArchiveMetadataCost(t *testing.T) {
 	// have to beat.
 	count.reset()
 	start = time.Now()
-	restarted := NewNzbFileFactory(liveCache(t, cacheDir), getSegment)
+	restarted := NewNzbFileFactory(liveCache(t, cacheDir), getSegment, nil)
 	warmFiles, err := restarted.BuildSegmentStackFromNzbData(nzb)
 	if err != nil {
 		t.Fatalf("rebuild stack: %v", err)

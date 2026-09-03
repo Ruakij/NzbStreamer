@@ -110,13 +110,24 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	}
 
 	// Setup services
-	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpClient.GetSegment)
-
 	store, err := sqlstore.New(c.Metadata.Path)
 	if err != nil {
 		slog.Error("Metadata store creation failed", "error", err)
 		os.Exit(1)
 	}
+	// start returns while the presenters keep running, so closing the store is a
+	// shutdown step rather than a defer; it is what flushes the sizes the read
+	// path has learned
+	sm.AddService()
+	go func() {
+		defer sm.ServiceDone()
+		<-ctx.Done()
+		if err := store.Close(); err != nil {
+			slog.Error("Failed closing metadata store", "error", err)
+		}
+	}()
+
+	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpClient.GetSegment, store)
 
 	folderTrigger := folderwatcher.NewFolderWatcher(c.FolderWatcher.Path, c.FolderWatcher.Consume)
 

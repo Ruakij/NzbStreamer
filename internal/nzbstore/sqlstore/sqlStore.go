@@ -7,8 +7,10 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
@@ -19,8 +21,18 @@ import (
 //go:embed migrations/sqlite/*.sql
 var migrations embed.FS
 
+var logger = slog.With("Module", "SqlStore")
+
 type Store struct {
 	db *sql.DB
+
+	// Segment sizes are learned on the read path, so they are buffered here and
+	// written by flushLoop instead of by the read
+	pendingMutex sync.Mutex
+	pending      map[string]int64
+	closing      chan struct{}
+	flusherDone  sync.WaitGroup
+	closeOnce    sync.Once
 }
 
 // New opens the database at path, creating it and its directory if needed, and
@@ -61,11 +73,27 @@ func New(path string) (*Store, error) {
 		return nil, fmt.Errorf("failed migrating database %s: %w", path, err)
 	}
 
-	return &Store{db: db}, nil
+	store := &Store{
+		db:      db,
+		pending: make(map[string]int64),
+		closing: make(chan struct{}),
+	}
+	store.flusherDone.Add(1)
+	go store.flushLoop()
+
+	return store, nil
 }
 
+// Close flushes what the read path has learned and shuts the database down.
 func (s *Store) Close() error {
-	return s.db.Close()
+	var err error
+	s.closeOnce.Do(func() {
+		close(s.closing)
+		s.flusherDone.Wait()
+		err = s.db.Close()
+	})
+
+	return err
 }
 
 func (s *Store) List() ([]nzbparser.NzbData, error) {

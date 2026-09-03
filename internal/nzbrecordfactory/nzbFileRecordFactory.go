@@ -2,6 +2,7 @@ package nzbrecordfactory
 
 import (
 	"fmt"
+	"log/slog"
 	"path"
 	"slices"
 
@@ -18,21 +19,46 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/sevenzipfileresource"
 )
 
+var logger = slog.With("Module", "NzbRecordFactory")
+
+// SegmentSizeStore is what the factory needs of the metadata store: the decoded
+// lengths it already knows, and somewhere to report the ones it learns. A
+// decoded length is a fact about an immutable post, so it is keyed by message-id
+// and shared by every nzb naming that post. May be nil.
+type SegmentSizeStore interface {
+	SegmentSizes(ids []string) (map[string]int64, error)
+	RecordSegmentSize(messageID string, size int64)
+}
+
 type NzbFileFactory struct {
 	cache      *diskcache.Cache
 	getSegment nzbpostresource.GetSegmentFunc
+	sizeStore  SegmentSizeStore
 }
 
 // getSegment is the whole of what the factory needs from a news server.
-func NewNzbFileFactory(cache *diskcache.Cache, getSegment nzbpostresource.GetSegmentFunc) *NzbFileFactory {
-	return &NzbFileFactory{
-		cache:      cache,
-		getSegment: getSegment,
+func NewNzbFileFactory(cache *diskcache.Cache, getSegment nzbpostresource.GetSegmentFunc, sizeStore SegmentSizeStore) *NzbFileFactory {
+	f := &NzbFileFactory{
+		cache:     cache,
+		sizeStore: sizeStore,
 	}
+
+	// Decoding is what turns a segments size hint into a fact, and this is where
+	// decoding ends, so the observation is taken here rather than reported back
+	// up through the resource layers
+	f.getSegment = func(group, id string) ([]byte, error) {
+		body, err := getSegment(group, id)
+		if err == nil && sizeStore != nil {
+			sizeStore.RecordSegmentSize(id, int64(len(body)))
+		}
+		return body, err
+	}
+
+	return f
 }
 
 func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData) (map[string]presentation.Openable, error) {
-	rawFiles := f.buildRawFiles(nzbData, nzbfileanalyzer.NewSegmentSizer(nzbData))
+	rawFiles := f.buildRawFiles(nzbData, nzbfileanalyzer.NewSegmentSizer(nzbData), f.knownSizes(nzbData))
 	groupedFilenames := f.groupFiles(rawFiles)
 
 	files := make(map[string]presentation.Openable, len(rawFiles))
@@ -44,12 +70,37 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData
 	return files, nil
 }
 
+// knownSizes asks the store for every decoded length it already holds for this
+// nzb, in one round-trip rather than one per segment.
+func (f *NzbFileFactory) knownSizes(nzbData *nzbparser.NzbData) map[string]int64 {
+	if f.sizeStore == nil {
+		return nil
+	}
+
+	var ids []string
+	for i := range nzbData.Files {
+		for _, segment := range nzbData.Files[i].Segments {
+			ids = append(ids, segment.ID)
+		}
+	}
+
+	sizes, err := f.sizeStore.SegmentSizes(ids)
+	if err != nil {
+		// Not knowing a size is the normal state, so a failed lookup costs
+		// measurement later and never correctness
+		logger.Warn("Failed reading known segment sizes", "nzb", nzbData.MetaName, "error", err)
+		return nil
+	}
+
+	return sizes
+}
+
 // buildRawFiles creates the initial map of raw file resources
-func (f *NzbFileFactory) buildRawFiles(nzbData *nzbparser.NzbData, sizer nzbfileanalyzer.SegmentSizer) map[string]resource.ReadSeekCloseableResource {
+func (f *NzbFileFactory) buildRawFiles(nzbData *nzbparser.NzbData, sizer nzbfileanalyzer.SegmentSizer, known map[string]int64) map[string]resource.ReadSeekCloseableResource {
 	rawFiles := make(map[string]resource.ReadSeekCloseableResource, len(nzbData.Files))
 	for i := range nzbData.Files {
 		file := &nzbData.Files[i]
-		rawFiles[file.Filename] = f.BuildFileResourceFromNzbFile(file, sizer)
+		rawFiles[file.Filename] = f.BuildFileResourceFromNzbFile(file, sizer, known)
 	}
 	return rawFiles
 }
@@ -112,7 +163,7 @@ func (f *NzbFileFactory) processSpecialFiles(groupFilename string, groupedFiles 
 	return err
 }
 
-func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, sizer nzbfileanalyzer.SegmentSizer) *adaptiveparallelmergerresource.AdaptiveParallelMergerResource {
+func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, sizer nzbfileanalyzer.SegmentSizer, known map[string]int64) *adaptiveparallelmergerresource.AdaptiveParallelMergerResource {
 	totalSegments := len(nzbFiles.Segments)
 	cachedSegmentResources := make([]resource.ReadSeekCloseableResource, 0, totalSegments)
 
@@ -123,7 +174,7 @@ func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, 
 
 	for i := range nzbFiles.Segments {
 		nzbSegment := &nzbFiles.Segments[i]
-		segmentResource := f.BuildResourceFromNzbSegment(nzbSegment, nzbFiles.Groups[0], sizer)
+		segmentResource := f.BuildResourceFromNzbSegment(nzbSegment, nzbFiles.Groups[0], sizer, known)
 		cachedSegmentResource := fullcacheresource.NewFullCacheResource(
 			segmentResource,
 			nzbSegment.ID,
@@ -138,7 +189,12 @@ func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, 
 	return adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(cachedSegmentResources)
 }
 
-func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbparser.Segment, groups string, sizer nzbfileanalyzer.SegmentSizer) *nzbpostresource.NzbPostResource {
+func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbparser.Segment, groups string, sizer nzbfileanalyzer.SegmentSizer, known map[string]int64) *nzbpostresource.NzbPostResource {
+	if size, ok := known[nzbSegment.ID]; ok {
+		// A measured length beats anything derived from the hint
+		return nzbpostresource.New(nzbSegment.ID, groups, size, true, f.getSegment)
+	}
+
 	size, sizeExact := sizer.Size(nzbSegment.BytesHint)
 	return nzbpostresource.New(nzbSegment.ID, groups, int64(size), sizeExact, f.getSegment)
 }
