@@ -1,9 +1,8 @@
 # ---- Build ----
-FROM golang:1.27-alpine AS build
+# Pinned to the platform doing the building, so a foreign target cross-compiles
+# instead of running the whole toolchain under emulation
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 WORKDIR /build
-
-# Install build dependencies
-RUN apk add --no-cache ca-certificates
 
 # Copy only go.mod and go.sum first to cache dependencies
 COPY go.mod go.sum ./
@@ -12,8 +11,11 @@ RUN go mod download
 # Copy source code
 COPY . .
 
+# Declared here so every layer above stays identical across target platforms
+ARG TARGETARCH
+
 # Build with optimizations
-RUN CGO_ENABLED=0 go build \
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build \
     -ldflags="-s -w" \
     -trimpath \
     -o nzbstreamer ./cmd/nzbstreamer
