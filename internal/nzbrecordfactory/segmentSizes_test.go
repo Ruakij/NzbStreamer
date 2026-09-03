@@ -28,6 +28,14 @@ func (s *fakeSizeStore) RecordSegmentSize(messageID string, size int64) {
 	s.recorded[messageID] = size
 }
 
+func (s *fakeSizeStore) ForgetSegments(ids []string) error {
+	for _, id := range ids {
+		delete(s.known, id)
+		delete(s.recorded, id)
+	}
+	return nil
+}
+
 func TestAKnownSizeIsExactWithoutFetching(t *testing.T) {
 	store := &fakeSizeStore{
 		known:    map[string]int64{"a@example.com": 700000},

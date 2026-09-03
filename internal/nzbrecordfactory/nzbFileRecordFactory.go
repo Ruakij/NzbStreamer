@@ -1,6 +1,7 @@
 package nzbrecordfactory
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
@@ -28,6 +29,7 @@ var logger = slog.With("Module", "NzbRecordFactory")
 type SegmentSizeStore interface {
 	SegmentSizes(ids []string) (map[string]int64, error)
 	RecordSegmentSize(messageID string, size int64)
+	ForgetSegments(ids []string) error
 }
 
 type NzbFileFactory struct {
@@ -70,6 +72,41 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData
 	return files, nil
 }
 
+// DiscardSegmentStackFromNzbData throws away everything the stack accumulated
+// for an nzb: the cached segment bytes, which is the bulk of it, and the sizes
+// learned from decoding them.
+//
+// A post another nzb also names goes with it, costing that nzb a refetch. Both
+// are caches, so this is never wrong, only slow; the alternative is an
+// nzb-to-post table that nothing else would use.
+func (f *NzbFileFactory) DiscardSegmentStackFromNzbData(nzbData *nzbparser.NzbData) {
+	ids := segmentIDs(nzbData)
+
+	if f.cache != nil {
+		for _, id := range ids {
+			if err := f.cache.Remove(id); err != nil && !errors.Is(err, diskcache.ErrItemNotFound) {
+				logger.Warn("Failed removing cached segment", "segment", id, "error", err)
+			}
+		}
+	}
+
+	if f.sizeStore != nil {
+		if err := f.sizeStore.ForgetSegments(ids); err != nil {
+			logger.Warn("Failed forgetting segment sizes", "nzb", nzbData.MetaName, "error", err)
+		}
+	}
+}
+
+func segmentIDs(nzbData *nzbparser.NzbData) []string {
+	var ids []string
+	for i := range nzbData.Files {
+		for _, segment := range nzbData.Files[i].Segments {
+			ids = append(ids, segment.ID)
+		}
+	}
+	return ids
+}
+
 // knownSizes asks the store for every decoded length it already holds for this
 // nzb, in one round-trip rather than one per segment.
 func (f *NzbFileFactory) knownSizes(nzbData *nzbparser.NzbData) map[string]int64 {
@@ -77,14 +114,7 @@ func (f *NzbFileFactory) knownSizes(nzbData *nzbparser.NzbData) map[string]int64
 		return nil
 	}
 
-	var ids []string
-	for i := range nzbData.Files {
-		for _, segment := range nzbData.Files[i].Segments {
-			ids = append(ids, segment.ID)
-		}
-	}
-
-	sizes, err := f.sizeStore.SegmentSizes(ids)
+	sizes, err := f.sizeStore.SegmentSizes(segmentIDs(nzbData))
 	if err != nil {
 		// Not knowing a size is the normal state, so a failed lookup costs
 		// measurement later and never correctness

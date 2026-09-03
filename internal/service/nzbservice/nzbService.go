@@ -358,16 +358,24 @@ func groupFilesByExtension(files []string) (filesByExtension map[string][]string
 
 func (s *Service) RemoveNzb(nzbData *nzbparser.NzbData) error {
 	s.mutex.Lock()
-	defer s.mutex.Unlock()
 
 	// Check if NZB exists
-	if _, exists := s.nzbFiledata[nzbData.MetaName]; !exists {
+	registered, exists := s.nzbFiledata[nzbData.MetaName]
+	if !exists {
+		s.mutex.Unlock()
 		return fmt.Errorf("%w: %s", ErrNzbNotFound, nzbData.MetaName)
 	}
 
 	logger.Debug("Removing nzb", "MetaName", nzbData.MetaName)
 
 	s.unregister(nzbData.MetaName)
+	s.mutex.Unlock()
+
+	// Thousands of unlinks and a database write, so it happens once the nzb is
+	// out of the presenters rather than under the lock every read waits on. The
+	// registered data is what was actually built; the caller may hold a re-parse
+	// of the same nzb with fewer files if a blacklist changed since.
+	s.factory.DiscardSegmentStackFromNzbData(registered)
 
 	if err := s.store.Delete(nzbData); err != nil {
 		return fmt.Errorf("failed removing nzb %s from store: %w", nzbData.MetaName, err)

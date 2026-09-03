@@ -11,6 +11,14 @@ import (
 // from flushing sooner.
 const flushInterval = 5 * time.Second
 
+// lookupChunk keeps a statement well under the bound on placeholders, which a
+// release-sized nzb would otherwise reach in one go.
+const lookupChunk = 500
+
+func placeholders(n int) string {
+	return "?" + strings.Repeat(",?", n-1)
+}
+
 // A decoded segment length is a fact about an immutable post, so it is only ever
 // learned, never invalidated, and two nzbs describing the same post share it.
 // That is why the key is the message-id and not a position in an nzb.
@@ -20,21 +28,15 @@ const flushInterval = 5 * time.Second
 func (s *Store) SegmentSizes(ids []string) (map[string]int64, error) {
 	sizes := make(map[string]int64, len(ids))
 
-	// Chunked to stay well under the bound on placeholders per statement, which a
-	// release-sized nzb would otherwise reach
-	const chunk = 500
-	for start := 0; start < len(ids); start += chunk {
-		end := min(start+chunk, len(ids))
-		batch := ids[start:end]
+	for start := 0; start < len(ids); start += lookupChunk {
+		batch := ids[start:min(start+lookupChunk, len(ids))]
 
 		args := make([]any, len(batch))
 		for i, id := range batch {
 			args[i] = id
 		}
-		query := "SELECT message_id, size FROM segment WHERE message_id IN (?" +
-			strings.Repeat(",?", len(batch)-1) + ")"
 
-		rows, err := s.db.Query(query, args...)
+		rows, err := s.db.Query("SELECT message_id, size FROM segment WHERE message_id IN ("+placeholders(len(batch))+")", args...)
 		if err != nil {
 			return nil, fmt.Errorf("failed reading segment sizes: %w", err)
 		}
@@ -65,6 +67,33 @@ func (s *Store) RecordSegmentSize(messageID string, size int64) {
 	defer s.pendingMutex.Unlock()
 
 	s.pending[messageID] = size
+}
+
+// ForgetSegments drops what is known about ids, for posts nobody will read
+// again. A size is knowledge that costs a fetch to regain and nothing to lose,
+// so this is the only thing that ever removes one.
+func (s *Store) ForgetSegments(ids []string) error {
+	s.pendingMutex.Lock()
+	for _, id := range ids {
+		delete(s.pending, id)
+	}
+	s.pendingMutex.Unlock()
+
+	for start := 0; start < len(ids); start += lookupChunk {
+		batch := ids[start:min(start+lookupChunk, len(ids))]
+
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+
+		_, err := s.db.Exec("DELETE FROM segment WHERE message_id IN ("+placeholders(len(batch))+")", args...)
+		if err != nil {
+			return fmt.Errorf("failed forgetting segment sizes: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (s *Store) flushLoop() {

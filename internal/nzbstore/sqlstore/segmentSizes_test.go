@@ -28,6 +28,28 @@ func TestSegmentSizesSurviveReopening(t *testing.T) {
 	}
 }
 
+func TestForgetSegments(t *testing.T) {
+	store := storeAt(t, t.TempDir())
+
+	store.RecordSegmentSize("a@example.com", 716800)
+	store.flushSegmentSizes()
+	// Still buffered, so forgetting has to reach the buffer as well as the table
+	store.RecordSegmentSize("b@example.com", 12345)
+
+	if err := store.ForgetSegments([]string{"a@example.com", "b@example.com"}); err != nil {
+		t.Fatalf("ForgetSegments: %v", err)
+	}
+	store.flushSegmentSizes()
+
+	sizes, err := store.SegmentSizes([]string{"a@example.com", "b@example.com"})
+	if err != nil {
+		t.Fatalf("SegmentSizes: %v", err)
+	}
+	if len(sizes) != 0 {
+		t.Errorf("forgotten sizes came back: %v", sizes)
+	}
+}
+
 // More ids than fit in one statement, which is what the chunking is for
 func TestSegmentSizesBeyondOneStatement(t *testing.T) {
 	store := storeAt(t, t.TempDir())
