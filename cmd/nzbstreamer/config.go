@@ -17,7 +17,7 @@ type UsenetConfig struct {
 	MaxAttempts  int           `env:"USENET_MAX_ATTEMPTS, default=3"`   // Attempts a request gets before its error is reported
 	RetryBackoff time.Duration `env:"USENET_RETRY_BACKOFF, default=1s"` // Wait after the first failed attempt, doubled after each further one
 	Timeout      time.Duration `env:"USENET_TIMEOUT, default=30s"`      // Timeout for connecting and for completing a single request
-	IdleTimeout  time.Duration `env:"USENET_IDLE_TIMEOUT, default=5m"`  // Time after which an unused connection is closed; 0 keeps them open
+	IdleTimeout  time.Duration `env:"USENET_IDLE_TIMEOUT, default=2m"`  // Time after which an unused connection is closed; 0 or less falls back to the default
 }
 
 type WebdavConfig struct {

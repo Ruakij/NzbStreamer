@@ -8,12 +8,14 @@ Presents files described by NZBs from Newsservers on-demand as WebDAV or FUSE wi
 ---
 
 <!-- TOC -->
+- [NzbStreamer](#nzbstreamer)
 - [1. Description](#1-description)
 - [2. Usage](#2-usage)
-    - [2.1. How to run](#21-how-to-run)
+  - [2.1. How to run](#21-how-to-run)
+    - [2.1.1. Docker-compose](#211-docker-compose)
 - [3. Problems](#3-problems)
-    - [3.1. Segment- and File-sizes](#31-segment--and-file-sizes)
-    - [3.2. Archive-Files](#32-archive-files)
+  - [3.1. Segment- and File-sizes](#31-segment--and-file-sizes)
+  - [3.2. Archive-Files](#32-archive-files)
 - [4. Settings](#4-settings)
 - [5. Feature-List](#5-feature-list)
 - [6. License](#6-license)
@@ -110,7 +112,7 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `USENET_MAX_ATTEMPTS`             | 3                      | Attempts a request gets before its error is reported |
 | `USENET_RETRY_BACKOFF`            | 1s                     | Wait after the first failed attempt, doubled after each further one |
 | `USENET_TIMEOUT`                  | 30s                    | Timeout for connecting and for completing a single request |
-| `USENET_IDLE_TIMEOUT`             | 5m                     | Time after which an unused connection is closed; 0 keeps them open |
+| `USENET_IDLE_TIMEOUT`             | 2m                     | Time after which an unused connection is closed |
 | **Trigger**
 | `FOLDER_WATCHER_PATH`             | .watch                 | Watch folder for adding nzbs (blackhole folder)  |
 | **Presenters**

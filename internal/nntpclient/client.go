@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"syscall"
 	"time"
 
 	"astuart.co/nntp"
@@ -56,7 +57,7 @@ type Config struct {
 	Backoff time.Duration
 	// Timeout for connecting and for completing a single request
 	Timeout time.Duration
-	// IdleTimeout after which an unused connection is closed; 0 keeps them open
+	// IdleTimeout after which an unused connection is closed; defaults when unset
 	IdleTimeout time.Duration
 }
 
@@ -82,6 +83,12 @@ func New(config Config) *Client {
 	if config.Attempts < 1 {
 		config.Attempts = 1
 	}
+	// Holding connections indefinitely is not on offer: a news server hangs up
+	// on an idle one within a few minutes whatever the client would prefer, so
+	// an unbounded timeout only decides how long the closed sockets are kept.
+	if config.IdleTimeout <= 0 {
+		config.IdleTimeout = 2 * time.Minute
+	}
 
 	client := &Client{
 		config: config,
@@ -93,38 +100,56 @@ func New(config Config) *Client {
 		client.slots <- struct{}{}
 	}
 
-	if config.IdleTimeout > 0 {
-		go client.reapIdle()
-	}
+	go client.reapIdle()
 	return client
 }
 
 // reapIdle closes connections that have sat unused past IdleTimeout, so a burst
 // of reads does not hold connections open against the accounts limit for the
 // rest of the process. The next request dials again, which costs a handshake.
+//
+// It also closes the ones the server has already hung up on, which is what keeps
+// an IdleTimeout set longer than the servers own from filling the pool with dead
+// sockets that only a request would discover.
 func (c *Client) reapIdle() {
 	for {
-		time.Sleep(c.config.IdleTimeout / 2)
+		time.Sleep(c.reapPass())
+	}
+}
 
-		// idle is fifo and release stamps on the way in, so the head is the
-		// oldest connection and the first young one ends the pass
-		for done := false; !done; {
-			select {
-			case cn := <-c.idle:
-				if time.Since(cn.lastUsed) < c.config.IdleTimeout {
-					c.idle <- cn
-					done = true
-					continue
-				}
+// reapPass closes what it should and reports how long until the oldest survivor
+// comes due.
+//
+// It pops and pushes back as many times as the pool holds, which rotates it
+// exactly once: every connection is looked at, the order it started in survives,
+// and only one is ever out of the pool. Holding several out would let acquire
+// dial replacements for connections that are coming back, and the account limit
+// counts those.
+func (c *Client) reapPass() time.Duration {
+	// an empty pool has nothing due sooner than a connection released now
+	wait := c.config.IdleTimeout
+
+	for range len(c.idle) {
+		select {
+		case cn := <-c.idle:
+			idle := time.Since(cn.lastUsed)
+			if idle >= c.config.IdleTimeout || !cn.alive() {
 				// its slot went back at release, so closing only lowers the
 				// number of connections that exist
 				cn.net.Close()
-
-			default:
-				done = true
+				continue
 			}
+
+			c.idle <- cn
+			if due := c.config.IdleTimeout - idle; due < wait {
+				wait = due
+			}
+
+		default:
 		}
 	}
+
+	return wait
 }
 
 // GetSegment fetches an article by message-id and yenc-decodes it.
@@ -161,7 +186,7 @@ func (c *Client) SegmentExists(id string) (bool, error) {
 func (c *Client) retry(what string, op func() error) error {
 	var err error
 	backoff := c.config.Backoff
-	replacedStale := false
+	replacedStale := 0
 
 	for attempt := 0; attempt < c.config.Attempts; {
 		err = op()
@@ -170,11 +195,13 @@ func (c *Client) retry(what string, op func() error) error {
 		}
 
 		// A connection the server closed while it sat idle is not a failed
-		// request. It is only ever discovered by using one, and the next attempt
-		// opens a fresh one, so it costs neither an attempt nor a wait. Once per
-		// request, because a second one means the failure is real.
-		if errors.Is(err, errStaleConn) && !replacedStale {
-			replacedStale = true
+		// request. It is only ever discovered by using one, and each discovery
+		// takes that connection out of the pool, so it costs neither an attempt
+		// nor a wait. The whole pool idles out at once, so the allowance is the
+		// size of the pool; past that the connections are fresh and the failure
+		// is the requests.
+		if errors.Is(err, errStaleConn) && replacedStale < c.config.MaxConns {
+			replacedStale++
 			continue
 		}
 
@@ -257,14 +284,12 @@ func (c *Client) segmentExists(id string) (bool, error) {
 // acquire takes a connection slot and fills it with an idle connection or a new
 // one, reporting which. The slot is held until release or drop, which is what
 // bounds the client to MaxConns.
-func (c *Client) acquire() (cn *conn, reused bool, err error) {
+func (c *Client) acquire() (*conn, bool, error) {
 	<-c.slots
 
-	select {
-	case cn = <-c.idle:
-		reused = true
-
-	default:
+	cn, reused := c.takeIdle()
+	if cn == nil {
+		var err error
 		cn, err = c.dial()
 		if err != nil {
 			c.slots <- struct{}{}
@@ -274,6 +299,26 @@ func (c *Client) acquire() (cn *conn, reused bool, err error) {
 
 	cn.deadline(c.config.Timeout)
 	return cn, reused, nil
+}
+
+// takeIdle pops idle connections until it finds one the server has not closed,
+// closing the dead ones on the way. They idle out as a group, so finding one
+// dead usually means finding several.
+func (c *Client) takeIdle() (*conn, bool) {
+	for {
+		select {
+		case cn := <-c.idle:
+			if cn.alive() {
+				return cn, true
+			}
+			// its slot went back at release, so closing only lowers the number
+			// of connections that exist
+			cn.net.Close()
+
+		default:
+			return nil, false
+		}
+	}
 }
 
 // release returns a connection whose last response was read to its end, so the
@@ -334,6 +379,45 @@ type conn struct {
 	net      net.Conn
 	group    string
 	lastUsed time.Time
+}
+
+// alive reports whether the connection can still carry a command. A server
+// closes an idle connection with a bare FIN, and tcp only reports that to a
+// reader, so one that nobody reads looks fine until a command is sent on it.
+//
+// The look is a non-blocking read straight on the descriptor rather than a Read
+// under a deadline in the past: the poller answers an expired deadline without
+// issuing the syscall, so that never touches the socket at all. Only a definite
+// close counts as dead, so anything this cannot interpret is left for the
+// command to discover.
+func (c *conn) alive() bool {
+	raw := c.net
+	if tlsConn, ok := raw.(*tls.Conn); ok {
+		raw = tlsConn.NetConn()
+	}
+	syscallConn, ok := raw.(syscall.Conn)
+	if !ok {
+		return true
+	}
+	rawConn, err := syscallConn.SyscallConn()
+	if err != nil {
+		return true
+	}
+
+	dead := false
+	if err := rawConn.Read(func(fd uintptr) bool {
+		var b [1]byte
+		n, err := syscall.Read(int(fd), b[:])
+		// nothing to read is EAGAIN and is what a healthy idle connection looks
+		// like; no bytes and no error is the close. Bytes would desync the next
+		// response, so a connection that has any is no more usable than a closed
+		// one - and under tls this read consumed one of them.
+		dead = (n == 0 && err == nil) || n > 0 || errors.Is(err, syscall.ECONNRESET)
+		return true
+	}); err != nil {
+		return true
+	}
+	return !dead
 }
 
 // deadline bounds one request. Without it a server that accepts a command and
