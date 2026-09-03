@@ -36,7 +36,7 @@ This tool fills the gap left by other tools that are either incompatible or too 
 
 # 2. Usage
 
-On startup, NzbStreamer loads existing NZB files, skipping any with errors. It can start a WebDAV server and/or mount a FUSE filesystem. When a file segment is read, it downloads, assembles, and presents the data. New NZB files added via triggers are parsed, checked, assembled, and made available via the filesystem if they pass plausibility checks.
+On startup, NzbStreamer restores what it added before from its metadata database, without touching the news server. It can start a WebDAV server and/or mount a FUSE filesystem. When a file segment is read, it downloads, assembles, and presents the data. New NZBs arrive through the watch folder, the SABnzbd api or the web ui; each is parsed, sampled to judge whether enough of it is still on the server, and presented if it passes.
 
 ## 2.1. How to run
 
@@ -47,10 +47,11 @@ Example Compose file with Webdav, Fuse and custom file-blacklist:
 ```yaml
 services:
     nzbstreamer:
-        image: nzbstreamer
+        image: ghcr.io/ruakij/nzbstreamer
         volumes:
             - ./cache:/app/.cache
             - ./watch:/app/.watch
+            - ./metadata:/app/.metadata
             - ./mount:/mount:rshared
         ports:
             - 127.0.0.1:8080:8080
@@ -81,34 +82,26 @@ This is required if you want to use the mount on the host or in a different cont
 # 3. Problems
 
 ## 3.1. Segment- and File-sizes
-As the exact size of a segment-data amount isnt known, the program has to rely on the NZB-segment annotation `bytes`, which describes the packed-size of the segment including header and checksum. It is usuall 2-5% larger.
+An NZB annotates each segment with `bytes`, but indexers disagree on what it counts: the posted size including yEnc overhead, 2-5% larger than the payload, or the decoded size. That decides which segment an offset falls in, so a wrong one sends a seek to the wrong place.
 
-The segment-size is important for determining which segments need to be read next or more importantly where to jump to in case a different part of the file is requested.
+The convention is derived from the hints, or settled by downloading up to `NZB_PROBE_SIZE_CONVENTION` segments while adding. Decoded lengths are kept in the metadata database by message-id, so every full segment is then exact and only a file's last segment is a guess. That one is measured while adding for the classes in `NZB_EAGER_EXACT_SIZE_CLASSES`, and otherwise on the first GET needing a `Content-Length` unless `WEBDAV_LAZY_EXACT_SIZE` is off, which truncates the response instead.
 
-The program already compensates for this by checking if the size is close to a known segment-size.  
-But this isnt possible in al circumstances, usually for end-segments, and can lead to the file displayed to be slightly smaller than it actually is.
-
-Usually this isnt an issue as the real file will only differ by a few KB, but accessing the file via WebDAV might result in errors when trying to read the whole file as WebDAV expects the file to be static.
-
-This problem doesnt exist, when the file is from within an archive as the archive knows the actual file-size.  
-Though this can cause other problems, see below.
+Where nothing settles the convention, a seek downloads whatever it crosses the first time.
 
 ## 3.2. Archive-Files
-When a file is from within an archive, the program has to unpack the archive to get the file.  
+Cost depends on how the member was stored.
 
-As these are usually compressed in a single stream, the archived-file has to be read from the beginning, until the requested part is read.   This works fine for sequencial reads, but can cause problems when the file is read in a non-sequencial order.  
-i.e. Reading a part from end causes the whole archive to be read until the end.
+A **stored** (uncompressed) member, which most video releases are, seeks by block offset within the volumes: no decoder, cost proportional to the bytes wanted, backwards as cheap as forwards, concurrent reads in parallel.
 
-The current implementatiion also doesnt handle seeking backwards, so reading a part early from the current stream causes the whole archive to be read from the beginning again until the part is reached.
+A **compressed** or **solid** member, and anything out of a 7z, is a forward-only decoder stream: seeking backwards decodes from the start again, cost is proportional to the offset, and concurrent reads serialise behind the one decoder. Video files show this, since the index a player seeks with usually sits at the end of the file.
 
-If all files within an archive are compressed in a single stream (typically called "Solid") or in seperate ones, depends on the type of archive.  
-
-Specially video-files like mkv are problematic as some metadata required for playback typically resides at the end of the file unless moved to the front. (e.g. Keyframe-index)
+Zip archives are not unpacked.
 
 # 4. Routes
 
 | Path                                | Description                                                   |
 |-------------------------------------|--------------------------------------------------------|
+| `/`                                 | Web ui showing the queue and history |
 | `/sabnzbd/api`                      | SABnzbd-compatible download client api; a client's url base is `http://host:8080/sabnzbd` |
 | `/webdav/`                          | WebDAV, behind basic auth when `WEBDAV_USERNAME` is set |
 | `/debug/pprof/`, `/debug/statsviz/` | Debugging endpoints, off unless `HTTP_DEBUG`                                |
@@ -147,7 +140,7 @@ Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORIT
 | `FOLDER_WATCHER_PATH`             | .watch                 | Watch folder for adding nzbs                     |
 | `FOLDER_WATCHER_CONSUME`          | true                   | Delete an nzb file once it has been added; the metadata database keeps it |
 | **Http**
-| `HTTP_ADDRESS`                    | :8080                  | Address the process listens on; serves the web ui, its api, `/sabnzbd/api`, `/webdav/` and `/metrics` |
+| `HTTP_ADDRESS`                    | :8080                  | Address the process listens on; serves the web ui, its api, `/sabnzbd/api` and `/webdav/` |
 | `HTTP_DEBUG`                      | false                  | Serve `/debug/pprof/` and `/debug/statsviz/`     |
 | **Presenters**
 | `WEBDAV_USERNAME`                 |                        | Username for WebDAV basic auth; Authentication disabled when unset |
@@ -199,8 +192,8 @@ Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORIT
 
 -   Triggers
     -   [x] Watch-folder
-    -   [ ] SabNzb-API
-        -   [ ] Optionally store loaded Nzb in folder
+    -   [x] SabNzbd-API
+    -   [x] Web ui
 -   Presenters
     -   [x] WebDAV
     -   [x] FUSE
@@ -216,27 +209,29 @@ Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORIT
     -   [ ] Path templating
 -   NZB options
     -   [x] File Blacklist
-    -   [ ] Scan segments
-        -   [ ] Amount / Percentage
-        -   [ ] Unknown sizes
+    -   [x] Scan segments
+        -   [x] Amount / Percentage
+        -   [x] Weigh damage against par2 repair capacity
         -   [ ] Periodic rescan
+    -   [x] Settle unknown segment-size convention
 -   Cache
     -   [x] Segment-prefetch
     -   [x] Segment-Cache
         -   [x] Max Size
         -   [ ] Max TTL
-    -   [ ] Segment-Metadata-Cache
-    -   [ ] Filesystem cache
+    -   [x] Segment-Metadata-Cache
+    -   [ ] Sparse segment-containers
+        -   One container per file instead of one cache file per segment
+    -   [ ] Decoded-output cache
         -   High-level cache for reduced disk actitivy for compressed archives
 -   Internals
     -   [x] Efficient seeking
-    -   [ ] Choose efficient Segment-Merger
-        -   If we know the size of all Segments, we should use a more efficient merger
-    -   [ ] Segment-Merger efficient copying
-        -   If we know the size of Segments in a sequence, we should directly write those to out-buffer
+    -   [x] Nzb Store for more permanent storage
+    -   [x] Multiple news servers, with priority, quota and failure breaker
     -   [ ] Properly handle Missing articles -> Remove file
         -   Currently only the error is logged
-    -   [ ] Nzb Store for more permanent storage
+    -   [ ] Archive-Metadata-Cache
+        -   Skip the header walk of an archive already opened once
     -   [ ] More efficient opening (and thus reserving) of resources
 
 # 7. License

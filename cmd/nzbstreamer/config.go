@@ -35,7 +35,7 @@ type UsenetConfig struct {
 }
 
 type HTTPConfig struct {
-	Address string `env:"HTTP_ADDRESS, default=:8080"` // Address the process listens on; serves the web ui, its api, /sabnzbd/api, /webdav/ and /metrics
+	Address string `env:"HTTP_ADDRESS, default=:8080"` // Address the process listens on; serves the web ui, its api, /sabnzbd/api and /webdav/
 	Debug   bool   `env:"HTTP_DEBUG, default=false"`   // Serve /debug/pprof/ and /debug/statsviz/
 }
 
