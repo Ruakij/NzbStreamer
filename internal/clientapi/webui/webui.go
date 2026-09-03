@@ -23,6 +23,7 @@ type Service interface {
 	Add(nzbData *nzbparser.NzbData, category string) (string, error)
 	Queue() []nzbservice.QueueItem
 	History() []nzbservice.QueueItem
+	Files() map[string][]string
 	Cancel(id string) error
 	Delete(id string) error
 }
@@ -49,6 +50,7 @@ func (h *Handler) items(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{
 		"queue":   h.service.Queue(),
 		"history": h.service.History(),
+		"files":   h.service.Files(),
 		"stats":   map[string]any{},
 	})
 }

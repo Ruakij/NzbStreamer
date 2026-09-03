@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -441,4 +442,18 @@ func (s *Service) unregister(metaName string) {
 
 	delete(s.nzbFiledata, metaName)
 	delete(s.nzbFiles, metaName)
+}
+
+// Files returns the final paths exposed for each NZB.
+func (s *Service) Files() map[string][]string {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	files := make(map[string][]string, len(s.nzbFiles))
+	for id, paths := range s.nzbFiles {
+		paths = slices.Clone(paths)
+		slices.Sort(paths)
+		files[id] = slices.Compact(paths)
+	}
+	return files
 }

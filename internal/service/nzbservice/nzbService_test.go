@@ -160,6 +160,10 @@ func TestAnAddIsVisibleWhileItRunsAndAfterItFinishes(t *testing.T) {
 	if len(service.Queue()) != 0 {
 		t.Errorf("finished add is still in the queue")
 	}
+	files := service.Files()
+	if got := files[id]; len(got) != 1 || got[0] != "Some.Release/file.mkv" {
+		t.Errorf("files are %v, want [Some.Release/file.mkv]", got)
+	}
 
 	if err := service.RemoveNzb(nzbData); err != nil {
 		t.Fatalf("RemoveNzb: %v", err)

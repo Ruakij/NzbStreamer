@@ -10,6 +10,7 @@
   h1 { font-size: 1.4rem; margin: 0; }
   header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1.5rem; }
   h2 { font-size: 1.1rem; margin: 1.5rem 0 .5rem; }
+  summary { cursor: pointer; }
   table { border-collapse: collapse; width: 100%; }
   th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #8884; }
   th { font-weight: 600; opacity: .7; }
@@ -20,6 +21,10 @@
   .stage.failed, .stage.cancelled { background: #c332; color: #c33; }
   .stage.checking, .stage.building { background: #06c2; color: #06c; }
   .empty { opacity: .5; padding: .5rem .6rem; }
+  .file-list { font-size: .85rem; margin-top: .25rem; }
+  .file-list summary { opacity: .7; }
+  .file-tree, .file-tree ul { list-style: none; margin: .2rem 0; padding-left: 1rem; }
+  .file-tree { padding-left: 0; }
   #offline { color: #c33; display: none; }
   #offline.on { display: inline; }
   form { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
@@ -62,64 +67,170 @@ function age(iso) {
   return Math.floor(s / 86400) + "d";
 }
 
-function render(tbody, items, action) {
-  tbody.replaceChildren();
-  if (!items.length) {
-    const tr = tbody.insertRow();
-    const td = tr.insertCell();
-    td.colSpan = cols;
-    td.className = "empty";
-    td.textContent = "nothing here";
+function setText(node, value) {
+  if (node.textContent !== String(value)) node.textContent = value;
+}
+
+function fileTree(paths, id) {
+  const root = new Map();
+  for (const fullPath of paths) {
+    const path = fullPath.startsWith(id + "/") ? fullPath.slice(id.length + 1) : fullPath;
+    let node = root;
+    for (const part of path.split("/").filter(Boolean)) {
+      if (!node.has(part)) node.set(part, new Map());
+      node = node.get(part);
+    }
+  }
+  return root;
+}
+
+function reconcileTree(list, tree, prefix = "") {
+  const existing = new Map([...list.children].map((item) => [item.dataset.key, item]));
+  let position = list.firstElementChild;
+  for (const name of [...tree.keys()].sort()) {
+    const key = prefix ? prefix + "/" + name : name;
+    const branch = tree.get(name).size > 0;
+    let item = existing.get(key);
+    if (!item || (item.dataset.branch === "true") !== branch) {
+      item?.remove();
+      item = document.createElement("li");
+      item.dataset.key = key;
+      item.dataset.branch = branch;
+      if (branch) {
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        const children = document.createElement("ul");
+        details.append(summary, children);
+        item.append(details);
+      } else {
+        item.append(document.createElement("span"));
+      }
+    }
+    existing.delete(key);
+    if (branch) {
+      setText(item.querySelector("summary"), name);
+      reconcileTree(item.querySelector("ul"), tree.get(name), key);
+    } else {
+      setText(item.firstElementChild, name);
+    }
+    if (item !== position) list.insertBefore(item, position);
+    position = item.nextElementSibling;
+  }
+  for (const item of existing.values()) item.remove();
+}
+
+function updateFiles(cell, paths, id) {
+  let details = cell.querySelector(".file-list");
+  if (!paths.length) {
+    details?.remove();
     return;
   }
-  for (const item of items) {
-    const tr = tbody.insertRow();
-    const name = tr.insertCell();
-    name.className = "name";
-    name.textContent = item.id;
-    if (item.error) {
-      const err = document.createElement("div");
-      err.className = "err";
-      err.textContent = item.error;
-      name.append(err);
-    }
-    tr.insertCell().textContent = item.category || "";
-    const stage = document.createElement("span");
-    stage.className = "stage " + item.stage;
-    stage.textContent = item.stage;
-    tr.insertCell().append(stage);
-    tr.insertCell().textContent = size(item.bytes);
-    tr.insertCell().textContent = age(item.added);
-    const button = document.createElement("button");
-    button.textContent = action === "cancel" ? "Cancel" : "Delete";
-    button.onclick = () => remove(item.id, action, button);
-    tr.insertCell().append(button);
+  if (!details) {
+    details = document.createElement("details");
+    details.className = "file-list";
+    const summary = document.createElement("summary");
+    const tree = document.createElement("ul");
+    tree.className = "file-tree";
+    details.append(summary, tree);
+    cell.append(details);
   }
+  setText(details.querySelector(":scope > summary"), paths.length + (paths.length === 1 ? " file" : " files"));
+  reconcileTree(details.querySelector(":scope > ul"), fileTree(paths, id));
+}
+
+function createRow(id, action) {
+  const row = document.createElement("tr");
+  row.dataset.id = id;
+  for (let i = 0; i < cols; i++) row.insertCell();
+  row.cells[0].className = "name";
+  const title = document.createElement("span");
+  title.className = "title";
+  row.cells[0].append(title);
+  const stage = document.createElement("span");
+  row.cells[2].append(stage);
+  const button = document.createElement("button");
+  button.textContent = action === "cancel" ? "Cancel" : "Delete";
+  button.onclick = () => remove(id, action, button);
+  row.cells[5].append(button);
+  return row;
+}
+
+function render(tbody, items, action, files = {}) {
+  const existing = new Map([...tbody.querySelectorAll(":scope > tr[data-id]")].map((row) => [row.dataset.id, row]));
+  tbody.querySelector(":scope > tr.empty")?.remove();
+  if (!items.length) {
+    const tr = tbody.insertRow();
+    tr.className = "empty";
+    const td = tr.insertCell();
+    td.colSpan = cols;
+    td.textContent = "nothing here";
+    for (const row of existing.values()) row.remove();
+    return;
+  }
+  let position = tbody.firstElementChild;
+  for (const item of items) {
+    const tr = existing.get(item.id) || createRow(item.id, action);
+    existing.delete(item.id);
+    const name = tr.cells[0];
+    setText(name.querySelector(".title"), item.id);
+    let err = name.querySelector(".err");
+    if (item.error) {
+      if (!err) {
+        err = document.createElement("div");
+        err.className = "err";
+        name.querySelector(".title").after(err);
+      }
+      setText(err, item.error);
+    } else {
+      err?.remove();
+    }
+    if (action === "delete") updateFiles(name, files[item.id] || [], item.id);
+    setText(tr.cells[1], item.category || "");
+    const stage = tr.cells[2].firstElementChild;
+    stage.className = "stage " + item.stage;
+    setText(stage, item.stage);
+    setText(tr.cells[3], size(item.bytes));
+    setText(tr.cells[4], age(item.added));
+    if (tr !== position) tbody.insertBefore(tr, position);
+    position = tr.nextElementSibling;
+  }
+  for (const row of existing.values()) row.remove();
 }
 
 async function remove(id, action, button) {
   button.disabled = true;
-  const body = new URLSearchParams({ id, action });
-  const response = await fetch("/api/remove", { method: "POST", body });
-  if (!response.ok) {
-    alert((await response.json()).error);
+  try {
+    const body = new URLSearchParams({ id, action });
+    const response = await fetch("/api/remove", { method: "POST", body });
+    if (!response.ok) {
+      alert((await response.json()).error);
+      button.disabled = false;
+      return;
+    }
+    poll();
+  } catch {
     button.disabled = false;
-    return;
+    document.getElementById("offline").classList.add("on");
   }
-  poll();
 }
 
+let polling = false;
+
 async function poll() {
+  if (polling) return;
+  polling = true;
   try {
     const response = await fetch("/api/items");
     if (!response.ok) throw new Error(response.status);
     const data = await response.json();
     render(document.getElementById("queue"), data.queue, "cancel");
-    render(document.getElementById("history"), data.history.slice().reverse(), "delete");
+    render(document.getElementById("history"), data.history.slice().reverse(), "delete", data.files || {});
     document.getElementById("offline").classList.remove("on");
   } catch {
     // leave the last render up; an empty table would read as "nothing added"
     document.getElementById("offline").classList.add("on");
+  } finally {
+    polling = false;
   }
 }
 
