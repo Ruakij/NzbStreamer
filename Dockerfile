@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 go build \
     -o nzbstreamer ./cmd/nzbstreamer
 
 # ---- Release ----
-FROM alpine:3.22 AS release
+FROM alpine:3.24 AS release
 WORKDIR /app
 
 # Install runtime dependencies
