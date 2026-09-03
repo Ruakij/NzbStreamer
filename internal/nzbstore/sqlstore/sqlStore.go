@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
@@ -96,18 +97,21 @@ func (s *Store) Close() error {
 	return err
 }
 
-func (s *Store) List() ([]nzbparser.NzbData, error) {
-	rows, err := s.db.Query("SELECT name, raw FROM nzb")
+func (s *Store) List() ([]nzbstore.Record, error) {
+	rows, err := s.db.Query("SELECT name, raw, stage, error, added_at, finished_at FROM nzb ORDER BY added_at")
 	if err != nil {
 		return nil, fmt.Errorf("failed listing nzbs: %w", err)
 	}
 	defer rows.Close()
 
-	var list []nzbparser.NzbData
+	var list []nzbstore.Record
 	for rows.Next() {
+		var record nzbstore.Record
 		var name string
 		var raw []byte
-		if err := rows.Scan(&name, &raw); err != nil {
+		var addedAt int64
+		var finishedAt sql.NullInt64
+		if err := rows.Scan(&name, &raw, &record.Stage, &record.Err, &addedAt, &finishedAt); err != nil {
 			return nil, fmt.Errorf("failed reading nzb row: %w", err)
 		}
 
@@ -119,7 +123,13 @@ func (s *Store) List() ([]nzbparser.NzbData, error) {
 		}
 		data.MetaName = name
 
-		list = append(list, *data)
+		record.Data = data
+		record.AddedAt = time.Unix(addedAt, 0)
+		if finishedAt.Valid {
+			record.FinishedAt = time.Unix(finishedAt.Int64, 0)
+		}
+
+		list = append(list, record)
 	}
 
 	return list, rows.Err()
@@ -130,14 +140,17 @@ func (s *Store) List() ([]nzbparser.NzbData, error) {
 // rather than the nzb itself.
 var ErrNoRaw = errors.New("nzb has no raw bytes")
 
-func (s *Store) Set(data *nzbparser.NzbData) error {
+// Add records an accepted nzb. A name recorded before is superseded, since the
+// later attempt is the one worth reporting and the earlier one is over.
+func (s *Store) Add(data *nzbparser.NzbData, stage string) error {
 	if len(data.Raw) == 0 {
 		return fmt.Errorf("%w: %s", ErrNoRaw, data.MetaName)
 	}
 
 	_, err := s.db.Exec(
-		"INSERT INTO nzb (name, raw, added_at) VALUES (?, ?, ?) ON CONFLICT (name) DO UPDATE SET raw = excluded.raw",
-		data.MetaName, data.Raw, time.Now().Unix(),
+		"INSERT INTO nzb (name, raw, stage, added_at) VALUES (?, ?, ?, ?)"+
+			" ON CONFLICT (name) DO UPDATE SET raw = excluded.raw, stage = excluded.stage, error = '', added_at = excluded.added_at, finished_at = NULL",
+		data.MetaName, data.Raw, stage, time.Now().Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("failed storing nzb %s: %w", data.MetaName, err)
@@ -145,10 +158,21 @@ func (s *Store) Set(data *nzbparser.NzbData) error {
 	return nil
 }
 
-func (s *Store) Delete(data *nzbparser.NzbData) error {
-	_, err := s.db.Exec("DELETE FROM nzb WHERE name = ?", data.MetaName)
+func (s *Store) SetStage(name, stage, errMessage string) error {
+	_, err := s.db.Exec(
+		"UPDATE nzb SET stage = ?, error = ?, finished_at = ? WHERE name = ?",
+		stage, errMessage, time.Now().Unix(), name,
+	)
 	if err != nil {
-		return fmt.Errorf("failed deleting nzb %s: %w", data.MetaName, err)
+		return fmt.Errorf("failed recording stage of %s: %w", name, err)
+	}
+	return nil
+}
+
+func (s *Store) Delete(name string) error {
+	_, err := s.db.Exec("DELETE FROM nzb WHERE name = ?", name)
+	if err != nil {
+		return fmt.Errorf("failed deleting nzb %s: %w", name, err)
 	}
 	return nil
 }

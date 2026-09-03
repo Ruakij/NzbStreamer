@@ -29,7 +29,7 @@ func storeAt(t *testing.T, dir string) *Store {
 	return store
 }
 
-func TestSetSurvivesReopening(t *testing.T) {
+func TestAnAddAndHowItEndedSurviveReopening(t *testing.T) {
 	dir := t.TempDir()
 
 	data, err := nzbparser.ParseNzb(strings.NewReader(nzbXML), "Some.Release.nzb")
@@ -38,12 +38,15 @@ func TestSetSurvivesReopening(t *testing.T) {
 	}
 
 	store := storeAt(t, dir)
-	if err := store.Set(data); err != nil {
-		t.Fatalf("Set: %v", err)
+	if err := store.Add(data, "queued"); err != nil {
+		t.Fatalf("Add: %v", err)
 	}
 	// Twice, because a re-add of the same nzb must not be a primary-key conflict
-	if err := store.Set(data); err != nil {
-		t.Fatalf("Set again: %v", err)
+	if err := store.Add(data, "queued"); err != nil {
+		t.Fatalf("Add again: %v", err)
+	}
+	if err := store.SetStage(data.MetaName, "failed", "posts are gone"); err != nil {
+		t.Fatalf("SetStage: %v", err)
 	}
 	store.Close()
 
@@ -56,14 +59,20 @@ func TestSetSurvivesReopening(t *testing.T) {
 	}
 
 	got := list[0]
-	if got.MetaName != data.MetaName {
-		t.Errorf("name: got %q, want %q", got.MetaName, data.MetaName)
+	if got.Stage != "failed" || got.Err != "posts are gone" {
+		t.Errorf("stage: got %q %q", got.Stage, got.Err)
 	}
-	if len(got.Files) != 1 || got.Files[0].Filename != data.Files[0].Filename {
-		t.Errorf("files: got %v, want %v", got.Files, data.Files)
+	if got.AddedAt.IsZero() || got.FinishedAt.IsZero() {
+		t.Errorf("times: added %v, finished %v", got.AddedAt, got.FinishedAt)
 	}
-	if got.Meta[nzbparser.MetaKeyPassword] != "secret" {
-		t.Errorf("meta: got %v", got.Meta)
+	if got.Data.MetaName != data.MetaName {
+		t.Errorf("name: got %q, want %q", got.Data.MetaName, data.MetaName)
+	}
+	if len(got.Data.Files) != 1 || got.Data.Files[0].Filename != data.Files[0].Filename {
+		t.Errorf("files: got %v, want %v", got.Data.Files, data.Files)
+	}
+	if got.Data.Meta[nzbparser.MetaKeyPassword] != "secret" {
+		t.Errorf("meta: got %v", got.Data.Meta)
 	}
 }
 
@@ -74,10 +83,10 @@ func TestDelete(t *testing.T) {
 	}
 
 	store := storeAt(t, t.TempDir())
-	if err := store.Set(data); err != nil {
-		t.Fatalf("Set: %v", err)
+	if err := store.Add(data, "completed"); err != nil {
+		t.Fatalf("Add: %v", err)
 	}
-	if err := store.Delete(data); err != nil {
+	if err := store.Delete(data.MetaName); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 

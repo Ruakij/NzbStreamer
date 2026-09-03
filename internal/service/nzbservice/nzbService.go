@@ -35,6 +35,12 @@ type Service struct {
 	nzbFiledata map[string]*nzbparser.NzbData
 	nzbFiles    map[string][]string // Maps NZB MetaName to its file paths
 
+	// What every client api reports on, kept apart from the tree because an add
+	// is observable long before it has one. Scanned linearly and never trimmed:
+	// one entry per nzb the process knows of.
+	queueMutex sync.Mutex
+	queue      []*QueueItem
+
 	// Options
 	fileBlacklist                           []regexp.Regexp
 	nzbFileBlacklist                        []regexp.Regexp
@@ -92,19 +98,35 @@ func (s *Service) SetFilenameReplacementBelowLevensteinRatio(ratio float32) {
 // Initialize the service; Load NzbData from store; build filedata and add to filesystem; Register to triggers
 func (s *Service) Init() error {
 	logger.Debug("Getting nzbData from store")
-	nzbData, err := s.store.List()
+	records, err := s.store.List()
 	if err != nil {
 		return fmt.Errorf("failed listing nzbs in store: %w", err)
 	}
-	logger.Info("Loaded Nzb store", "items", len(nzbData))
+	logger.Info("Loaded Nzb store", "items", len(records))
 
-	// Restoring is not adding: the posts were checked when they were added and the
-	// record is already in the store, so neither the health check nor the write
-	// happens again
-	for _, nzb := range nzbData {
-		err := s.addNzb(&nzb, false)
-		if err != nil {
-			logger.Error("Couldnt add nzb", "error", err)
+	for _, record := range records {
+		switch Stage(record.Stage) {
+		// Restoring is not adding: the posts were checked when they were added
+		// and the record is already in the store, so neither the health check
+		// nor the write happens again
+		case StageCompleted:
+			s.restore(record)
+			if err := s.addNzb(record.Data, false); err != nil {
+				logger.Error("Couldnt add nzb", "MetaName", record.Data.MetaName, "error", err)
+			}
+
+		// It ended without a tree, and a client that has not read the answer yet
+		// still gets it
+		case StageFailed, StageCancelled:
+			s.restore(record)
+
+		// The process died mid-add. Nothing of it was kept beyond the nzb, so
+		// the add starts again rather than picking up
+		default:
+			logger.Info("Resuming interrupted add", "MetaName", record.Data.MetaName, "stage", record.Stage)
+			if _, err := s.Add(record.Data); err != nil {
+				logger.Error("Couldnt resume add", "MetaName", record.Data.MetaName, "error", err)
+			}
 		}
 	}
 
@@ -127,9 +149,17 @@ var (
 	ErrHealthCheckFailed = errors.New("health check failed")
 )
 
-// Add parsed nzb-data
+// Add parsed nzb-data, and wait for it. Add() is the same thing without the
+// wait.
 func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
-	return s.addNzb(nzbData, true)
+	if err := s.enqueue(nzbData); err != nil {
+		return err
+	}
+
+	err := s.addNzb(nzbData, true)
+	s.finish(nzbData.MetaName, err)
+
+	return err
 }
 
 // addNzb builds the tree for an nzb. isNew separates an add from restoring what
@@ -171,6 +201,10 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 
 	// Verify the posts still exist before building anything on top of them
 	if isNew {
+		if err := s.stage(nzbData.MetaName, StageChecking); err != nil {
+			return err
+		}
+
 		if healthErrors := s.healthChecker.CheckFiles(nzbData); len(healthErrors) > 0 {
 			for _, err := range healthErrors {
 				logger.Warn("Unhealthy file detected",
@@ -179,6 +213,12 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 			}
 			return fmt.Errorf("%w: %d files beyond repair", ErrHealthCheckFailed, len(healthErrors))
 		}
+	}
+
+	// The archive walk behind this is seconds and a cancel is waiting on it, so
+	// it is the boundary worth checking
+	if err := s.stage(nzbData.MetaName, StageBuilding); err != nil {
+		return err
 	}
 
 	files, err := s.factory.BuildSegmentStackFromNzbData(nzbData)
@@ -224,11 +264,8 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	}
 	s.mutex.Unlock()
 
-	if isNew {
-		if err := s.store.Set(nzbData); err != nil {
-			return fmt.Errorf("failed storing nzb %s: %w", nzbData.MetaName, err)
-		}
-	}
+	// The store already holds it: enqueue wrote it there when the add was
+	// accepted, and finish records how this ends
 
 	logger.Info("Added nzb", "MetaName", nzbData.MetaName)
 
@@ -341,31 +378,50 @@ func groupFilesByExtension(files []string) (filesByExtension map[string][]string
 }
 
 func (s *Service) RemoveNzb(nzbData *nzbparser.NzbData) error {
-	s.mutex.Lock()
+	return s.Delete(nzbData.MetaName)
+}
 
-	// Check if NZB exists
-	registered, exists := s.nzbFiledata[nzbData.MetaName]
-	if !exists {
-		s.mutex.Unlock()
-		return fmt.Errorf("%w: %s", ErrNzbNotFound, nzbData.MetaName)
+// Delete removes an nzb and everything recorded about it: the files it
+// presents, the segment data it accumulated, and the record of the add. The two
+// go together - files nothing can report on, and a report on files that are
+// gone, are both states nobody can act on - which is why an add still running
+// is refused here and belongs to Cancel.
+//
+// An add that failed left no files, so deleting it is deleting its record.
+func (s *Service) Delete(id string) error {
+	s.queueMutex.Lock()
+	item := s.find(id)
+	if item != nil && !item.Done() {
+		s.queueMutex.Unlock()
+		return fmt.Errorf("%w: %s", ErrNzbStillRunning, id)
+	}
+	s.remove(id)
+	s.queueMutex.Unlock()
+
+	s.mutex.Lock()
+	registered, built := s.nzbFiledata[id]
+	s.unregister(id)
+	s.mutex.Unlock()
+
+	if item == nil && !built {
+		return fmt.Errorf("%w: %s", ErrNzbNotFound, id)
 	}
 
-	logger.Debug("Removing nzb", "MetaName", nzbData.MetaName)
-
-	s.unregister(nzbData.MetaName)
-	s.mutex.Unlock()
+	logger.Debug("Removing nzb", "MetaName", id)
 
 	// Thousands of unlinks and a database write, so it happens once the nzb is
 	// out of the presenters rather than under the lock every read waits on. The
 	// registered data is what was actually built; the caller may hold a re-parse
 	// of the same nzb with fewer files if a blacklist changed since.
-	s.factory.DiscardSegmentStackFromNzbData(registered)
-
-	if err := s.store.Delete(nzbData); err != nil {
-		return fmt.Errorf("failed removing nzb %s from store: %w", nzbData.MetaName, err)
+	if built {
+		s.factory.DiscardSegmentStackFromNzbData(registered)
 	}
 
-	logger.Info("Removed nzb", "MetaName", nzbData.MetaName)
+	if err := s.store.Delete(id); err != nil {
+		return fmt.Errorf("failed removing nzb %s from store: %w", id, err)
+	}
+
+	logger.Info("Removed nzb", "MetaName", id)
 	return nil
 }
 
