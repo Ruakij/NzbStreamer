@@ -337,7 +337,6 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 	processIndex := 0
 
 	// Unlock mutex, when group finished
-	// TODO: Maybe its possible to only block affected readers separately not to halt all activity? Might not be that critical though
 	defer func() {
 		r.noteRead(int64(totalRead))
 
