@@ -230,6 +230,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		os.Exit(1)
 	}
 	service.SetExactSizeClasses(exactSizeClasses)
+	service.SetConcurrency(c.NzbConfig.Concurrency)
 
 	// Mount before the service restores its tree: an inode only takes children
 	// once the filesystem it belongs to is mounted

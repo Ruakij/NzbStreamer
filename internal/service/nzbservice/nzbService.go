@@ -19,6 +19,7 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/filenameops"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 	"github.com/agnivade/levenshtein"
+	"golang.org/x/sync/errgroup"
 )
 
 var logger = slog.With("Module", "NzbService")
@@ -50,6 +51,10 @@ type Service struct {
 	filenameReplacementBelowLevensteinRatio float32
 	healthChecker                           filehealth.Checker
 	exactSizeClasses                        []filenameops.FileClass
+	// addLimit bounds the trees being built at once, whether by an add or by a
+	// restore; the ones it holds back sit in the queue as what they are. nil is
+	// no limit.
+	addLimit chan struct{}
 }
 
 func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, presenters []presentation.Presenter, triggers []trigger.Trigger, healthChecker filehealth.Checker) *Service {
@@ -98,6 +103,33 @@ func (s *Service) SetFilenameReplacementBelowLevensteinRatio(ratio float32) {
 	s.filenameReplacementBelowLevensteinRatio = ratio
 }
 
+// SetConcurrency bounds how many trees are built at once. Building one is
+// mostly waiting on the news server, over connections every read shares, so
+// more is not faster past a point. 0 or less is no limit.
+func (s *Service) SetConcurrency(builds int) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	s.addLimit = nil
+	if builds > 0 {
+		s.addLimit = make(chan struct{}, builds)
+	}
+}
+
+// acquireAdd waits for a free slot and returns what gives it back.
+func (s *Service) acquireAdd() func() {
+	s.mutex.RLock()
+	limit := s.addLimit
+	s.mutex.RUnlock()
+
+	if limit == nil {
+		return func() {} // unbounded, nothing to give back
+	}
+
+	limit <- struct{}{}
+	return func() { <-limit }
+}
+
 // SetExactSizeClasses picks which files are measured as part of an add rather
 // than on their first read.
 func (s *Service) SetExactSizeClasses(classes []filenameops.FileClass) {
@@ -115,6 +147,11 @@ func (s *Service) Init() error {
 	}
 	logger.Info("Loaded Nzb store", "items", len(records))
 
+	// Restoring an nzb walks its archive headers, which is seconds of waiting on
+	// the news server, and the trees are independent of one another. How many run
+	// at once is addNzb's own limit
+	group := errgroup.Group{}
+
 	for _, record := range records {
 		switch Stage(record.Stage) {
 		// Restoring is not adding: the posts were checked when they were added
@@ -122,9 +159,12 @@ func (s *Service) Init() error {
 		// nor the write happens again
 		case StageCompleted:
 			s.restore(record)
-			if err := s.addNzb(record.Data, false); err != nil {
-				logger.Error("Couldnt add nzb", "MetaName", record.Data.MetaName, "error", err)
-			}
+			group.Go(func() error {
+				if err := s.addNzb(record.Data, false); err != nil {
+					logger.Error("Couldnt add nzb", "MetaName", record.Data.MetaName, "error", err)
+				}
+				return nil
+			})
 
 		// It ended without a tree, and a client that has not read the answer yet
 		// still gets it
@@ -140,6 +180,7 @@ func (s *Service) Init() error {
 			}
 		}
 	}
+	_ = group.Wait()
 
 	logger.Debug("Registering at triggers")
 	for _, trigger := range s.triggers {
@@ -176,6 +217,9 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 // addNzb builds the tree for an nzb. isNew separates an add from restoring what
 // the store already holds.
 func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
+	release := s.acquireAdd()
+	defer release()
+
 	logger.Debug("Adding nzb", "MetaName", nzbData.MetaName)
 
 	s.mutex.Lock()
@@ -282,7 +326,8 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	s.mutex.Unlock()
 
 	// Before the add reports finished, since a client that imports on that stats
-	// the file first
+	// the file first. A restore does it too, and pays nothing for it: the store
+	// hands back the lengths the first measurement learned
 	for fullPath, file := range measure {
 		if err := measureFile(file); err != nil {
 			// A size that could not be measured is a worse size, not a missing file
