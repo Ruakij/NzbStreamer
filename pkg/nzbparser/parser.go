@@ -2,12 +2,15 @@ package nzbparser
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/text/encoding/ianaindex"
 )
 
 const (
@@ -15,10 +18,25 @@ const (
 	MetaKeyPassword = "Password"
 )
 
+var ErrUnsupportedCharset = errors.New("unsupported charset")
+
+// charsetReader decodes an nzb declaring an encoding other than utf-8; iso-8859-1
+// is common enough in the wild that the xml package's utf-8-only default rejects
+// real files
+func charsetReader(charset string, input io.Reader) (io.Reader, error) {
+	enc, err := ianaindex.IANA.Encoding(charset)
+	if err != nil || enc == nil {
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedCharset, charset)
+	}
+
+	return enc.NewDecoder().Reader(input), nil
+}
+
 // ParseNzb reads an nzb. filename is the name of the file it was read from, which
 // decides what the nzb is called; pass empty for a source that has none.
 func ParseNzb(inputStream io.Reader, filename string) (*NzbData, error) {
 	decoder := xml.NewDecoder(inputStream)
+	decoder.CharsetReader = charsetReader
 	var nzb NzbData
 
 	err := decoder.Decode(&nzb)

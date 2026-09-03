@@ -14,6 +14,7 @@ require (
 	github.com/nwaples/rardecode/v2 v2.4.1
 	github.com/sethvargo/go-envconfig v1.4.3
 	golang.org/x/sync v0.22.0
+	golang.org/x/text v0.41.0
 )
 
 require (
@@ -30,5 +31,4 @@ require (
 	github.com/ulikunitz/xz v0.5.16 // indirect
 	go4.org v0.0.0-20260112195520-a5071408f32f // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
 )
