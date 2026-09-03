@@ -135,7 +135,7 @@ func TestAliveLeavesALiveConnectionUsable(t *testing.T) {
 		t.Fatal("a live connection was not reused")
 	}
 
-	go func() { (*peers)[0].Write([]byte("hi")) }()
+	go func() { _, _ = (*peers)[0].Write([]byte("hi")) }()
 	buf := make([]byte, 2)
 	if _, err := cn.net.Read(buf); err != nil {
 		t.Errorf("read after the probe: %v, want the probes deadline to be gone", err)

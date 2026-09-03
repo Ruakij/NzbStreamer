@@ -345,7 +345,7 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 		if processIndex >= len(responses) {
 			defer r.mutex.Unlock()
 			// group should have finished, in case it hasnt, wait
-			group.Wait()
+			_ = group.Wait()
 			r.closeBehind()
 			return
 		}
@@ -363,7 +363,7 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 				for processIndex < len(responses) && responses[processIndex] != nil {
 					// Read has concluded, seek back
 					if reader, err := r.reader(responses[processIndex].readerIndex); err == nil {
-						reader.Seek(0, io.SeekStart)
+						_, _ = reader.Seek(0, io.SeekStart)
 					}
 					processIndex++
 				}
@@ -373,7 +373,7 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 			processResponses()
 
 			// Wait for group & discard error, we can't raise it here anyways
-			group.Wait()
+			_ = group.Wait()
 
 			// Process remaining responses after waiting for all goroutines to finish
 			processResponses()
@@ -441,14 +441,7 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 			totalN := 0
 			var n int
 			var prevNCount int
-			for {
-				// Check if job is cancelled while before next read
-				select {
-				case <-readCtx.Done():
-					break
-				default:
-				}
-
+			for readCtx.Err() == nil {
 				n, err = reader.Read(buf[totalN:])
 				totalN += n
 
@@ -788,7 +781,6 @@ func (r *AdaptiveParallelMergerResourceReader) seekBackwards(seekAmount int64) e
 
 		index++
 		readerIndex--
-		readerByteIndex = 0
 	} else {
 		// When we are at 0, next reader backwards is one less
 		readerIndex--
@@ -832,7 +824,6 @@ func (r *AdaptiveParallelMergerResourceReader) seekBackwards(seekAmount int64) e
 
 			index++
 			readerIndex--
-			readerByteIndex = 0
 		}
 
 		for processIndex < len(responses) {

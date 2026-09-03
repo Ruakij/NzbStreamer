@@ -196,7 +196,7 @@ func (fw *folderWatcher) processFile(filename string, content []byte) bool {
 			if i != 0 {
 				msg.WriteString(", ")
 			}
-			msg.WriteString(fmt.Sprintf("%v", warn))
+			fmt.Fprintf(&msg, "%v", warn)
 		}
 		logger.Warn("Warnings while checking Nzb", "filename", filename, "msg", msg.String())
 	}
@@ -206,7 +206,7 @@ func (fw *folderWatcher) processFile(filename string, content []byte) bool {
 			if i != 0 {
 				msg.WriteString(", ")
 			}
-			msg.WriteString(fmt.Sprintf("%v", err))
+			fmt.Fprintf(&msg, "%v", err)
 		}
 		logger.Warn("Errors while checking Nzb", "filename", filename, "msg", msg.String())
 		return false

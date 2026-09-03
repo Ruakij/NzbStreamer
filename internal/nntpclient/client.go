@@ -486,7 +486,7 @@ func (c *conn) deadline(timeout time.Duration) {
 	if timeout <= 0 {
 		return
 	}
-	c.net.SetDeadline(time.Now().Add(timeout))
+	_ = c.net.SetDeadline(time.Now().Add(timeout))
 }
 
 // selectGroup issues GROUP only when the connection is not already on it.

@@ -245,9 +245,6 @@ func (f *NzbFileFactory) processSpecialFiles(groupFilename string, groupedFiles 
 		specialFiles, err = f.BuildRarFileFromFileResource(groupedFiles, password)
 	case ".7z", ".z":
 		specialFiles, err = f.Build7zFileFromFileResource(groupedFiles, password)
-		if err != nil && extension == ".z" {
-			// Handle potential zip fallback
-		}
 	}
 
 	if len(specialFiles) > 0 {

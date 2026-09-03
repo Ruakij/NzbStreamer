@@ -137,7 +137,7 @@ func (s *Store) writeSegmentSizes(sizes map[string]int64) (err error) {
 	}
 	defer func() {
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 		}
 	}()
 

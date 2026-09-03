@@ -259,13 +259,6 @@ func (s *Service) finish(id string, err error) {
 	}
 }
 
-func (s *Service) dequeue(id string) {
-	s.queueMutex.Lock()
-	defer s.queueMutex.Unlock()
-
-	s.remove(id)
-}
-
 // find and remove walk the queue; the caller holds queueMutex.
 func (s *Service) find(id string) *QueueItem {
 	for _, item := range s.queue {
