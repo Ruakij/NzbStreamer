@@ -40,8 +40,9 @@ type HTTPConfig struct {
 }
 
 type WebdavConfig struct {
-	Username string `env:"WEBDAV_USERNAME"` // Username for WebDAV basic auth; Authentication disabled when unset
-	Password string `env:"WEBDAV_PASSWORD"` // Password for WebDAV basic auth
+	Username      string `env:"WEBDAV_USERNAME"`                      // Username for WebDAV basic auth; Authentication disabled when unset
+	Password      string `env:"WEBDAV_PASSWORD"`                      // Password for WebDAV basic auth
+	LazyExactSize bool   `env:"WEBDAV_LAZY_EXACT_SIZE, default=true"` // Measure the exact size of a file on the GET that needs it, where doing so is cheap, so Content-Length is right for one NZB_EAGER_EXACT_SIZE_CLASSES left out; disabling it answers every GET from the size hint, which for an estimated size means a truncated response
 }
 
 type SabnzbdConfig struct {
@@ -78,8 +79,9 @@ type FolderWatcherConfig struct {
 }
 
 type NzbConfig struct {
-	FileBlacklist       []regexp.Regexp `env:"NZB_FILE_BLACKLIST, default="`         // Early Regex-blacklist, applied after the nzb-file is scanned; a file dropped here is not health-checked either
-	ProbeSizeConvention int             `env:"NZB_PROBE_SIZE_CONVENTION, default=3"` // Segments of an nzb whose size hints do not identify what they count that may be downloaded to settle it, making its sizes exact; one that settles nothing costs the next attempt, 0 leaves the sizes as estimates until a read has measured them
+	FileBlacklist         []regexp.Regexp `env:"NZB_FILE_BLACKLIST, default="`                  // Early Regex-blacklist, applied after the nzb-file is scanned; a file dropped here is not health-checked either
+	ProbeSizeConvention   int             `env:"NZB_PROBE_SIZE_CONVENTION, default=3"`          // Segments of an nzb whose size hints do not identify what they count that may be downloaded to settle it, making its sizes exact; one that settles nothing costs the next attempt, 0 leaves the sizes as estimates until a read has measured them
+	EagerExactSizeClasses []string        `env:"NZB_EAGER_EXACT_SIZE_CLASSES, default=content"` // File classes measured as part of an add, so a listing reports their exact size before anything has read them: content, recovery, other, or empty for none. A file posted as it is costs one segment; a member of an archive knows its length from the header and costs nothing. Whatever is left out is measured on its first read instead
 }
 
 type ProbeConfig struct {

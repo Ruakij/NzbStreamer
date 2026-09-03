@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	shutdownmanager "git.ruekov.eu/ruakij/nzbStreamer/pkg/ShutdownManager"
 	timeoutaction "git.ruekov.eu/ruakij/nzbStreamer/pkg/ShutdownManager/timeoutAction"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/filenameops"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/adaptiveparallelmergerresource"
 	gowebdav "github.com/emersion/go-webdav"
 	"github.com/sethvargo/go-envconfig"
@@ -183,7 +186,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	// Setup Presenters
 	var presenters []presentation.Presenter
 	// Webdav
-	webdavFS := webdav.NewFS(httpserver.WebdavPrefix)
+	webdavFS := webdav.NewFS(httpserver.WebdavPrefix, c.Webdav.LazyExactSize)
 	presenters = append(presenters, webdavFS)
 	// Mount
 	var mount *fusemount.FileSystem
@@ -220,6 +223,13 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	service.SetNzbFileBlacklist(c.NzbConfig.FileBlacklist)
 	service.SetPathFlatteningDepth(c.Filesystem.FlattenMaxDepth)
 	service.SetFilenameReplacementBelowLevensteinRatio(c.Filesystem.FixFilenameThreshold)
+
+	exactSizeClasses, err := parseFileClasses(c.NzbConfig.EagerExactSizeClasses)
+	if err != nil {
+		slog.Error("Reading NZB_EAGER_EXACT_SIZE_CLASSES failed", "error", err)
+		os.Exit(1)
+	}
+	service.SetExactSizeClasses(exactSizeClasses)
 
 	// Mount before the service restores its tree: an inode only takes children
 	// once the filesystem it belongs to is mounted
@@ -275,4 +285,21 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		}
 		slog.Info("Http server exited")
 	}()
+}
+
+// parseFileClasses reads the file classes a list-valued setting names.
+func parseFileClasses(names []string) ([]filenameops.FileClass, error) {
+	classes := make([]filenameops.FileClass, 0, len(names))
+	for _, name := range names {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+
+		class, ok := filenameops.ParseClass(name)
+		if !ok {
+			return nil, fmt.Errorf("%q is not a file class", name)
+		}
+		classes = append(classes, class)
+	}
+	return classes, nil
 }

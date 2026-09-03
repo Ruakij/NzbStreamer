@@ -146,6 +146,7 @@ Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORIT
 | **Presenters**
 | `WEBDAV_USERNAME`                 |                        | Username for WebDAV basic auth; Authentication disabled when unset |
 | `WEBDAV_PASSWORD`                 |                        | Password for WebDAV basic auth                   |
+| `WEBDAV_LAZY_EXACT_SIZE`          | true                   | Measure the exact size of a file on the GET that needs it, where doing so is cheap, so `Content-Length` is right for one `NZB_EAGER_EXACT_SIZE_CLASSES` left out <br>Disabling it answers every GET from the size hint, which for an estimated size means a truncated response |
 | `MOUNT_PATH`                      |                        | Path for FUSE mount; Disabled when unset         |
 | `MOUNT_OPTIONS`                   |                        | Additional Options for FUSE mount; See mount.fuse3 Manpage for more information |
 | **Download-Client-Api**
@@ -166,6 +167,7 @@ Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORIT
 | **Nzb-Options**
 | `NZB_FILE_BLACKLIST`              |                        | Early Regex-blacklist, applied after the nzb-file is scanned <br>A file dropped here is not health-checked either, and .par2 dropped here leaves the check without its repair-capacity estimate |
 | `NZB_PROBE_SIZE_CONVENTION`       | 3                      | Segments of an nzb whose size hints do not identify what they count that may be downloaded to settle it, making its sizes exact <br>A segment that settles nothing costs the next attempt; 0 leaves the sizes as estimates until a read has measured them |
+| `NZB_EAGER_EXACT_SIZE_CLASSES`    | content                | File classes measured while an nzb is added, so a listing reports their exact size before anything has read them <br>`content`, `recovery`, `other`, comma-separated, or empty for none. A file posted as it is costs one segment; a member of an archive knows its length from its header and costs nothing. Whatever is left out is measured on its first read instead |
 | **Health-Probing**
 | `PROBE_INITIAL_FILE_PERCENT`      | 0.5                    | Segments checked per content file on the first pass, as a percentage of its segments, spread evenly (so first and last)<br>0 disables checking |
 | `PROBE_INITIAL_FILE_MIN_SEGMENTS` | 2                      | Floor on that sample, so a short file is not rounded down to nothing |

@@ -3,6 +3,7 @@ package nzbservice
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"path"
 	"regexp"
@@ -48,6 +49,7 @@ type Service struct {
 	pathFlatteningDepth                     int
 	filenameReplacementBelowLevensteinRatio float32
 	healthChecker                           filehealth.Checker
+	exactSizeClasses                        []filenameops.FileClass
 }
 
 func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, presenters []presentation.Presenter, triggers []trigger.Trigger, healthChecker filehealth.Checker) *Service {
@@ -94,6 +96,14 @@ func (s *Service) SetFilenameReplacementBelowLevensteinRatio(ratio float32) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.filenameReplacementBelowLevensteinRatio = ratio
+}
+
+// SetExactSizeClasses picks which files are measured as part of an add rather
+// than on their first read.
+func (s *Service) SetExactSizeClasses(classes []filenameops.FileClass) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.exactSizeClasses = classes
 }
 
 // Initialize the service; Load NzbData from store; build filedata and add to filesystem; Register to triggers
@@ -248,6 +258,8 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	s.mutex.Lock()
 	s.nzbFiles[nzbData.MetaName] = make([]string, 0, len(files))
 
+	measure := make(map[string]presentation.Openable)
+
 	for filepath, file := range files {
 		filepath = s.deobfuscateFilename(filepath, paths, nzbData)
 		filepath = s.flattenPath(filepath, paths)
@@ -255,6 +267,10 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 
 		// Track the full path
 		s.nzbFiles[nzbData.MetaName] = append(s.nzbFiles[nzbData.MetaName], fullPath)
+
+		if slices.Contains(s.exactSizeClasses, filenameops.Classify(filepath)) {
+			measure[fullPath] = file
+		}
 
 		// Add to presenters
 		for _, presenter := range s.presenters {
@@ -265,11 +281,42 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	}
 	s.mutex.Unlock()
 
+	// Before the add reports finished, since a client that imports on that stats
+	// the file first
+	for fullPath, file := range measure {
+		if err := measureFile(file); err != nil {
+			// A size that could not be measured is a worse size, not a missing file
+			logger.Warn("Failed measuring file, leaving the estimate in place",
+				"nzb", nzbData.MetaName, "file", fullPath, "error", err)
+		}
+	}
+
 	// The store already holds it: enqueue wrote it there when the add was
 	// accepted, and finish records how this ends
 
 	logger.Info("Added nzb", "MetaName", nzbData.MetaName)
 
+	return nil
+}
+
+// measureFile seeks to the end so the parts that did not know their own length
+// do from here on, which with a size convention identified is the tail segment.
+// A decoder stream is left alone: its length is exact from the archive header
+// and seeking it would decode the whole member.
+func measureFile(file presentation.Openable) error {
+	reader, err := file.Open()
+	if err != nil {
+		return fmt.Errorf("failed opening file: %w", err)
+	}
+	defer reader.Close()
+
+	if _, addressable := reader.(io.ReaderAt); !addressable {
+		return nil
+	}
+
+	if _, err := reader.Seek(0, io.SeekEnd); err != nil {
+		return fmt.Errorf("failed seeking to the end: %w", err)
+	}
 	return nil
 }
 

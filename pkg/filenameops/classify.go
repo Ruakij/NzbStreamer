@@ -37,6 +37,18 @@ var contentExtensions = map[string]bool{
 // `.r00`, zip's `.z01` and the numeric `.001` a 7z or a plain split uses.
 var splitVolumeRegexp = regexp.MustCompile(`(?i)\.(r\d{2,3}|z\d{2}|\d{2,3})$`)
 
+var classNames = map[string]FileClass{
+	"other":    ClassOther,
+	"content":  ClassContent,
+	"recovery": ClassRecovery,
+}
+
+// ParseClass reads a class from its configuration name.
+func ParseClass(name string) (FileClass, bool) {
+	class, ok := classNames[strings.ToLower(strings.TrimSpace(name))]
+	return class, ok
+}
+
 // Classify reports which tier a filename belongs to.
 func Classify(filename string) FileClass {
 	extension := strings.ToLower(path.Ext(filename))

@@ -39,7 +39,10 @@ type FS struct {
 	// request path, so stripping it before the handler would answer the right
 	// files under hrefs pointing at the server root.
 	prefix string
-	mu     sync.RWMutex
+	// lazyExactSize lets the seek ServeContent sizes a GET with reach the reader
+	// where that is cheap, rather than answering every one from the hint.
+	lazyExactSize bool
+	mu            sync.RWMutex
 }
 
 // simpleFile now also implements os.FileInfo
@@ -52,14 +55,14 @@ type simpleFile struct {
 	isDir    bool
 }
 
-func NewFS(prefix string) *FS {
+func NewFS(prefix string, lazyExactSize bool) *FS {
 	root := &Node{
 		File:     &simpleFile{name: "", isDir: true},
 		Children: make(map[string]*Node),
 	}
 	root.File.node = root
 
-	fs := &FS{Root: root, prefix: prefix}
+	fs := &FS{Root: root, prefix: prefix, lazyExactSize: lazyExactSize}
 	root.File.fs = fs
 	return fs
 }
@@ -331,13 +334,18 @@ func (sf *simpleFileReader) Read(p []byte) (n int, err error) {
 }
 
 func (sf *simpleFileReader) Seek(offset int64, whence int) (int64, error) {
-	// Special seek request to determine content size
+	// ServeContent sizes every GET with this seek and Content-Length comes from
+	// it, so an addressable reader measures it for real. A decoder stream would
+	// decode the whole member to get there, so it answers from the hint.
 	if offset == 0 && whence == io.SeekEnd {
-		info, err := sf.Stat()
-		if err != nil {
-			return 0, err
+		_, addressable := sf.reader.(io.ReaderAt)
+		if !addressable || !sf.fs.lazyExactSize {
+			info, err := sf.Stat()
+			if err != nil {
+				return 0, err
+			}
+			return info.Size(), nil
 		}
-		return info.Size(), nil
 	}
 
 	logger.Debug("Seek", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name, "offset", offset, "whence", whence)
