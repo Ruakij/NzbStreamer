@@ -110,7 +110,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	}
 
 	// Setup services
-	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpClient)
+	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpClient.GetSegment)
 
 	// store := folderStore.NewFolderStore()
 	store := stubstore.NewStubStore()

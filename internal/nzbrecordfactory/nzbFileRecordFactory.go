@@ -5,7 +5,6 @@ import (
 	"path"
 	"slices"
 
-	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbfileanalyzer"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
@@ -21,13 +20,14 @@ import (
 
 type NzbFileFactory struct {
 	cache      *diskcache.Cache
-	nntpClient *nntpclient.Client
+	getSegment nzbpostresource.GetSegmentFunc
 }
 
-func NewNzbFileFactory(cache *diskcache.Cache, nntpClient *nntpclient.Client) *NzbFileFactory {
+// getSegment is the whole of what the factory needs from a news server.
+func NewNzbFileFactory(cache *diskcache.Cache, getSegment nzbpostresource.GetSegmentFunc) *NzbFileFactory {
 	return &NzbFileFactory{
 		cache:      cache,
-		nntpClient: nntpClient,
+		getSegment: getSegment,
 	}
 }
 
@@ -140,7 +140,7 @@ func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, 
 
 func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbparser.Segment, groups string, sizer nzbfileanalyzer.SegmentSizer) *nzbpostresource.NzbPostResource {
 	size, sizeExact := sizer.Size(nzbSegment.BytesHint)
-	return nzbpostresource.New(nzbSegment.ID, groups, int64(size), sizeExact, f.nntpClient.GetSegment)
+	return nzbpostresource.New(nzbSegment.ID, groups, int64(size), sizeExact, f.getSegment)
 }
 
 // -- Special files --
