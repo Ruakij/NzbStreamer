@@ -133,13 +133,21 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `PREFETCH_MAX_SEGMENTS`           | 64                     | Upper bound on segments warmed ahead; 0 disables prefetching |
 | `PREFETCH_MAX_CONN`               | 0                      | Concurrent prefetches across all files; defaults to `USENET_MAX_CONN` when 0 |
 | **Nzb-Options**
-| `NZB_FILE_BLACKLIST`              | (?i)\.par2$            | Early Regex-blacklist, immediately applied after nzb-file is scanned <br>Can be used to skip unwanted files like .par2 |
-| `NZB_CHECK_SEGMENTS_PER_FILE`     | 2                      | Segments checked per file for existence, spread evenly (so first and last)<br>0 disables the check, -1 checks all segments |
-| `NZB_CHECK_SEGMENTS_PARALLEL`     | 0                      | Concurrent segment-checks; defaults to `USENET_MAX_CONN` when 0 |
-| `NZB_FILES_HEALTHY_THRESHOLD`     | 1.0                    | Above this percentage-threshold, files with missing segments are allowed |
+| `NZB_FILE_BLACKLIST`              |                        | Early Regex-blacklist, applied after the nzb-file is scanned <br>A file dropped here is not health-checked either, and .par2 dropped here leaves the check without its repair-capacity estimate |
 | `NZB_PROBE_SIZE_CONVENTION`       | true                   | Download one segment of an nzb whose segment-size hints do not identify what they count, making its sizes exact; without it they stay estimates until a read has measured them |
+| **Health-Probing**
+| `PROBE_INITIAL_FILE_PERCENT`      | 0.5                    | Segments checked per content file on the first pass, as a percentage of its segments, spread evenly (so first and last)<br>0 disables checking |
+| `PROBE_INITIAL_FILE_MIN_SEGMENTS` | 2                      | Floor on that sample, so a short file is not rounded down to nothing |
+| `PROBE_INITIAL_FILE_MAX_SEGMENTS` | 8                      | Cap on that sample, so a huge file does not turn the add into a download |
+| `PROBE_EXTENSIVE_FILE_PERCENT`    | 1.0                    | Ceiling on the widened sample a file gets when the first pass cannot decide it; 0 skips the second pass |
+| `PROBE_EXTENSIVE_FILE_MAX_SEGMENTS`| 512                   | Absolute cap on that widened sample |
+| `PROBE_MAX_MISSING_PERCENT`       | 100                    | Ceiling on accepted damage regardless of par2; 100 lets par2 capacity govern on its own |
+| `PROBE_PAR2_SAFETY`               | 0.9                    | Fraction of the estimated par2 capacity to trust, since the capacity is itself estimated |
+| `PROBE_UNDECIDED_ACCEPT`          | true                   | Accept a file the second pass still cannot decide |
+| `PROBE_CONFIDENCE`                | 0.95                   | Confidence of the interval the verdict is taken from; lower means fewer escalations and more wrong calls |
+| `PROBE_PARALLEL`                  | 0                      | Concurrent segment-checks; defaults to `USENET_MAX_CONN` when 0 |
 | **Filesystem-Options**
-| `FILESYSTEM_BLACKLIST`            |                        | Late Regex-blacklist, applied on the actual file added to the filesystem; includes files from archives <br>Can be used to hide archive-files, but leaving unpacked files |
+| `FILESYSTEM_BLACKLIST`            | (?i)\.par2$            | Late Regex-blacklist, applied on the actual file added to the filesystem; includes files from archives <br>Can be used to hide archive-files, but leaving unpacked files. Hides .par2 by default, after the health check has counted it |
 | `FILESYSTEM_FLATTEN_MAX_DEPTH`    | 1                      | Unpacks files from folders e.g. archives where possible <br>Can be used to hide archive-group-folder |
 | `FILESYSTEM_FIX_FILENAME_THRESHOLD`| 0.2                   | Threshold for applying filename-fixing when filename doesnt match nzb meta name |
 | **Misc**

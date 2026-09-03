@@ -132,13 +132,21 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	folderTrigger := folderwatcher.NewFolderWatcher(c.FolderWatcher.Path, c.FolderWatcher.Consume)
 
 	// Setup health checker
-	segmentCheckParallel := c.NzbConfig.SegmentCheckParallel
-	if segmentCheckParallel <= 0 {
-		segmentCheckParallel = c.Usenet.MaxConn
+	probeParallel := c.Probe.Parallel
+	if probeParallel <= 0 {
+		probeParallel = c.Usenet.MaxConn
 	}
 	healthChecker := filehealth.NewDefaultChecker(filehealth.CheckerConfig{
-		SegmentsPerFile: c.NzbConfig.SegmentsPerFile,
-		MaxParallel:     segmentCheckParallel,
+		InitialFilePercent:       c.Probe.InitialFilePercent,
+		InitialFileMinSegments:   c.Probe.InitialFileMinSegments,
+		InitialFileMaxSegments:   c.Probe.InitialFileMaxSegments,
+		ExtensiveFilePercent:     c.Probe.ExtensiveFilePercent,
+		ExtensiveFileMaxSegments: c.Probe.ExtensiveFileMaxSegments,
+		MaxMissingPercent:        c.Probe.MaxMissingPercent,
+		Par2Safety:               c.Probe.Par2Safety,
+		UndecidedAccept:          c.Probe.UndecidedAccept,
+		Confidence:               c.Probe.Confidence,
+		MaxParallel:              probeParallel,
 	}, nntpClient.SegmentExists)
 
 	service := nzbservice.NewService(store, factory, presenters, []trigger.Trigger{folderTrigger}, healthChecker)
@@ -146,7 +154,6 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	service.SetNzbFileBlacklist(c.NzbConfig.FileBlacklist)
 	service.SetPathFlatteningDepth(c.Filesystem.FlattenMaxDepth)
 	service.SetFilenameReplacementBelowLevensteinRatio(c.Filesystem.FixFilenameThreshold)
-	service.SetFilesHealthyThreshold(c.NzbConfig.FilesHealthyThreshold)
 
 	// Start services
 	if err = service.Init(); err != nil {

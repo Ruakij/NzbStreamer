@@ -41,7 +41,6 @@ type Service struct {
 	pathFlatteningDepth                     int
 	filenameReplacementBelowLevensteinRatio float32
 	healthChecker                           filehealth.Checker
-	filesHealthyThreshold                   float32
 }
 
 func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, presenters []presentation.Presenter, triggers []trigger.Trigger, healthChecker filehealth.Checker) *Service {
@@ -54,16 +53,15 @@ func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, prese
 	}
 
 	return &Service{
-		store:                 store,
-		factory:               factory,
-		presenters:            presenters,
-		triggers:              triggerListeners,
-		fileBlacklist:         []regexp.Regexp{},
-		nzbFileBlacklist:      []regexp.Regexp{},
-		nzbFiledata:           make(map[string]*nzbparser.NzbData),
-		nzbFiles:              make(map[string][]string),
-		healthChecker:         healthChecker,
-		filesHealthyThreshold: 1.0, // Default to requiring all files
+		store:            store,
+		factory:          factory,
+		presenters:       presenters,
+		triggers:         triggerListeners,
+		fileBlacklist:    []regexp.Regexp{},
+		nzbFileBlacklist: []regexp.Regexp{},
+		nzbFiledata:      make(map[string]*nzbparser.NzbData),
+		nzbFiles:         make(map[string][]string),
+		healthChecker:    healthChecker,
 	}
 }
 
@@ -89,12 +87,6 @@ func (s *Service) SetFilenameReplacementBelowLevensteinRatio(ratio float32) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.filenameReplacementBelowLevensteinRatio = ratio
-}
-
-func (s *Service) SetFilesHealthyThreshold(threshold float32) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	s.filesHealthyThreshold = threshold
 }
 
 // Initialize the service; Load NzbData from store; build filedata and add to filesystem; Register to triggers
@@ -164,7 +156,9 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 		}
 	}()
 
-	// Nzb-file blacklist
+	// Nzb-file blacklist. A file dropped here is not built, not presented and not
+	// health-checked; the par2 files the check needs for its verdict are hidden by
+	// FILESYSTEM_BLACKLIST instead, which drops them after they have been counted
 	for i := len(nzbData.Files) - 1; i >= 0; i-- {
 		if s.isBlacklistedNzbFile(nzbData.Files[i].Filename) {
 			nzbData.Files = append(nzbData.Files[:i], nzbData.Files[i+1:]...)
@@ -176,25 +170,15 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	}
 
 	// Verify the posts still exist before building anything on top of them
-	var healthErrors []error
 	if isNew {
-		healthErrors = s.healthChecker.CheckFiles(nzbData)
-	}
-	if len(healthErrors) > 0 {
-		for _, err := range healthErrors {
-			logger.Warn("Unhealthy file detected",
-				"nzb", nzbData.MetaName,
-				"error", err)
+		if healthErrors := s.healthChecker.CheckFiles(nzbData); len(healthErrors) > 0 {
+			for _, err := range healthErrors {
+				logger.Warn("Unhealthy file detected",
+					"nzb", nzbData.MetaName,
+					"error", err)
+			}
+			return fmt.Errorf("%w: %d files beyond repair", ErrHealthCheckFailed, len(healthErrors))
 		}
-		healthyRatio := float32(len(nzbData.Files)-len(healthErrors)) / float32(len(nzbData.Files))
-		if healthyRatio < s.filesHealthyThreshold {
-			return fmt.Errorf("%w: only %.1f%% of files are healthy (threshold: %.1f%%)",
-				ErrHealthCheckFailed, healthyRatio*100, s.filesHealthyThreshold*100)
-		}
-		logger.Warn("Some files are unhealthy but within threshold",
-			"nzb", nzbData.MetaName,
-			"healthyRatio", healthyRatio,
-			"unhealthyCount", len(healthErrors))
 	}
 
 	files, err := s.factory.BuildSegmentStackFromNzbData(nzbData)

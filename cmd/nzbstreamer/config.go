@@ -48,20 +48,30 @@ type PrefetchConfig struct {
 }
 
 type FolderWatcherConfig struct {
-	Path    string `env:"FOLDER_WATCHER_PATH, default=.watch"`   // Watch folder for adding nzbs
-	Consume bool   `env:"FOLDER_WATCHER_CONSUME, default=true"`  // Delete an nzb file once it has been added; the metadata database keeps it
+	Path    string `env:"FOLDER_WATCHER_PATH, default=.watch"`  // Watch folder for adding nzbs
+	Consume bool   `env:"FOLDER_WATCHER_CONSUME, default=true"` // Delete an nzb file once it has been added; the metadata database keeps it
 }
 
 type NzbConfig struct {
-	FileBlacklist         []regexp.Regexp `env:"NZB_FILE_BLACKLIST, default=(?i)\\.par2$"` // Early Regex-blacklist, immediately applied after nzb-file is scanned
-	SegmentsPerFile       int             `env:"NZB_CHECK_SEGMENTS_PER_FILE, default=2"`   // Segments checked per file for existence, spread evenly; 0 disables the check, -1 checks all
-	SegmentCheckParallel  int             `env:"NZB_CHECK_SEGMENTS_PARALLEL, default=0"`   // Concurrent segment-checks; defaults to USENET_MAX_CONN when 0
-	FilesHealthyThreshold float32         `env:"NZB_FILES_HEALTHY_THRESHOLD, default=1.0"` // Above this percentage-threshold, files with missing segments are allowed
-	ProbeSizeConvention   bool            `env:"NZB_PROBE_SIZE_CONVENTION, default=true"`  // Download one segment of an nzb whose segment-size hints do not identify what they count, making its sizes exact; without it they stay estimates until a read has measured them
+	FileBlacklist       []regexp.Regexp `env:"NZB_FILE_BLACKLIST, default="` // Early Regex-blacklist, applied after the nzb-file is scanned; a file dropped here is not health-checked either
+	ProbeSizeConvention bool            `env:"NZB_PROBE_SIZE_CONVENTION, default=true"`  // Download one segment of an nzb whose segment-size hints do not identify what they count, making its sizes exact; without it they stay estimates until a read has measured them
+}
+
+type ProbeConfig struct {
+	InitialFilePercent       float64 `env:"PROBE_INITIAL_FILE_PERCENT, default=0.5"`        // Segments checked per content file on the first pass, as a percentage of its segments, spread evenly; 0 disables checking
+	InitialFileMinSegments   int     `env:"PROBE_INITIAL_FILE_MIN_SEGMENTS, default=2"`     // Floor on that sample, so a short file is not rounded down to nothing
+	InitialFileMaxSegments   int     `env:"PROBE_INITIAL_FILE_MAX_SEGMENTS, default=8"`     // Cap on that sample, so a huge file does not turn the add into a download
+	ExtensiveFilePercent     float64 `env:"PROBE_EXTENSIVE_FILE_PERCENT, default=1.0"`      // Ceiling on the widened sample a file gets when the first pass cannot decide it; 0 skips the second pass
+	ExtensiveFileMaxSegments int     `env:"PROBE_EXTENSIVE_FILE_MAX_SEGMENTS, default=512"` // Absolute cap on that widened sample
+	MaxMissingPercent        float64 `env:"PROBE_MAX_MISSING_PERCENT, default=100"`         // Ceiling on accepted damage regardless of par2; 100 lets par2 capacity govern on its own
+	Par2Safety               float64 `env:"PROBE_PAR2_SAFETY, default=0.9"`                 // Fraction of the estimated par2 capacity to trust, since the capacity is itself estimated
+	UndecidedAccept          bool    `env:"PROBE_UNDECIDED_ACCEPT, default=true"`           // Accept a file the second pass still cannot decide
+	Confidence               float64 `env:"PROBE_CONFIDENCE, default=0.95"`                 // Confidence of the interval the verdict is taken from; lower means fewer escalations and more wrong calls
+	Parallel                 int     `env:"PROBE_PARALLEL, default=0"`                      // Concurrent segment-checks; defaults to USENET_MAX_CONN when 0
 }
 
 type FilesystemConfig struct {
-	Blacklist            []regexp.Regexp `env:"FILESYSTEM_BLACKLIST, default="`                 // Late Regex-blacklist, applied on the actual file added to the filesystem; includes files from archives
+	Blacklist            []regexp.Regexp `env:"FILESYSTEM_BLACKLIST, default=(?i)\\.par2$"`     // Late Regex-blacklist, applied on the actual file added to the filesystem; includes files from archives
 	FlattenMaxDepth      int             `env:"FILESYSTEM_FLATTEN_MAX_DEPTH, default=1"`        // Unpacks files from folders e.g. archives where possible
 	FixFilenameThreshold float32         `env:"FILESYSTEM_FIX_FILENAME_THRESHOLD, default=0.2"` // Threshold for applying filename-fixing when filename doesnt match nzb meta name
 }
@@ -78,6 +88,7 @@ type Config struct {
 	Metadata      MetadataConfig
 	Prefetch      PrefetchConfig
 	NzbConfig     NzbConfig
+	Probe         ProbeConfig
 	Filesystem    FilesystemConfig
 	FolderWatcher FolderWatcherConfig
 	Logging       LoggingConfig
