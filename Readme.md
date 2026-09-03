@@ -16,9 +16,10 @@ Presents files described by NZBs from Newsservers on-demand as WebDAV or FUSE wi
 - [3. Problems](#3-problems)
   - [3.1. Segment- and File-sizes](#31-segment--and-file-sizes)
   - [3.2. Archive-Files](#32-archive-files)
-- [4. Settings](#4-settings)
-- [5. Feature-List](#5-feature-list)
-- [6. License](#6-license)
+- [4. Routes](#4-routes)
+- [5. Settings](#5-settings)
+- [6. Feature-List](#6-feature-list)
+- [7. License](#7-license)
 <!-- /TOC -->
 
 # 1. Description
@@ -98,7 +99,15 @@ If all files within an archive are compressed in a single stream (typically call
 
 Specially video-files like mkv are problematic as some metadata required for playback typically resides at the end of the file unless moved to the front. (e.g. Keyframe-index)
 
-# 4. Settings
+# 4. Routes
+
+| Path                                | Description                                                   |
+|-------------------------------------|--------------------------------------------------------|
+| `/sabnzbd/api`                      | SABnzbd-compatible download client api; a client's url base is `http://host:8080/sabnzbd` |
+| `/webdav/`                          | WebDAV, behind basic auth when `WEBDAV_USERNAME` is set |
+| `/debug/pprof/`, `/debug/statsviz/` | Debugging endpoints, off unless `HTTP_DEBUG`                                |
+
+# 5. Settings
 
 | Name                              | Default                | Description                                      |
 |-----------------------------------|------------------------|--------------------------------------------------|
@@ -116,14 +125,15 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | **Trigger**
 | `FOLDER_WATCHER_PATH`             | .watch                 | Watch folder for adding nzbs                     |
 | `FOLDER_WATCHER_CONSUME`          | true                   | Delete an nzb file once it has been added; the metadata database keeps it |
+| **Http**
+| `HTTP_ADDRESS`                    | :8080                  | Address the process listens on; serves the web ui, its api, `/sabnzbd/api`, `/webdav/` and `/metrics` |
+| `HTTP_DEBUG`                      | false                  | Serve `/debug/pprof/` and `/debug/statsviz/`     |
 | **Presenters**
-| `WEBDAV_ADDRESS`                  | :8080                  | Address for WebDAV server; Disabled when unset   |
 | `WEBDAV_USERNAME`                 |                        | Username for WebDAV basic auth; Authentication disabled when unset |
 | `WEBDAV_PASSWORD`                 |                        | Password for WebDAV basic auth                   |
 | `MOUNT_PATH`                      |                        | Path for FUSE mount; Disabled when unset         |
 | `MOUNT_OPTIONS`                   |                        | Additional Options for FUSE mount; See mount.fuse3 Manpage for more information |
 | **Download-Client-Api**
-| `SABNZBD_ADDRESS`                 |                        | Address for the SABnzbd-compatible download client api, e.g. `:8081`; Disabled when unset |
 | `SABNZBD_API_KEY`                 |                        | Api key demanded of every request; unauthenticated when unset |
 | `SABNZBD_COMPLETE_DIR`            |                        | Path reported to a client as the completed-downloads folder, which is where it imports from; defaults to `MOUNT_PATH` |
 | `SABNZBD_CATEGORIES`              | *,tv,movies            | Categories offered to a client; it refuses to save if the one it is configured with is missing |
@@ -160,7 +170,7 @@ Specially video-files like mkv are problematic as some metadata required for pla
 
 *\* Required*
 
-# 5. Feature-List
+# 6. Feature-List
 
 -   Triggers
     -   [x] Watch-folder
@@ -204,7 +214,7 @@ Specially video-files like mkv are problematic as some metadata required for pla
     -   [ ] Nzb Store for more permanent storage
     -   [ ] More efficient opening (and thus reserving) of resources
 
-# 6. License
+# 7. License
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NzbStreamer</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; padding: 0 1rem; }
+  h1 { font-size: 1.4rem; margin: 0; }
+  header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1.5rem; }
+  h2 { font-size: 1.1rem; margin: 1.5rem 0 .5rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #8884; }
+  th { font-weight: 600; opacity: .7; }
+  td.name { word-break: break-all; }
+  .err { color: #c33; font-size: .85rem; }
+  .stage { font-size: .8rem; padding: .1rem .45rem; border-radius: .7rem; background: #8883; }
+  .stage.completed { background: #2a02; color: #2a0; }
+  .stage.failed, .stage.cancelled { background: #c332; color: #c33; }
+  .stage.checking, .stage.building { background: #06c2; color: #06c; }
+  .empty { opacity: .5; padding: .5rem .6rem; }
+  #offline { color: #c33; display: none; }
+  #offline.on { display: inline; }
+  form { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
+  button { font: inherit; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NzbStreamer</h1>
+  <span id="offline">disconnected</span>
+</header>
+
+<form id="add">
+  <input type="file" name="file" accept=".nzb" multiple required>
+  <input type="text" name="category" placeholder="category" size="10">
+  <button type="submit">Add</button>
+</form>
+
+<h2>Queue</h2>
+<table><thead><tr><th>Name<th>Category<th>Stage<th>Size<th>Age<th></tr></thead><tbody id="queue"></tbody></table>
+
+<h2>History</h2>
+<table><thead><tr><th>Name<th>Category<th>Stage<th>Size<th>Age<th></tr></thead><tbody id="history"></tbody></table>
+
+<script>
+const cols = 6;
+
+function size(bytes) {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let i = 0;
+  while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+  return bytes.toFixed(i ? 1 : 0) + " " + units[i];
+}
+
+function age(iso) {
+  let s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return Math.floor(s) + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m";
+  if (s < 86400) return Math.floor(s / 3600) + "h";
+  return Math.floor(s / 86400) + "d";
+}
+
+function render(tbody, items, action) {
+  tbody.replaceChildren();
+  if (!items.length) {
+    const tr = tbody.insertRow();
+    const td = tr.insertCell();
+    td.colSpan = cols;
+    td.className = "empty";
+    td.textContent = "nothing here";
+    return;
+  }
+  for (const item of items) {
+    const tr = tbody.insertRow();
+    const name = tr.insertCell();
+    name.className = "name";
+    name.textContent = item.id;
+    if (item.error) {
+      const err = document.createElement("div");
+      err.className = "err";
+      err.textContent = item.error;
+      name.append(err);
+    }
+    tr.insertCell().textContent = item.category || "";
+    const stage = document.createElement("span");
+    stage.className = "stage " + item.stage;
+    stage.textContent = item.stage;
+    tr.insertCell().append(stage);
+    tr.insertCell().textContent = size(item.bytes);
+    tr.insertCell().textContent = age(item.added);
+    const button = document.createElement("button");
+    button.textContent = action === "cancel" ? "Cancel" : "Delete";
+    button.onclick = () => remove(item.id, action, button);
+    tr.insertCell().append(button);
+  }
+}
+
+async function remove(id, action, button) {
+  button.disabled = true;
+  const body = new URLSearchParams({ id, action });
+  const response = await fetch("/api/remove", { method: "POST", body });
+  if (!response.ok) {
+    alert((await response.json()).error);
+    button.disabled = false;
+    return;
+  }
+  poll();
+}
+
+async function poll() {
+  try {
+    const response = await fetch("/api/items");
+    if (!response.ok) throw new Error(response.status);
+    const data = await response.json();
+    render(document.getElementById("queue"), data.queue, "cancel");
+    render(document.getElementById("history"), data.history.slice().reverse(), "delete");
+    document.getElementById("offline").classList.remove("on");
+  } catch {
+    // leave the last render up; an empty table would read as "nothing added"
+    document.getElementById("offline").classList.add("on");
+  }
+}
+
+document.getElementById("add").onsubmit = async (event) => {
+  event.preventDefault();
+  const form = event.target;
+  for (const file of form.file.files) {
+    const body = new FormData();
+    body.append("file", file);
+    body.append("category", form.category.value);
+    const response = await fetch("/api/add", { method: "POST", body });
+    if (!response.ok) alert(file.name + ": " + (await response.json()).error);
+  }
+  form.reset();
+  poll();
+};
+
+setInterval(() => { if (!document.hidden) poll(); }, 2000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
+poll();
+</script>
+</body>
+</html>

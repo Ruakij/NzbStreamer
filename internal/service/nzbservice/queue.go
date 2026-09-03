@@ -31,15 +31,15 @@ const (
 // which is what identifies it everywhere else in the service and what a restart
 // derives again from the store, so a client keyed on it survives one.
 type QueueItem struct {
-	ID string
+	ID string `json:"id"`
 	// Category is what the client api that added it called it. Nothing here uses
 	// it; a client filters on the value it gave us.
-	Category string
-	Stage    Stage
-	Bytes    int64
-	Added    time.Time
-	Finished time.Time
-	Err      string
+	Category string    `json:"category"`
+	Stage    Stage     `json:"stage"`
+	Bytes    int64     `json:"bytes"`
+	Added    time.Time `json:"added"`
+	Finished time.Time `json:"finished"`
+	Err      string    `json:"error"`
 
 	// Set by Cancel while the add runs, read by the add at its stage
 	// boundaries; closed by finish, which is what Cancel waits on

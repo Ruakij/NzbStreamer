@@ -20,14 +20,17 @@ type UsenetConfig struct {
 	IdleTimeout  time.Duration `env:"USENET_IDLE_TIMEOUT, default=2m"`  // Time after which an unused connection is closed; 0 or less falls back to the default
 }
 
+type HTTPConfig struct {
+	Address string `env:"HTTP_ADDRESS, default=:8080"` // Address the process listens on; serves the web ui, its api, /sabnzbd/api, /webdav/ and /metrics
+	Debug   bool   `env:"HTTP_DEBUG, default=false"`   // Serve /debug/pprof/ and /debug/statsviz/
+}
+
 type WebdavConfig struct {
-	Address  string `env:"WEBDAV_ADDRESS, default=:8080"` // Address for WebDAV server; Disabled when unset
-	Username string `env:"WEBDAV_USERNAME"`               // Username for WebDAV basic auth; Authentication disabled when unset
-	Password string `env:"WEBDAV_PASSWORD"`               // Password for WebDAV basic auth
+	Username string `env:"WEBDAV_USERNAME"` // Username for WebDAV basic auth; Authentication disabled when unset
+	Password string `env:"WEBDAV_PASSWORD"` // Password for WebDAV basic auth
 }
 
 type SabnzbdConfig struct {
-	Address     string   `env:"SABNZBD_ADDRESS"`                         // Address for the SABnzbd-compatible download client api, e.g. :8081; Disabled when unset
 	APIKey      string   `env:"SABNZBD_API_KEY"`                         // Api key demanded of every request; unauthenticated when unset
 	CompleteDir string   `env:"SABNZBD_COMPLETE_DIR"`                    // Path reported to a client as the completed-downloads folder, which is where it imports from; defaults to MOUNT_PATH
 	Categories  []string `env:"SABNZBD_CATEGORIES, default=*,tv,movies"` // Categories offered to a client; it refuses to save if the one it is configured with is missing
@@ -90,6 +93,7 @@ type LoggingConfig struct {
 type Config struct {
 	Usenet        UsenetConfig
 	Mount         MountConfig
+	HTTP          HTTPConfig
 	Webdav        WebdavConfig
 	Sabnzbd       SabnzbdConfig
 	Cache         CacheConfig

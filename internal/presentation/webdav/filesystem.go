@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"os"
 	"path"
@@ -22,6 +23,8 @@ var (
 	ErrFileNotFound       = os.ErrNotExist
 )
 
+var logger = slog.With("Module", "Webdav")
+
 type Node struct {
 	File     *simpleFile
 	Parent   *Node
@@ -30,7 +33,12 @@ type Node struct {
 
 type FS struct {
 	Root *Node
-	mu   sync.RWMutex
+	// prefix the handler is mounted under, stripped where a path is looked up.
+	// go-webdav builds both the lookup and the href of a response out of the
+	// request path, so stripping it before the handler would answer the right
+	// files under hrefs pointing at the server root.
+	prefix string
+	mu     sync.RWMutex
 }
 
 // simpleFile now also implements os.FileInfo
@@ -43,14 +51,14 @@ type simpleFile struct {
 	isDir    bool
 }
 
-func NewFS() *FS {
+func NewFS(prefix string) *FS {
 	root := &Node{
 		File:     &simpleFile{name: "", isDir: true},
 		Children: make(map[string]*Node),
 	}
 	root.File.node = root
 
-	fs := &FS{Root: root}
+	fs := &FS{Root: root, prefix: prefix}
 	root.File.fs = fs
 	return fs
 }
@@ -102,6 +110,11 @@ func (fs *FS) RemoveFile(path string) error {
 	delete(node.Parent.Children, node.File.name)
 	fs.cleanupEmptyDirs(node.Parent)
 	return nil
+}
+
+// requestPath turns the path of a request into a path in the tree.
+func (fs *FS) requestPath(name string) string {
+	return strings.TrimPrefix(name, fs.prefix)
 }
 
 // pathWalker starts from the root and uses relativePathWalker to traverse the tree.
@@ -177,7 +190,7 @@ func (fs *FS) Open(ctx context.Context, name string) (io.ReadCloser, error) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
-	node, err := fs.pathWalker(name)
+	node, err := fs.pathWalker(fs.requestPath(name))
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +219,7 @@ func (fs *FS) Stat(ctx context.Context, name string) (*webdav.FileInfo, error) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
-	node, err := fs.pathWalker(name)
+	node, err := fs.pathWalker(fs.requestPath(name))
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +248,7 @@ func (fs *FS) ReadDir(ctx context.Context, name string, recursive bool) ([]webda
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
-	node, err := fs.pathWalker(name)
+	node, err := fs.pathWalker(fs.requestPath(name))
 	if err != nil {
 		return nil, err
 	}

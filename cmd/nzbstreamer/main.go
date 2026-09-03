@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/clientapi/sabnzbd"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/clientapi/webui"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/filehealth"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/httpserver"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore/sqlstore"
@@ -121,11 +123,8 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	// Setup Presenters
 	var presenters []presentation.Presenter
 	// Webdav
-	var webdavHandler *webdav.FS
-	if c.Webdav.Address != "" {
-		webdavHandler = webdav.NewFS()
-		presenters = append(presenters, webdavHandler)
-	}
+	webdavFS := webdav.NewFS(httpserver.WebdavPrefix)
+	presenters = append(presenters, webdavFS)
 	// Mount
 	var mount *fusemount.FileSystem
 	if c.Mount.Path != "" {
@@ -185,51 +184,36 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	}
 	folderTrigger.Init()
 
-	// Client apis
-	// Sabnzbd
-	if c.Sabnzbd.Address != "" {
-		sm.AddService()
-		go func() {
-			defer sm.ServiceDone()
-
-			err := sabnzbd.Listen(ctx, c.Sabnzbd.Address, sabnzbd.NewHandler(service, sabnzbd.Config{
-				APIKey:      c.Sabnzbd.APIKey,
-				CompleteDir: completeDir(c),
-				Categories:  c.Sabnzbd.Categories,
-			}))
-			if err != nil {
-				slog.Error("Error in sabnzbd api", "error", err)
-				os.Exit(1)
-			}
-			slog.Info("Sabnzbd api exited")
-		}()
+	// Http server: everything the process speaks on one address
+	var webdavAuth *webdav.BasicAuthConfig
+	if c.Webdav.Username != "" {
+		webdavAuth = &webdav.BasicAuthConfig{
+			Username: c.Webdav.Username,
+			Password: c.Webdav.Password,
+		}
 	}
 
-	// Start Presenters
-	// Webdav
-	if c.Webdav.Address != "" {
-		sm.AddService()
-		go func() {
-			defer sm.ServiceDone()
+	mux := httpserver.NewMux(httpserver.Routes{
+		WebUI: webui.NewHandler(service),
+		Sabnzbd: sabnzbd.NewHandler(service, sabnzbd.Config{
+			APIKey:      c.Sabnzbd.APIKey,
+			CompleteDir: completeDir(c),
+			Categories:  c.Sabnzbd.Categories,
+		}),
+		Webdav: webdav.BasicAuth(&gowebdav.Handler{FileSystem: webdavFS}, webdavAuth),
+		Debug:  c.HTTP.Debug,
+	})
 
-			var authConfig *webdav.BasicAuthConfig
-			if c.Webdav.Username != "" {
-				authConfig = &webdav.BasicAuthConfig{
-					Username: c.Webdav.Username,
-					Password: c.Webdav.Password,
-				}
-			}
+	sm.AddService()
+	go func() {
+		defer sm.ServiceDone()
 
-			err = webdav.Listen(ctx, c.Webdav.Address, &gowebdav.Handler{
-				FileSystem: webdavHandler,
-			}, authConfig)
-			if err != nil {
-				slog.Error("Error in webdav", "error", err)
-				os.Exit(1)
-			}
-			slog.Info("Webdav exited")
-		}()
-	}
+		if err := httpserver.Listen(ctx, c.HTTP.Address, mux); err != nil {
+			slog.Error("Error in http server", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("Http server exited")
+	}()
 
 	// Mount
 	if c.Mount.Path != "" {
