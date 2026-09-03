@@ -32,6 +32,16 @@ import (
 
 const ShutdownTimeout time.Duration = 3 * time.Second
 
+const prefetchQueueMarginDivisor = 4
+
+// prefetchQueueMargin defaults to a quarter of the pool.
+func prefetchQueueMargin(configured, conns int) int {
+	if configured >= 0 {
+		return configured
+	}
+	return conns / prefetchQueueMarginDivisor
+}
+
 // completeDir is the path a download client api reports as the folder finished
 // downloads land in, which is the mount unless it is told otherwise. A client
 // imports from it, so it has to be absolute and it has to be the path as that
@@ -102,12 +112,20 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		IdleTimeout: c.Usenet.IdleTimeout,
 	})
 
-	// Setup prefetch, sharing the connection budget across all open files
+	// Setup prefetch, sharing the connections and the queue for them across all
+	// open files
 	prefetchMaxConn := c.Prefetch.MaxConn
 	if prefetchMaxConn <= 0 {
 		prefetchMaxConn = c.Usenet.MaxConn
 	}
-	adaptiveparallelmergerresource.SetPrefetch(prefetchMaxConn, c.Prefetch.Time, c.Prefetch.MinSegments, c.Prefetch.MaxSegments)
+	adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{
+		Concurrency: prefetchMaxConn,
+		LeadTime:    c.Prefetch.Time,
+		MinLead:     c.Prefetch.MinSegments,
+		MaxLead:     c.Prefetch.MaxSegments,
+		Queued:      nntpClient.Waiting,
+		QueueMargin: prefetchQueueMargin(c.Prefetch.QueueMargin, c.Usenet.MaxConn),
+	})
 
 	// Setup cache
 	segmentCache, err := diskcache.NewCache(&diskcache.CacheOptions{

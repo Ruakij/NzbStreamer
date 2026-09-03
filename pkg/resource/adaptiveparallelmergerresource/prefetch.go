@@ -8,34 +8,45 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 )
 
-type prefetchSettings struct {
-	// Connections are shared by every open file, so the budget is process-wide
-	budget chan struct{}
-	// How far ahead of the read head the cache should be warm, in time
-	leadTime time.Duration
+// PrefetchSettings sizes prefetching. Concurrency is process-wide, since the
+// connections are shared by every open file.
+type PrefetchSettings struct {
+	Concurrency int
+	LeadTime    time.Duration
 	// Lead bounds in resources, so a lead is measurable before a rate is known
-	// and stays bounded once it is
-	minLead int
-	maxLead int
+	// and stays bounded once it is. A MaxLead of 0 disables prefetching.
+	MinLead int
+	MaxLead int
+	// Queued reports fetches already waiting for a connection; prefetch stops
+	// adding once more than QueueMargin of them are. Nil drops the gate.
+	Queued      func() int
+	QueueMargin int
+}
+
+type prefetchSettings struct {
+	PrefetchSettings
+	budget chan struct{}
 }
 
 var prefetch atomic.Pointer[prefetchSettings]
 
-// SetPrefetch sizes prefetching: how many fetches may run at once across all
-// readers, how far ahead of the read head to stay warm, and the bounds the lead
-// derived from the observed read speed is clamped to. A maximum lead of 0
-// disables prefetching.
-func SetPrefetch(concurrency int, leadTime time.Duration, minLead, maxLead int) {
-	if concurrency < 1 {
-		concurrency = 1
+// SetPrefetch installs the settings every reader prefetches by.
+func SetPrefetch(settings PrefetchSettings) {
+	if settings.Concurrency < 1 {
+		settings.Concurrency = 1
 	}
 
 	prefetch.Store(&prefetchSettings{
-		budget:   make(chan struct{}, concurrency),
-		leadTime: leadTime,
-		minLead:  minLead,
-		maxLead:  maxLead,
+		PrefetchSettings: settings,
+		budget:           make(chan struct{}, settings.Concurrency),
 	})
+}
+
+// queueIsFull reads the queue before the fetch is launched, so a burst can
+// overshoot it by whatever is submitted before any of it queues; the budget
+// bounds that.
+func (s *prefetchSettings) queueIsFull() bool {
+	return s.Queued != nil && s.Queued() > s.QueueMargin
 }
 
 // consumptionRate is what the consumer has taken per second since the read head
@@ -44,7 +55,7 @@ func SetPrefetch(concurrency int, leadTime time.Duration, minLead, maxLead int) 
 // Requires prefetchMutex.
 func (r *AdaptiveParallelMergerResourceReader) consumptionRate(settings *prefetchSettings) float64 {
 	elapsed := time.Since(r.runStart)
-	if r.runStart.IsZero() || elapsed < settings.leadTime {
+	if r.runStart.IsZero() || elapsed < settings.LeadTime {
 		return 0
 	}
 
@@ -58,17 +69,17 @@ func (r *AdaptiveParallelMergerResourceReader) consumptionRate(settings *prefetc
 func (r *AdaptiveParallelMergerResourceReader) lead(settings *prefetchSettings, index int) int {
 	rate := r.consumptionRate(settings)
 	if rate <= 0 || index >= len(r.resource.resources) {
-		return settings.minLead
+		return settings.MinLead
 	}
 
 	resourceSize, err := r.resource.resources[index].SizeHint()
 	if err != nil || resourceSize <= 0 {
-		return settings.minLead
+		return settings.MinLead
 	}
 
-	lead := int(rate * settings.leadTime.Seconds() / float64(resourceSize))
+	lead := int(rate * settings.LeadTime.Seconds() / float64(resourceSize))
 
-	return min(max(lead, settings.minLead), settings.maxLead)
+	return min(max(lead, settings.MinLead), settings.MaxLead)
 }
 
 // prefetchAt anchors the lead on a positional read, which carries no read head
@@ -77,12 +88,12 @@ func (r *AdaptiveParallelMergerResourceReader) lead(settings *prefetchSettings, 
 // and the rate the way a seek does.
 func (r *AdaptiveParallelMergerResourceReader) prefetchAt(index int, read int64) {
 	settings := prefetch.Load()
-	if settings == nil || settings.maxLead <= 0 {
+	if settings == nil || settings.MaxLead <= 0 {
 		return
 	}
 
 	r.prefetchMutex.Lock()
-	if index < r.readAtIndex-1 || index > r.readAtIndex+settings.maxLead {
+	if index < r.readAtIndex-1 || index > r.readAtIndex+settings.MaxLead {
 		r.prefetchedTo = index
 		r.runStart = time.Now()
 		r.runBytes = 0
@@ -138,7 +149,7 @@ func (r *AdaptiveParallelMergerResourceReader) noteRead(read int64) {
 // simply stops asking.
 func (r *AdaptiveParallelMergerResourceReader) prefetchFrom(index int) {
 	settings := prefetch.Load()
-	if settings == nil || settings.maxLead <= 0 {
+	if settings == nil || settings.MaxLead <= 0 {
 		return
 	}
 
@@ -154,6 +165,13 @@ func (r *AdaptiveParallelMergerResourceReader) prefetchFrom(index int) {
 		prefetcher, ok := r.resource.resources[i].(resource.Prefetcher)
 		if !ok {
 			continue
+		}
+
+		// What is queued already keeps the connections busy; more only lengthens
+		// the wait of a demand read behind it
+		if settings.queueIsFull() {
+			r.prefetchedTo = i
+			return
 		}
 
 		select {

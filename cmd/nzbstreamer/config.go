@@ -52,9 +52,10 @@ type MetadataConfig struct {
 
 type PrefetchConfig struct {
 	Time        time.Duration `env:"PREFETCH_TIME, default=1s"`         // How far ahead of the read position to stay warm, in read-time
-	MinSegments int           `env:"PREFETCH_MIN_SEGMENTS, default=8"`  // Segments warmed ahead before a read speed can be measured
-	MaxSegments int           `env:"PREFETCH_MAX_SEGMENTS, default=64"` // Upper bound on segments warmed ahead; 0 disables prefetching
+	MinSegments int           `env:"PREFETCH_MIN_SEGMENTS, default=4"`  // Segments warmed ahead before a read speed can be measured
+	MaxSegments int           `env:"PREFETCH_MAX_SEGMENTS, default=16"` // Upper bound on segments warmed ahead; 0 disables prefetching
 	MaxConn     int           `env:"PREFETCH_MAX_CONN, default=0"`      // Concurrent prefetches across all files; defaults to USENET_MAX_CONN when 0
+	QueueMargin int           `env:"PREFETCH_QUEUE_MARGIN, default=-1"` // How many fetches may be waiting for a free connection before prefetch stops queueing more; 0 queues only while none are, negative defaults to a quarter of USENET_MAX_CONN. Higher overcommits the connections and can keep them better utilized, at the cost of later requests waiting longer or being refused by the backpressure
 }
 
 type FolderWatcherConfig struct {

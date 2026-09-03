@@ -144,9 +144,10 @@ Specially video-files like mkv are problematic as some metadata required for pla
 | `METADATA_PATH`                   | .metadata/metadata.db  | Path for the metadata database; WAL puts two sibling files next to it |
 | **Prefetch**
 | `PREFETCH_TIME`                   | 1s                     | How far ahead of the read position to stay warm, in read-time |
-| `PREFETCH_MIN_SEGMENTS`           | 8                      | Segments warmed ahead before a read speed can be measured |
-| `PREFETCH_MAX_SEGMENTS`           | 64                     | Upper bound on segments warmed ahead; 0 disables prefetching |
+| `PREFETCH_MIN_SEGMENTS`           | 4                      | Segments warmed ahead before a read speed can be measured |
+| `PREFETCH_MAX_SEGMENTS`           | 16                     | Upper bound on segments warmed ahead; 0 disables prefetching |
 | `PREFETCH_MAX_CONN`               | 0                      | Concurrent prefetches across all files; defaults to `USENET_MAX_CONN` when 0 |
+| `PREFETCH_QUEUE_MARGIN`           | -1                     | How many fetches may be waiting for a free connection before prefetch stops queueing more; 0 queues only while none are, negative defaults to a quarter of `USENET_MAX_CONN` <br>Higher overcommits the connections and can keep them better utilized, at the cost of later requests waiting longer or being refused by the backpressure |
 | **Nzb-Options**
 | `NZB_FILE_BLACKLIST`              |                        | Early Regex-blacklist, applied after the nzb-file is scanned <br>A file dropped here is not health-checked either, and .par2 dropped here leaves the check without its repair-capacity estimate |
 | `NZB_PROBE_SIZE_CONVENTION`       | 3                      | Segments of an nzb whose size hints do not identify what they count that may be downloaded to settle it, making its sizes exact <br>A segment that settles nothing costs the next attempt; 0 leaves the sizes as estimates until a read has measured them |

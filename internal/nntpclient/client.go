@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -74,6 +75,15 @@ type Client struct {
 	idle chan *conn
 	// slots holds one token per connection the client is allowed to have open
 	slots chan struct{}
+	// waiting counts the requests blocked on a slot
+	waiting atomic.Int64
+}
+
+// Waiting reports how many requests are queued for a free connection. It is a
+// reading, not a reservation: it answers whether to queue more work, not what
+// this request will get.
+func (c *Client) Waiting() int {
+	return int(c.waiting.Load())
 }
 
 func New(config Config) *Client {
@@ -285,7 +295,9 @@ func (c *Client) segmentExists(id string) (bool, error) {
 // one, reporting which. The slot is held until release or drop, which is what
 // bounds the client to MaxConns.
 func (c *Client) acquire() (*conn, bool, error) {
+	c.waiting.Add(1)
 	<-c.slots
+	c.waiting.Add(-1)
 
 	cn, reused := c.takeIdle()
 	if cn == nil {

@@ -85,8 +85,8 @@ func waitFor(t *testing.T, what string, condition func() bool) {
 func TestPrefetchWarmsMinimumLeadAhead(t *testing.T) {
 	const leadMin = 3
 
-	adaptiveparallelmergerresource.SetPrefetch(8, time.Minute, leadMin, 8)
-	defer adaptiveparallelmergerresource.SetPrefetch(1, 0, 0, 0)
+	adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{Concurrency: 8, LeadTime: time.Minute, MinLead: leadMin, MaxLead: 8})
+	defer adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{})
 
 	resources, counters := countingResources(20, 10)
 
@@ -110,8 +110,52 @@ func TestPrefetchWarmsMinimumLeadAhead(t *testing.T) {
 	}
 }
 
+// A queue past the margin means the connections have work waiting, so prefetch
+// stops rather than putting a demand read further back in it.
+func TestPrefetchStopsAtTheQueueMargin(t *testing.T) {
+	const margin = 2
+
+	queued := 0
+	adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{
+		Concurrency: 8,
+		LeadTime:    time.Minute,
+		MinLead:     4,
+		MaxLead:     8,
+		Queued:      func() int { return queued },
+		QueueMargin: margin,
+	})
+	defer adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{})
+
+	resources, counters := countingResources(20, 10)
+
+	reader, err := adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(resources).Open()
+	if err != nil {
+		t.Fatalf("failed opening merger: %v", err)
+	}
+	defer reader.Close()
+
+	queued = margin + 1
+	if _, err := reader.Read(make([]byte, 5)); err != nil {
+		t.Fatalf("failed reading: %v", err)
+	}
+	for i, counter := range counters {
+		if got := counter.prefetchs.Load(); got != 0 {
+			t.Fatalf("resource %d was prefetched %d times with the queue past its margin", i, got)
+		}
+	}
+
+	// The queue drained, so the next read fills the lead again
+	queued = 0
+	if _, err := reader.Read(make([]byte, 5)); err != nil {
+		t.Fatalf("failed reading: %v", err)
+	}
+	waitFor(t, "the lead to be warmed once the queue drained", func() bool {
+		return counters[3].prefetchs.Load() == 1
+	})
+}
+
 func TestReadersAreOpenedLazilyAndClosedBehind(t *testing.T) {
-	adaptiveparallelmergerresource.SetPrefetch(1, 0, 0, 0)
+	adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{})
 
 	resources, counters := countingResources(20, 10)
 
