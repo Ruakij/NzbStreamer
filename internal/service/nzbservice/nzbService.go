@@ -259,8 +259,6 @@ func (s *Service) Init() error {
 		}
 	}
 
-	slog.Debug("Init complete")
-
 	return nil
 }
 

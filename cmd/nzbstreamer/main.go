@@ -260,6 +260,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 			os.Exit(1)
 		}
 		folderTrigger.Init()
+		slog.Info("Startup complete!")
 	}()
 
 	// Http server: everything the process speaks on one address
