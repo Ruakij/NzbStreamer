@@ -66,11 +66,9 @@ type MetadataConfig struct {
 	Path string `env:"METADATA_PATH, default=.metadata/metadata.db"` // Path for the metadata database; WAL puts two sibling files next to it
 }
 
-type PrefetchConfig struct {
-	Time        time.Duration `env:"PREFETCH_TIME, default=1s"`         // How far ahead of the read position to stay warm, in read-time
-	MinSegments int           `env:"PREFETCH_MIN_SEGMENTS, default=4"`  // Segments warmed ahead before a read speed can be measured
-	MaxSegments int           `env:"PREFETCH_MAX_SEGMENTS, default=16"` // Upper bound on segments warmed ahead; 0 disables prefetching
-	Overcommit  *int          `env:"PREFETCH_OVERCOMMIT"`               // How overcommitted the connections of the servers currently active may get before prefetch stops queueing more. positive=overcommit, negative=undercommit
+type ReadaheadConfig struct {
+	Size  int `env:"READAHEAD_SIZE, default=33554432"` // Bytes retained ahead of each sequential reader; 0 disables readahead
+	Chunk int `env:"READAHEAD_CHUNK, default=8388608"` // Bytes requested from the underlying resource per refill
 }
 
 type FolderWatcherConfig struct {
@@ -117,7 +115,7 @@ type Config struct {
 	Sabnzbd       SabnzbdConfig
 	Cache         CacheConfig
 	Metadata      MetadataConfig
-	Prefetch      PrefetchConfig
+	Readahead     ReadaheadConfig
 	NzbConfig     NzbConfig
 	Probe         ProbeConfig
 	Filesystem    FilesystemConfig

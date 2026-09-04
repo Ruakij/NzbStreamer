@@ -29,23 +29,11 @@ import (
 	timeoutaction "git.ruekov.eu/ruakij/nzbStreamer/pkg/ShutdownManager/timeoutAction"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/filenameops"
-	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/adaptiveparallelmergerresource"
 	gowebdav "github.com/emersion/go-webdav"
 	"github.com/sethvargo/go-envconfig"
 )
 
 const ShutdownTimeout time.Duration = 3 * time.Second
-
-const prefetchOvercommitDivisor = 4
-
-// prefetchOvercommit defaults to a quarter of the pool. Every value is a legal
-// setting, so an unset one is nil rather than a sentinel.
-func prefetchOvercommit(configured *int, conns int) int {
-	if configured != nil {
-		return *configured
-	}
-	return conns / prefetchOvercommitDivisor
-}
 
 // completeDir is the path a download client api reports as the folder finished
 // downloads land in, which is the mount unless it is told otherwise. A client
@@ -157,16 +145,6 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		Cooldown: c.Usenet.BreakerCooldown,
 	})
 
-	overcommit := prefetchOvercommit(c.Prefetch.Overcommit, nntpPool.Conns())
-	adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{
-		Concurrency: nntpPool.Conns() + max(overcommit, 0),
-		LeadTime:    c.Prefetch.Time,
-		MinLead:     c.Prefetch.MinSegments,
-		MaxLead:     c.Prefetch.MaxSegments,
-		Pressure:    nntpPool.Pressure,
-		Overcommit:  overcommit,
-	})
-
 	// Setup cache
 	segmentCache, err := diskcache.NewCache(&diskcache.CacheOptions{
 		CacheDir:             c.Cache.Path,
@@ -192,6 +170,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 
 	// Setup services
 	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpPool.GetSegment, store, c.NzbConfig.ProbeSizeConvention, c.NzbConfig.MaxArchiveDepth)
+	factory.SetReadahead(c.Readahead.Size, c.Readahead.Chunk)
 
 	folderTrigger := folderwatcher.NewFolderWatcher(c.FolderWatcher.Path, c.FolderWatcher.Consume)
 

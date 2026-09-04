@@ -17,6 +17,7 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/fullcacheresource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/nzbpostresource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/rarfileresource"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/readaheadresource"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/sevenzipfileresource"
 )
 
@@ -41,6 +42,13 @@ type NzbFileFactory struct {
 	// archive is a real thing, an unbounded chain of them is a way to spend the
 	// whole add reading headers
 	maxArchiveDepth int
+	readaheadSize   int
+	readaheadChunk  int
+}
+
+func (f *NzbFileFactory) SetReadahead(size, chunk int) {
+	f.readaheadSize = size
+	f.readaheadChunk = chunk
 }
 
 // getSegment is the whole of what the factory needs from a news server.
@@ -75,6 +83,13 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData
 	files := make(map[string]presentation.Openable, len(rawFiles))
 	if err := f.expand(rawFiles, "", 0, nzbData.Meta["Password"], files); err != nil {
 		return files, err
+	}
+	if f.readaheadSize > 0 && f.readaheadChunk > 0 {
+		for name, file := range files {
+			if underlying, ok := file.(resource.ReadSeekCloseableResource); ok {
+				files[name] = readaheadresource.New(underlying, f.readaheadSize, f.readaheadChunk)
+			}
+		}
 	}
 
 	return files, nil

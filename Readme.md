@@ -162,11 +162,9 @@ Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORIT
 | `CACHE_MAX_SIZE`                  | 0                      | Maximum cache size in bytes, if unset allows unlimited size (not recommended) |
 | **Metadata**
 | `METADATA_PATH`                   | .metadata/metadata.db  | Path for the metadata database; WAL puts two sibling files next to it |
-| **Prefetch**
-| `PREFETCH_TIME`                   | 1s                     | How far ahead of the read position to stay warm, in read-time |
-| `PREFETCH_MIN_SEGMENTS`           | 4                      | Segments warmed ahead before a read speed can be measured |
-| `PREFETCH_MAX_SEGMENTS`           | 16                     | Upper bound on segments warmed ahead; 0 disables prefetching |
-| `PREFETCH_OVERCOMMIT`             | 1/4 of Connections | How overcommitted the connections of the servers currently active may get before prefetch stops queueing more. positive=overcommit, negative=undercommit |
+| **Readahead**
+| `READAHEAD_SIZE`                  | 33554432               | Bytes retained ahead of each sequential reader; 0 disables readahead |
+| `READAHEAD_CHUNK`                 | 8388608                | Bytes requested from the underlying resource per refill |
 | **Nzb-Options**
 | `NZB_FILE_BLACKLIST`              |                        | Early Regex-blacklist, applied after the nzb-file is scanned <br>A file dropped here is not health-checked either, and .par2 dropped here leaves the check without its repair-capacity estimate |
 | `NZB_PROBE_SIZE_CONVENTION`       | 3                      | Segments of an nzb whose size hints do not identify what they count that may be downloaded to settle it, making its sizes exact <br>A segment that settles nothing costs the next attempt; 0 leaves the sizes as estimates until a read has measured them |
