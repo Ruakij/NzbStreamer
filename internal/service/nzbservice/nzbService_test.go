@@ -2,8 +2,10 @@ package nzbservice_test
 
 import (
 	"errors"
+	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,11 +15,17 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
 
-var errBuildFailed = errors.New("build failed")
+var (
+	errBuildFailed = errors.New("build failed")
+	errNoBytes     = errors.New("nothing behind this file")
+)
 
 type fakeFactory struct {
 	err       error
 	discarded []string
+	// How often a tree was built, which is what a restore from the store is
+	// supposed not to do
+	builds atomic.Int64
 	// Optional, to hold an add inside the build the way blockingChecker holds it
 	// inside the health check
 	entered chan struct{}
@@ -36,8 +44,17 @@ func (f *fakeFactory) BuildSegmentStackFromNzbData(_ *nzbparser.NzbData) (map[st
 	if f.err != nil {
 		return nil, f.err
 	}
-	return map[string]presentation.Openable{"file.mkv": nil}, nil
+	f.builds.Add(1)
+	return map[string]presentation.Openable{"file.mkv": fakeFile{}}, nil
 }
+
+// fakeFile is a file with nothing behind it: a tree is what these tests look at,
+// never the bytes.
+type fakeFile struct{}
+
+func (fakeFile) SizeHint() (int64, error) { return 42, nil }
+
+func (fakeFile) Open() (io.ReadSeekCloser, error) { return nil, errNoBytes }
 
 type healthyChecker struct{}
 
@@ -46,13 +63,17 @@ func (healthyChecker) CheckFiles(_ *nzbparser.NzbData) []error { return nil }
 // fakeStore keeps what the real one keeps, in a map. Locked because an add runs
 // in the background and the test reads the store while it does.
 type fakeStore struct {
-	mutex   sync.Mutex
-	records map[string]nzbstore.Record
-	order   []string
+	mutex     sync.Mutex
+	records   map[string]nzbstore.Record
+	presented map[string][]nzbstore.File
+	order     []string
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{records: map[string]nzbstore.Record{}}
+	return &fakeStore{
+		records:   map[string]nzbstore.Record{},
+		presented: map[string][]nzbstore.File{},
+	}
 }
 
 func (s *fakeStore) List() ([]nzbstore.Record, error) {
@@ -92,11 +113,33 @@ func (s *fakeStore) SetStage(name, stage, errMessage string) error {
 	return nil
 }
 
+func (s *fakeStore) SetFiles(name, treeKey string, files []nzbstore.File) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	record, ok := s.records[name]
+	if !ok {
+		return nil
+	}
+	record.TreeKey = treeKey
+	s.records[name] = record
+	s.presented[name] = files
+	return nil
+}
+
+func (s *fakeStore) Files(name string) ([]nzbstore.File, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	return s.presented[name], nil
+}
+
 func (s *fakeStore) Delete(name string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
 	delete(s.records, name)
+	delete(s.presented, name)
 	return nil
 }
 
@@ -295,8 +338,10 @@ func TestARestartRestoresHistoryAndResumesAnInterruptedAdd(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
+	// A restored tree that has to be rebuilt is in the history as rebuilding
+	// while it runs, so the stages are only settled once nothing is
 	for range 100 {
-		if len(service.History()) == 3 {
+		if len(service.History()) == 3 && service.Restoring() == 0 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -389,5 +434,89 @@ func TestRemovingAnNzbDiscardsWhatItAccumulated(t *testing.T) {
 	}
 	if got := store.stage(nzbData.MetaName); got != "" {
 		t.Errorf("removal left the nzb in the store as %q", got)
+	}
+}
+
+// fakePresenter keeps what it was handed, so a test can open a file the way a
+// mount would.
+type fakePresenter struct {
+	mutex sync.Mutex
+	files map[string]presentation.Openable
+}
+
+func (p *fakePresenter) AddFile(fullpath string, _ time.Time, openable presentation.Openable) error {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	p.files[fullpath] = openable
+	return nil
+}
+
+func (p *fakePresenter) RemoveFile(fullpath string) error {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	delete(p.files, fullpath)
+	return nil
+}
+
+// A restart lists what the store recorded an nzb presenting and builds nothing
+// for it; the read that wants bytes is what walks the archive.
+func TestARestoredTreeIsListedFromTheStoreAndBuiltOnTheFirstRead(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		// What the process is configured with, against the "settings" the tree
+		// was stored under
+		key             string
+		buildsOnRestore int64
+	}{
+		{name: "under the settings it was stored with", key: "settings", buildsOnRestore: 0},
+		{name: "under changed settings", key: "other", buildsOnRestore: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := newFakeStore()
+			factory := &fakeFactory{}
+			presenter := &fakePresenter{files: map[string]presentation.Openable{}}
+			service := nzbservice.NewService(store, factory, []presentation.Presenter{presenter}, nil, healthyChecker{})
+			service.SetTreeKey(test.key)
+
+			nzbData := &nzbparser.NzbData{
+				MetaName: "Some.Release",
+				Files:    []nzbparser.File{{Filename: "some.release.rar"}},
+			}
+			if err := store.Add(nzbData, string(nzbservice.StageCompleted), "tv"); err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+			if err := store.SetFiles(nzbData.MetaName, "settings", []nzbstore.File{
+				{Path: "Some.Release/file.mkv", Size: 42, Exact: true},
+			}); err != nil {
+				t.Fatalf("SetFiles: %v", err)
+			}
+
+			if err := service.Init(); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+
+			if got := factory.builds.Load(); got != test.buildsOnRestore {
+				t.Errorf("the restore built %d trees, want %d", got, test.buildsOnRestore)
+			}
+
+			file, listed := presenter.files["Some.Release/file.mkv"]
+			if !listed {
+				t.Fatalf("the restore listed %v", presenter.files)
+			}
+			if size, err := file.SizeHint(); err != nil || size != 42 {
+				t.Errorf("the listed size is %d (%v), want 42", size, err)
+			}
+
+			// Opening reaches the built file either way; on a restored tree it is
+			// what builds it
+			if _, err := file.Open(); !errors.Is(err, errNoBytes) {
+				t.Fatalf("opening the file returned %v", err)
+			}
+			if got := factory.builds.Load(); got != 1 {
+				t.Errorf("after a read %d trees were built, want 1", got)
+			}
+		})
 	}
 }

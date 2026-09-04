@@ -22,6 +22,18 @@ type Record struct {
 	Err        string
 	AddedAt    time.Time
 	FinishedAt time.Time
+	// TreeKey identifies the settings the stored files were built with; the
+	// files are only worth reading back while it still matches
+	TreeKey string
+}
+
+// File is one path an nzb presents, as it was presented when the add finished.
+// Exact separates a measured size from a hint, which is the same distinction the
+// live stack makes: a size may be a guess, the bytes never are.
+type File struct {
+	Path  string
+	Size  int64
+	Exact bool
 }
 
 type NzbStore interface {
@@ -31,5 +43,10 @@ type NzbStore interface {
 	Add(data *nzbparser.NzbData, stage, category string) error
 	// SetStage records how the add ended
 	SetStage(name, stage, errMessage string) error
+	// SetFiles replaces what an nzb presents, under the key the tree was built
+	// with
+	SetFiles(name, treeKey string, files []File) error
+	// Files reads back what SetFiles recorded
+	Files(name string) ([]File, error)
 	Delete(name string) error
 }

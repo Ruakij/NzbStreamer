@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/filehealth"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
@@ -53,6 +54,10 @@ type Service struct {
 	filenameReplacementBelowLevensteinRatio float32
 	healthChecker                           filehealth.Checker
 	exactSizeClasses                        []filenameops.FileClass
+	// treeKey identifies the settings above that decide what a tree looks like,
+	// so a stored one is only restored while they are unchanged. Empty stores
+	// and restores nothing.
+	treeKey string
 	// addLimit bounds the trees being built at once, whether by an add or by a
 	// restore; the ones it holds back sit in the queue as what they are. nil is
 	// no limit.
@@ -147,6 +152,15 @@ func (s *Service) acquireAdd() func() {
 	return func() { <-limit }
 }
 
+// SetTreeKey names the settings a stored tree was built under. A restored tree
+// is only presented while the key still matches; one built under anything else
+// is rebuilt and rewrites its rows. Empty disables the stored trees entirely.
+func (s *Service) SetTreeKey(key string) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.treeKey = key
+}
+
 // SetExactSizeClasses picks which files are measured as part of an add rather
 // than on their first read.
 func (s *Service) SetExactSizeClasses(classes []filenameops.FileClass) {
@@ -168,24 +182,45 @@ func (s *Service) Init() error {
 		return fmt.Errorf("failed listing nzbs in store: %w", err)
 	}
 	logger.Info("Loaded Nzb store", "items", len(records))
+	started := time.Now()
+	restored, rebuilt := 0, 0
 
-	// Restoring an nzb walks its archive headers, which is seconds of waiting on
+	// Rebuilding an nzb walks its archive headers, which is seconds of waiting on
 	// the news server, and the trees are independent of one another. How many run
 	// at once is addNzb's own limit
 	group := errgroup.Group{}
 
 	for _, record := range records {
 		switch Stage(record.Stage) {
-		// Restoring is not adding: the posts were checked when they were added
-		// and the record is already in the store, so neither the health check
-		// nor the write happens again
+		// Rebuilding is not adding: the posts were checked when they were added,
+		// so the health check does not happen again. How it ends is recorded, in
+		// the queue and in the store, since one that cannot be rebuilt is not a
+		// completed download any more
 		case StageCompleted:
 			s.restore(record)
+
+			// What it presents is a pure function of the nzb and the settings,
+			// so it is read back rather than walked out of the archives again
+			if s.restoreTree(record) {
+				restored++
+				continue
+			}
+
+			rebuilt++
 			s.restoring.Add(1)
+			s.rebuilding(record.Data.MetaName, true)
 			group.Go(func() error {
-				defer s.restoring.Add(-1)
+				// The stage is cleared before the count drops, so nothing sees a
+				// restore that is over with an item still in it
+				defer func() {
+					s.rebuilding(record.Data.MetaName, false)
+					logger.Info("Rebuilt nzb", "MetaName", record.Data.MetaName,
+						"remaining", s.restoring.Add(-1))
+				}()
+
 				if err := s.addNzb(record.Data, false); err != nil {
-					logger.Error("Couldnt add nzb", "MetaName", record.Data.MetaName, "error", err)
+					logger.Error("Couldnt rebuild nzb", "MetaName", record.Data.MetaName, "error", err)
+					s.failedRebuild(record.Data.MetaName, err)
 				}
 				return nil
 			})
@@ -204,7 +239,19 @@ func (s *Service) Init() error {
 			}
 		}
 	}
+
+	// A rebuild is archive walks over the network, seconds each, and the files
+	// of those nzbs are not presented until it is done. A start that says nothing
+	// between listing the store and finishing looks finished while they are
+	// missing
+	if rebuilding := s.restoring.Load(); rebuilding > 0 {
+		logger.Info("Rebuilding nzb trees, their files appear as each one finishes", "nzbs", rebuilding)
+	}
+
 	_ = group.Wait()
+
+	logger.Info("Restored nzbs", "restored", restored, "rebuilt", rebuilt,
+		"took", time.Since(started).Truncate(time.Millisecond))
 
 	logger.Debug("Registering at triggers")
 	for _, trigger := range s.triggers {
@@ -265,14 +312,7 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 		}
 	}()
 
-	// Nzb-file blacklist. A file dropped here is not built, not presented and not
-	// health-checked; the par2 files the check needs for its verdict are hidden by
-	// FILESYSTEM_BLACKLIST instead, which drops them after they have been counted
-	for i := len(nzbData.Files) - 1; i >= 0; i-- {
-		if s.isBlacklistedNzbFile(nzbData.Files[i].Filename) {
-			nzbData.Files = append(nzbData.Files[:i], nzbData.Files[i+1:]...)
-		}
-	}
+	s.filterNzbFiles(nzbData)
 	if len(nzbData.Files) == 0 {
 		logger.Warn("After blacklist, no nzb-files left", "MetaName", nzbData.MetaName)
 		return nil
@@ -300,72 +340,109 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 		return err
 	}
 
-	files, err := s.factory.BuildSegmentStackFromNzbData(nzbData)
+	tree, err := s.buildTree(nzbData)
 	if err != nil {
-		return fmt.Errorf("failed building segment-stack for %s: %w", nzbData.MetaName, err)
+		return err
 	}
-
-	// Blacklist
-	for path := range files {
-		if s.isBlacklistedFilename(path) {
-			delete(files, path)
-		}
-	}
-	if len(files) == 0 {
+	if len(tree) == 0 {
 		logger.Warn("After blacklist, no files left", "MetaName", nzbData.MetaName)
 		return nil
 	}
 
-	// Extract paths
-	paths := make([]string, 0, len(files))
-	for path := range files {
-		paths = append(paths, path)
-	}
+	s.register(nzbData, tree)
+	s.measure(nzbData.MetaName, tree)
+	s.storeFiles(nzbData.MetaName, tree)
 
-	// Track files for this NZB
-	s.mutex.Lock()
-	s.nzbFiles[nzbData.MetaName] = make([]string, 0, len(files))
-
-	measure := make(map[string]presentation.Openable)
-
-	for filepath, file := range files {
-		filepath = s.deobfuscateFilename(filepath, paths, nzbData)
-		filepath = s.flattenPath(filepath, paths)
-		fullPath := path.Join(nzbData.MetaName, filepath)
-
-		// Track the full path
-		s.nzbFiles[nzbData.MetaName] = append(s.nzbFiles[nzbData.MetaName], fullPath)
-
-		if slices.Contains(s.exactSizeClasses, filenameops.Classify(filepath)) {
-			measure[fullPath] = file
-		}
-
-		// Add to presenters
-		for _, presenter := range s.presenters {
-			if err := presenter.AddFile(fullPath, nzbData.Files[0].ParsedDate, file); err != nil {
-				logger.Error("Failed adding segment-stack as file", "nzb", nzbData.MetaName, "error", err)
-			}
-		}
-	}
-	s.mutex.Unlock()
-
-	// Before the add reports finished, since a client that imports on that stats
-	// the file first. A restore does it too, and pays nothing for it: the store
-	// hands back the lengths the first measurement learned
-	for fullPath, file := range measure {
-		if err := measureFile(file); err != nil {
-			// A size that could not be measured is a worse size, not a missing file
-			logger.Warn("Failed measuring file, leaving the estimate in place",
-				"nzb", nzbData.MetaName, "file", fullPath, "error", err)
-		}
-	}
-
-	// The store already holds it: enqueue wrote it there when the add was
+	// The record already holds it: enqueue wrote it there when the add was
 	// accepted, and finish records how this ends
 
 	logger.Info("Added nzb", "MetaName", nzbData.MetaName)
 
 	return nil
+}
+
+// filterNzbFiles drops what the early blacklist matches. A file dropped here is
+// not built, not presented and not health-checked; the par2 files the check
+// needs for its verdict are hidden by FILESYSTEM_BLACKLIST instead, which drops
+// them after they have been counted.
+func (s *Service) filterNzbFiles(nzbData *nzbparser.NzbData) {
+	for i := len(nzbData.Files) - 1; i >= 0; i-- {
+		if s.isBlacklistedNzbFile(nzbData.Files[i].Filename) {
+			nzbData.Files = append(nzbData.Files[:i], nzbData.Files[i+1:]...)
+		}
+	}
+}
+
+// buildTree turns an nzb into the files it presents, keyed by the path each is
+// presented under. It is the whole naming decision - the blacklists,
+// deobfuscation and flattening - and the stored tree is a cache of its answer,
+// which is why a restore that goes on to build runs exactly this.
+func (s *Service) buildTree(nzbData *nzbparser.NzbData) (map[string]presentation.Openable, error) {
+	s.filterNzbFiles(nzbData)
+
+	files, err := s.factory.BuildSegmentStackFromNzbData(nzbData)
+	if err != nil {
+		return nil, fmt.Errorf("failed building segment-stack for %s: %w", nzbData.MetaName, err)
+	}
+
+	for name := range files {
+		if s.isBlacklistedFilename(name) {
+			delete(files, name)
+		}
+	}
+
+	paths := make([]string, 0, len(files))
+	for name := range files {
+		paths = append(paths, name)
+	}
+
+	tree := make(map[string]presentation.Openable, len(files))
+	for filepath, file := range files {
+		filepath = s.deobfuscateFilename(filepath, paths, nzbData)
+		filepath = s.flattenPath(filepath, paths)
+		tree[path.Join(nzbData.MetaName, filepath)] = file
+	}
+
+	return tree, nil
+}
+
+// register presents a tree and records what it presents.
+func (s *Service) register(nzbData *nzbparser.NzbData, tree map[string]presentation.Openable) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	modTime := time.Time{}
+	if len(nzbData.Files) > 0 {
+		modTime = nzbData.Files[0].ParsedDate
+	}
+
+	s.nzbFiles[nzbData.MetaName] = make([]string, 0, len(tree))
+	for fullPath, file := range tree {
+		s.nzbFiles[nzbData.MetaName] = append(s.nzbFiles[nzbData.MetaName], fullPath)
+
+		for _, presenter := range s.presenters {
+			if err := presenter.AddFile(fullPath, modTime, file); err != nil {
+				logger.Error("Failed adding segment-stack as file", "nzb", nzbData.MetaName, "error", err)
+			}
+		}
+	}
+}
+
+// measure settles the size of the classes NZB_EAGER_EXACT_SIZE_CLASSES names,
+// before the add reports finished, since a client that imports on that stats the
+// file first. A rebuild does it too, and pays nothing for it: the store hands
+// back the lengths the first measurement learned.
+func (s *Service) measure(metaName string, tree map[string]presentation.Openable) {
+	for fullPath, file := range tree {
+		if !slices.Contains(s.exactSizeClasses, filenameops.Classify(fullPath)) {
+			continue
+		}
+		if err := measureFile(file); err != nil {
+			// A size that could not be measured is a worse size, not a missing file
+			logger.Warn("Failed measuring file, leaving the estimate in place",
+				"nzb", metaName, "file", fullPath, "error", err)
+		}
+	}
 }
 
 // measureFile seeks to the end so the parts that did not know their own length

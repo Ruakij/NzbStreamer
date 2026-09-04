@@ -25,6 +25,10 @@ const (
 	StageCompleted Stage = "completed"
 	StageFailed    Stage = "failed"
 	StageCancelled Stage = "cancelled"
+	// StageRebuilding is a finished add whose tree is being built again, which
+	// is what a settings change costs. The add is over and the item stays
+	// history; this says what is happening to the files it already has
+	StageRebuilding Stage = "rebuilding"
 )
 
 // QueueItem is one add, from accepted to finished. Its id is the nzbs name,
@@ -34,9 +38,10 @@ type QueueItem struct {
 	ID string `json:"id"`
 	// Category is what the client api that added it called it. Nothing here uses
 	// it; a client filters on the value it gave us.
-	Category string    `json:"category"`
-	Stage    Stage     `json:"stage"`
-	Bytes    int64     `json:"bytes"`
+	Category string `json:"category"`
+	Stage    Stage  `json:"stage"`
+	Bytes    int64  `json:"bytes"`
+
 	Added    time.Time `json:"added"`
 	Finished time.Time `json:"finished"`
 	Err      string    `json:"error"`
@@ -47,8 +52,12 @@ type QueueItem struct {
 	done      chan struct{}
 }
 
+// Done reports whether the item belongs in the history rather than the queue.
+// A rebuilding one does: its add finished, and what is running is a rebuild of
+// what that add produced.
 func (i QueueItem) Done() bool {
-	return i.Stage == StageCompleted || i.Stage == StageFailed || i.Stage == StageCancelled
+	return i.Stage == StageCompleted || i.Stage == StageFailed ||
+		i.Stage == StageCancelled || i.Stage == StageRebuilding
 }
 
 // Add accepts an nzb and returns the id to track it under. The work happens in
@@ -160,7 +169,9 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 	s.queueMutex.Lock()
 
 	if existing := s.find(nzbData.MetaName); existing != nil {
-		if !existing.Done() {
+		// A rebuilding one is history and still running, and replacing its
+		// record would leave the rebuild writing into an add that replaced it
+		if !existing.Done() || existing.Stage == StageRebuilding {
 			s.queueMutex.Unlock()
 			return ErrNzbAlreadyExists
 		}
@@ -205,6 +216,45 @@ func (s *Service) restore(record nzbstore.Record) {
 		Err:      record.Err,
 		done:     done,
 	})
+}
+
+// rebuilding moves a restored item into and back out of StageRebuilding. Only
+// a completed add is rebuilt, so that is where it goes back to - unless the
+// rebuild failed, which recorded its own stage and is left alone. It is not
+// written to the store: a rebuild a restart interrupts has to happen again, and
+// what says so is the completed record it started from.
+func (s *Service) rebuilding(id string, building bool) {
+	s.queueMutex.Lock()
+	defer s.queueMutex.Unlock()
+
+	item := s.find(id)
+	switch {
+	case item == nil:
+	case building:
+		item.Stage = StageRebuilding
+	case item.Stage == StageRebuilding:
+		item.Stage = StageCompleted
+	}
+}
+
+// failedRebuild records a tree that could not be built again. A completed
+// download whose files nothing can reach is not a completed one, so it says so
+// here and in the store.
+func (s *Service) failedRebuild(id string, err error) {
+	s.queueMutex.Lock()
+	item := s.find(id)
+	if item == nil {
+		s.queueMutex.Unlock()
+		return
+	}
+	item.Stage = StageFailed
+	item.Err = err.Error()
+	message := item.Err
+	s.queueMutex.Unlock()
+
+	if err := s.store.SetStage(id, string(StageFailed), message); err != nil {
+		logger.Error("Failed recording a rebuild that failed", "MetaName", id, "error", err)
+	}
 }
 
 // stage moves an item along and reports whether it may go on. Restoring the
