@@ -44,11 +44,13 @@ func (fsManager *FileSystem) Mount(path string, mountOptions []string) error {
 	logger.Info("Mounted", "path", path)
 
 	fsManager.server = server
+	fsManager.mounted.Store(true)
 	return nil
 }
 
 func (fsManager *FileSystem) Serve(ctx context.Context) error {
 	server := fsManager.server
+	defer fsManager.mounted.Store(false)
 
 	mountWaitCtx := make(chan struct{})
 	go func() {

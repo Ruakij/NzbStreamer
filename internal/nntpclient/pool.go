@@ -237,6 +237,57 @@ func (p *Pool) sumActive(of func(Server) int) int {
 	return 0
 }
 
+// ServerHealth is one configured server and why it is out of rotation, if it is.
+type ServerHealth struct {
+	Name     string
+	Priority int
+	Conns    int
+	Up       bool
+	// Reason is why it is not, empty while it is up
+	Reason string
+}
+
+// Health reports every configured server, in priority order.
+func (p *Pool) Health() []ServerHealth {
+	health := make([]ServerHealth, 0, len(p.priorities))
+	for _, pr := range p.priorities {
+		for _, server := range pr.servers {
+			reason := p.outOfRotation(server)
+			health = append(health, ServerHealth{
+				Name:     server.Name,
+				Priority: server.Priority,
+				Conns:    server.Server.Conns(),
+				Up:       reason == "",
+				Reason:   reason,
+			})
+		}
+	}
+
+	return health
+}
+
+// outOfRotation names what takes a server out of it, in the order it matters:
+// rejected credentials never heal, a cooldown does, and a spent quota heals when
+// its period rolls over. It asks without usable(), which would end a cooldown and
+// roll a period as a side effect of being looked at.
+func (p *Pool) outOfRotation(s *poolServer) string {
+	p.quotaMutex.Lock()
+	defer p.quotaMutex.Unlock()
+
+	quotaLive := s.QuotaPeriod <= 0 || time.Since(s.periodStart) < s.QuotaPeriod
+
+	switch {
+	case s.permanent:
+		return "auth rejected"
+	case !s.disabledUntil.IsZero() && time.Now().Before(s.disabledUntil):
+		return "breaker open"
+	case s.QuotaBytes > 0 && s.used >= s.QuotaBytes && quotaLive:
+		return "quota spent"
+	default:
+		return ""
+	}
+}
+
 // start picks where in a group this request begins, so servers of equal priority
 // spread the load across each other.
 func (p *priority) start() int {

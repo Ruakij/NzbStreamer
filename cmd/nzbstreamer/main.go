@@ -250,11 +250,16 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		}()
 	}
 
-	// Start services
-	if err = service.Init(); err != nil {
-		os.Exit(1)
-	}
-	folderTrigger.Init()
+	// Start services. The restore walks archive headers over the network, so it
+	// runs in the background and the presenters are up while it fills in; what
+	// must not read a half-restored library waits for service.Ready
+	go func() {
+		if err := service.Init(); err != nil {
+			slog.Error("Failed initializing service", "error", err)
+			os.Exit(1)
+		}
+		folderTrigger.Init()
+	}()
 
 	// Http server: everything the process speaks on one address
 	var webdavAuth *webdav.BasicAuthConfig
@@ -266,11 +271,12 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	}
 
 	mux := httpserver.NewMux(httpserver.Routes{
-		WebUI: webui.NewHandler(service),
+		WebUI: webui.NewHandler(service, healthComponents(c, store, segmentCache, mount, nntpPool, service)...),
 		Sabnzbd: sabnzbd.NewHandler(service, sabnzbd.Config{
 			APIKey:      c.Sabnzbd.APIKey,
 			CompleteDir: completeDir(c),
 			Categories:  c.Sabnzbd.Categories,
+			Ready:       service.Ready,
 		}),
 		Webdav: webdav.BasicAuth(&gowebdav.Handler{FileSystem: webdavFS}, webdavAuth),
 		Debug:  c.HTTP.Debug,

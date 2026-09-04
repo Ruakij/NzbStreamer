@@ -106,6 +106,8 @@ Zip archives are not unpacked.
 | `/`                                 | Web ui showing the queue and history |
 | `/sabnzbd/api`                      | SABnzbd-compatible download client api; a client's url base is `http://host:8080/sabnzbd` |
 | `/webdav/`                          | WebDAV, behind basic auth when `WEBDAV_USERNAME` is set |
+| `/api/health`                       | Readiness: 200 when the store, cache and mount are up, 503 otherwise; the body reports every component, news servers included |
+| `/api/health/live`                  | Liveness: 200 while the process answers, looking at nothing else |
 | `/debug/pprof/`, `/debug/statsviz/` | Debugging endpoints, off unless `HTTP_DEBUG`                                |
 
 # 5. Settings

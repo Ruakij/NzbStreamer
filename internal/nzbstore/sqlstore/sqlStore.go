@@ -100,6 +100,17 @@ func (s *Store) Close() error {
 	return err
 }
 
+// Ping reports whether the database is still answering. It counts the nzbs it
+// holds rather than pinging the pool, since a query is what a caller needs to
+// work and the table is small.
+func (s *Store) Ping() (nzbs int, err error) {
+	if err := s.db.QueryRow("SELECT count(*) FROM nzb").Scan(&nzbs); err != nil {
+		return 0, fmt.Errorf("failed counting nzbs: %w", err)
+	}
+
+	return nzbs, nil
+}
+
 func (s *Store) List() ([]nzbstore.Record, error) {
 	rows, err := s.db.Query("SELECT name, raw, stage, error, category, added_at, finished_at FROM nzb ORDER BY added_at")
 	if err != nil {

@@ -53,6 +53,11 @@ type Config struct {
 	// Categories offered to a client. A client refuses to save if the category it
 	// is configured with is not among them.
 	Categories []string
+	// Ready holds the whole surface at 503 while it reports false; nil is always
+	// ready. It is the startup restore: reporting an nzb complete before its
+	// files are there is an import that fails and a release that gets
+	// blacklisted, and reporting it queued is a queue entry an *arr calls stuck.
+	Ready func() bool
 }
 
 type Handler struct {
@@ -65,6 +70,13 @@ func NewHandler(service Service, config Config) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// 503 is what an unavailable download client looks like, and an *arr retries
+	// it; anything answered from a half-restored library is a lie it acts on
+	if h.config.Ready != nil && !h.config.Ready() {
+		http.Error(w, "restoring", http.StatusServiceUnavailable)
+		return
+	}
+
 	query := r.URL.Query()
 
 	if err := h.authenticate(query); err != "" {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -212,8 +213,15 @@ func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 
 // FileSystem manages the root directory and dynamic file modifications.
 type FileSystem struct {
-	root   *dirNode
-	server *fuse.Server
+	root    *dirNode
+	server  *fuse.Server
+	mounted atomic.Bool
+}
+
+// Mounted reports whether the tree is attached; false once it is unmounted,
+// from here or from outside.
+func (fsManager *FileSystem) Mounted() bool {
+	return fsManager.mounted.Load()
 }
 
 var _ = presentation.Presenter((*FileSystem)(nil))

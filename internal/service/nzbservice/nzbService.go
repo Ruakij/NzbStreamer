@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/filehealth"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
@@ -56,6 +57,21 @@ type Service struct {
 	// restore; the ones it holds back sit in the queue as what they are. nil is
 	// no limit.
 	addLimit chan struct{}
+
+	// What the startup restore is still doing. Until it is done the library is
+	// incomplete, which is what a client acting on what it reads has to wait for
+	restoring atomic.Int64
+	ready     atomic.Bool
+}
+
+// Ready reports whether the startup restore has finished.
+func (s *Service) Ready() bool {
+	return s.ready.Load()
+}
+
+// Restoring reports how many nzbs are still having their tree rebuilt.
+func (s *Service) Restoring() int {
+	return int(s.restoring.Load())
 }
 
 func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, presenters []presentation.Presenter, triggers []trigger.Trigger, healthChecker filehealth.Checker) *Service {
@@ -140,7 +156,12 @@ func (s *Service) SetExactSizeClasses(classes []filenameops.FileClass) {
 }
 
 // Initialize the service; Load NzbData from store; build filedata and add to filesystem; Register to triggers
+//
+// It runs in the background of a start, so the presenters are up while the trees
+// are rebuilt; Ready reports when it is done.
 func (s *Service) Init() error {
+	defer s.ready.Store(true)
+
 	logger.Debug("Getting nzbData from store")
 	records, err := s.store.List()
 	if err != nil {
@@ -160,7 +181,9 @@ func (s *Service) Init() error {
 		// nor the write happens again
 		case StageCompleted:
 			s.restore(record)
+			s.restoring.Add(1)
 			group.Go(func() error {
+				defer s.restoring.Add(-1)
 				if err := s.addNzb(record.Data, false); err != nil {
 					logger.Error("Couldnt add nzb", "MetaName", record.Data.MetaName, "error", err)
 				}

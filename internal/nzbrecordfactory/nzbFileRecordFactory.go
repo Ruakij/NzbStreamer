@@ -184,7 +184,7 @@ func settleConvention(nzbData *nzbparser.NzbData, sizer nzbfileanalyzer.SegmentS
 
 			sizer = sizer.SettleWith(segment.BytesHint, int(size))
 			if sizer.Convention() != nzbfileanalyzer.ConventionUnknown {
-				logger.Debug("Settled size convention from a downloaded segment", "nzb", nzbData.MetaName, "convention", sizer.Convention())
+				logger.Debug("Settled size convention from a known segment size", "nzb", nzbData.MetaName, "convention", sizer.Convention())
 				return sizer
 			}
 		}

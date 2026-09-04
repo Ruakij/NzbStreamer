@@ -255,6 +255,15 @@ func (c *Cache) Open(key string) (*os.File, int64, error) {
 	return file, header.Size, nil
 }
 
+// Stats reports what the cache holds against what it may hold. Both numbers are
+// tracked in memory, so this costs a lock and no syscalls.
+func (c *Cache) Stats() (items int, bytes, maxBytes int64) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return len(c.items), c.currentSize, c.options.MaxSize
+}
+
 func (c *Cache) Exists(key string) (bool, CacheItemHeader) {
 	c.mu.RLock()
 	header, exists := c.items[key]

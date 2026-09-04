@@ -29,16 +29,19 @@ type Service interface {
 }
 
 type Handler struct {
-	service Service
-	mux     *http.ServeMux
+	service    Service
+	components []Component
+	mux        *http.ServeMux
 }
 
-func NewHandler(service Service) *Handler {
-	h := &Handler{service: service, mux: http.NewServeMux()}
+func NewHandler(service Service, components ...Component) *Handler {
+	h := &Handler{service: service, components: components, mux: http.NewServeMux()}
 	h.mux.HandleFunc("GET /{$}", page)
 	h.mux.HandleFunc("GET /api/items", h.items)
 	h.mux.HandleFunc("POST /api/add", h.add)
 	h.mux.HandleFunc("POST /api/remove", h.remove)
+	h.mux.HandleFunc("GET /api/health", h.health)
+	h.mux.HandleFunc("GET /api/health/live", h.live)
 	return h
 }
 
@@ -123,15 +126,17 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 
 func writeJSON(w http.ResponseWriter, body any) {
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		logger.Error("Failed writing response", "error", err)
-	}
+	encode(w, body)
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+	encode(w, map[string]string{"error": message})
+}
+
+func encode(w http.ResponseWriter, body any) {
+	if err := json.NewEncoder(w).Encode(body); err != nil {
 		logger.Error("Failed writing response", "error", err)
 	}
 }

@@ -298,3 +298,23 @@ func TestADeleteThatFailsSaysSo(t *testing.T) {
 type failingService struct{ fakeService }
 
 func (s *failingService) Delete(_ string) error { return errors.New("nzb not found") }
+
+// A half-restored library would have an *arr import files that are not there
+// yet, so the whole surface is unavailable until the restore is done.
+func TestTheSurfaceIsUnavailableUntilTheRestoreIsDone(t *testing.T) {
+	ready := false
+	handler := sabnzbd.NewHandler(&fakeService{}, sabnzbd.Config{Ready: func() bool { return ready }})
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api?mode=queue", nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Errorf("while restoring: got %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+
+	ready = true
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api?mode=queue", nil))
+	if recorder.Code != http.StatusOK {
+		t.Errorf("once restored: got %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
