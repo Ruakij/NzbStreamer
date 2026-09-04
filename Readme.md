@@ -182,7 +182,7 @@ Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORIT
 | `PROBE_PARALLEL`                  | 0                      | Concurrent segment-checks; defaults to the sum of the servers connections when 0 |
 | **Filesystem-Options**
 | `FILESYSTEM_BLACKLIST`            | (?i)\.par2$            | Late Regex-blacklist, applied on the actual file added to the filesystem; includes files from archives <br>Can be used to hide archive-files, but leaving unpacked files. Hides .par2 by default, after the health check has counted it |
-| `FILESYSTEM_FLATTEN_MAX_DEPTH`    | 1                      | Unpacks files from folders e.g. archives where possible <br>Can be used to hide archive-group-folder |
+| `FILESYSTEM_FLATTEN_MAX_DEPTH`    | 0                      | Unpacks files from folders e.g. archives where possible <br>Can be used to hide archive-group-folder |
 | `FILESYSTEM_FIX_FILENAME_THRESHOLD`| 0.2                   | Threshold for applying filename-fixing when filename doesnt match nzb meta name |
 | **Misc**
 | `LOGLEVEL`                        | INFO                   | Logging level, one of {DEBUG, INFO, WARN, ERROR} |

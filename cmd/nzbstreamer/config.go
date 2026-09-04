@@ -101,7 +101,7 @@ type ProbeConfig struct {
 
 type FilesystemConfig struct {
 	Blacklist            []regexp.Regexp `env:"FILESYSTEM_BLACKLIST, default=(?i)\\.par2$"`     // Late Regex-blacklist, applied on the actual file added to the filesystem; includes files from archives
-	FlattenMaxDepth      int             `env:"FILESYSTEM_FLATTEN_MAX_DEPTH, default=1"`        // Unpacks files from folders e.g. archives where possible
+	FlattenMaxDepth      int             `env:"FILESYSTEM_FLATTEN_MAX_DEPTH, default=0"`        // Unpacks files from folders e.g. archives where possible
 	FixFilenameThreshold float32         `env:"FILESYSTEM_FIX_FILENAME_THRESHOLD, default=0.2"` // Threshold for applying filename-fixing when filename doesnt match nzb meta name
 }
 
