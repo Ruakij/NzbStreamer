@@ -17,9 +17,7 @@ var ErrNoServer = errors.New("no server available")
 type Server interface {
 	GetSegment(group, id string) ([]byte, error)
 	SegmentExists(id string) (bool, error)
-	Waiting() int
 	Conns() int
-	Free() int
 }
 
 // QuotaStore persists what a metered server has spent. A count that does not
@@ -248,43 +246,6 @@ func (p *Pool) SegmentExists(id string) (bool, error) {
 	default:
 		return false, p.noServer()
 	}
-}
-
-// Waiting reports the requests queued for a connection on the servers a fetch
-// would actually use, which is the first priority still holding an unexhausted
-// server. Counting the ones behind it would raise the number while the group
-// doing the work is the saturated one.
-func (p *Pool) Waiting() int {
-	return p.sumActive(Server.Waiting)
-}
-
-// Conns reports the connections in play in that same group.
-func (p *Pool) Conns() int {
-	return p.sumActive(Server.Conns)
-}
-
-// Pressure reports the fetches queued for a connection less the connections
-// free, in that same group. It is negative while the group has spare capacity
-// and positive once work is waiting, so one number says how loaded it is.
-func (p *Pool) Pressure() int {
-	return p.sumActive(Server.Waiting) - p.sumActive(Server.Free)
-}
-
-func (p *Pool) sumActive(of func(Server) int) int {
-	for _, pr := range p.priorities {
-		sum, any := 0, false
-		for _, server := range pr.servers {
-			if !p.usable(server) {
-				continue
-			}
-			sum += of(server.Server)
-			any = true
-		}
-		if any {
-			return sum
-		}
-	}
-	return 0
 }
 
 // ServerHealth is one configured server and why it is out of rotation, if it is.

@@ -55,6 +55,10 @@ type SabnzbdConfig struct {
 type MountConfig struct {
 	Path    string   `env:"MOUNT_PATH"`    // Path for FUSE mount; Disabled when unset
 	Options []string `env:"MOUNT_OPTIONS"` // Additional Options for FUSE mount; See mount.fuse3 Manpage for more information
+	// A read here waits on a news server, so these decide the throughput of a
+	// sequential read rather than the connections do
+	MaxBackground int `env:"MOUNT_MAX_BACKGROUND, default=64"`     // Reads the kernel may have in flight per mount
+	MaxReadAhead  int `env:"MOUNT_MAX_READAHEAD, default=8388608"` // Bytes the kernel reads ahead of a sequential reader; a request is capped at 1 MiB, so this is how many it issues
 }
 
 type CacheConfig struct {
@@ -67,8 +71,8 @@ type MetadataConfig struct {
 }
 
 type ReadaheadConfig struct {
-	Size  int `env:"READAHEAD_SIZE, default=33554432"` // Bytes retained ahead of each sequential reader; 0 disables readahead
-	Chunk int `env:"READAHEAD_CHUNK, default=8388608"` // Bytes requested from the underlying resource per refill
+	Size  int `env:"READAHEAD_SIZE, default=33554432"` // Bytes held warm ahead of each open file; 0 disables readahead
+	Chunk int `env:"READAHEAD_CHUNK, default=1048576"` // Bytes fetched per chunk; SIZE/CHUNK is how many run at once, and one chunk is served segment by segment, so around one segment reads fastest
 }
 
 type FolderWatcherConfig struct {

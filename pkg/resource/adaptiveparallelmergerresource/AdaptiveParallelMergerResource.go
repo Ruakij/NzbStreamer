@@ -9,7 +9,6 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 	"golang.org/x/sync/errgroup"
@@ -49,18 +48,6 @@ type AdaptiveParallelMergerResourceReader struct {
 	readerIndex int
 	// Active reader byte index
 	readerByteIndex int64
-
-	// Prefetch state, which positional reads touch without holding mutex
-	prefetchMutex sync.Mutex
-	// Highest index prefetch has been issued for
-	prefetchedTo int
-	// Highest index a positional read has reached. Concurrent readahead arrives
-	// out of order, so the lead is anchored to the furthest of them.
-	readAtIndex int
-	// Bytes served and since when, measuring how fast the consumer takes them.
-	// A jump starts a new run, since it says nothing about the next one.
-	runStart time.Time
-	runBytes int64
 }
 
 // Open prepares buffers; underlying Resources are opened when a read reaches them,
@@ -252,8 +239,6 @@ func (r *AdaptiveParallelMergerResourceReader) ReadAt(p []byte, off int64) (int,
 		return 0, err
 	}
 
-	r.prefetchAt(index, int64(len(p)))
-
 	totalRead := 0
 	for totalRead < len(p) {
 		if index >= len(r.resource.resources) {
@@ -317,9 +302,6 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 
 	r.mutex.Lock()
 
-	r.noteRead(0)
-	r.prefetchFrom(r.readerIndex)
-
 	totalRead := 0
 	expectedTotalRead := 0
 
@@ -338,8 +320,6 @@ func (r *AdaptiveParallelMergerResourceReader) Read(p []byte) (int, error) {
 
 	// Unlock mutex, when group finished
 	defer func() {
-		r.noteRead(int64(totalRead))
-
 		// When already everything processed, dont start goroutine
 		if processIndex >= len(responses) {
 			defer r.mutex.Unlock()
@@ -591,11 +571,7 @@ func (r *AdaptiveParallelMergerResourceReader) Seek(offset int64, whence int) (i
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	from := r.readerIndex
-	defer func() {
-		r.noteSeek(from)
-		r.closeBehind()
-	}()
+	defer r.closeBehind()
 
 	var newIndex int64
 

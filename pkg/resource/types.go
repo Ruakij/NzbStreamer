@@ -34,13 +34,6 @@ type Sized interface {
 	Size() (int64, error)
 }
 
-// Prefetcher is implemented by resources that can warm themselves without
-// producing bytes. Prefetch works on the resource, so what it warms outlives
-// any reader and a demand read arriving later just finds it there.
-type Prefetcher interface {
-	Prefetch() error
-}
-
 // Resource is an interface to excapsulate Open and Size actions from data-resources
 //
 // Specific implementations may document their own management behavior.

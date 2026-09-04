@@ -210,7 +210,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	// Mount before the service restores its tree: an inode only takes children
 	// once the filesystem it belongs to is mounted
 	if c.Mount.Path != "" {
-		if err = mount.Mount(c.Mount.Path, c.Mount.Options); err != nil {
+		if err = mount.Mount(c.Mount.Path, c.Mount.Options, c.Mount.MaxBackground, c.Mount.MaxReadAhead); err != nil {
 			slog.Error("Mounting failed", "error", err)
 			os.Exit(1)
 		}

@@ -153,6 +153,8 @@ Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORIT
 | `WEBDAV_LAZY_EXACT_SIZE`          | true                   | Measure the exact size of a file on the GET that needs it, where doing so is cheap, so `Content-Length` is right for one `NZB_EAGER_EXACT_SIZE_CLASSES` left out <br>Disabling it answers every GET from the size hint, which for an estimated size means a truncated response |
 | `MOUNT_PATH`                      |                        | Path for FUSE mount; Disabled when unset         |
 | `MOUNT_OPTIONS`                   |                        | Additional Options for FUSE mount; See mount.fuse3 Manpage for more information |
+| `MOUNT_MAX_BACKGROUND`            | 64                     | Reads the kernel may have in flight per mount; a read here waits on a news server, so this and the readahead below decide the throughput of a sequential read |
+| `MOUNT_MAX_READAHEAD`             | 8388608                | Bytes the kernel reads ahead of a sequential reader; a request is capped at 1 MiB, so this is how many it issues |
 | **Download-Client-Api**
 | `SABNZBD_API_KEY`                 |                        | Api key demanded of every request; unauthenticated when unset |
 | `SABNZBD_COMPLETE_DIR`            |                        | Path reported to a client as the completed-downloads folder, which is where it imports from; defaults to `MOUNT_PATH` |
@@ -163,8 +165,8 @@ Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORIT
 | **Metadata**
 | `METADATA_PATH`                   | .metadata/metadata.db  | Path for the metadata database; WAL puts two sibling files next to it |
 | **Readahead**
-| `READAHEAD_SIZE`                  | 33554432               | Bytes retained ahead of each sequential reader; 0 disables readahead |
-| `READAHEAD_CHUNK`                 | 8388608                | Bytes requested from the underlying resource per refill |
+| `READAHEAD_SIZE`                  | 33554432               | Bytes held warm ahead of each open file; 0 disables readahead |
+| `READAHEAD_CHUNK`                 | 1048576                | Bytes fetched per chunk; `SIZE`/`CHUNK` is how many run at once, and a chunk is served segment by segment, so around one segment reads fastest |
 | **Nzb-Options**
 | `NZB_FILE_BLACKLIST`              |                        | Early Regex-blacklist, applied after the nzb-file is scanned <br>A file dropped here is not health-checked either, and .par2 dropped here leaves the check without its repair-capacity estimate |
 | `NZB_PROBE_SIZE_CONVENTION`       | 3                      | Segments of an nzb whose size hints do not identify what they count that may be downloaded to settle it, making its sizes exact <br>A segment that settles nothing costs the next attempt; 0 leaves the sizes as estimates until a read has measured them |
@@ -218,7 +220,7 @@ Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORIT
         -   [ ] Periodic rescan
     -   [x] Settle unknown segment-size convention
 -   Cache
-    -   [x] Segment-prefetch
+    -   [x] Readahead
     -   [x] Segment-Cache
         -   [x] Max Size
         -   [ ] Max TTL

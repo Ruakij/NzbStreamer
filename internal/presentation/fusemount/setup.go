@@ -26,14 +26,15 @@ func Setup() *FileSystem {
 // Mount attaches the tree at path. The root inode only accepts children once it
 // is mounted, so this happens before anything is added to the filesystem; Serve
 // then runs until the context ends.
-func (fsManager *FileSystem) Mount(path string, mountOptions []string) error {
+func (fsManager *FileSystem) Mount(path string, mountOptions []string, maxBackground, maxReadAhead int) error {
 	server, err := fs.Mount(path, fsManager.root, &fs.Options{
 		MountOptions: fuse.MountOptions{
 			FsName:        "nzbstreamer",
 			Name:          "nzbstreamer",
 			DisableXAttrs: true,
-			SyncRead:      true,
 			Options:       mountOptions,
+			MaxBackground: maxBackground,
+			MaxReadAhead:  maxReadAhead,
 		},
 	})
 	if err != nil {

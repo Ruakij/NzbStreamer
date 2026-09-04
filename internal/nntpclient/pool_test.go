@@ -23,9 +23,8 @@ func (f *fakeServer) SegmentExists(_ string) (bool, error) {
 	return f.err == nil, f.err
 }
 
-func (f *fakeServer) Waiting() int { return 1 }
-func (f *fakeServer) Conns() int   { return 10 }
-func (f *fakeServer) Free() int    { return 4 }
+func (f *fakeServer) Conns() int { return 10 }
+func (f *fakeServer) Free() int  { return 4 }
 
 func TestPoolDescendsOnNotFound(t *testing.T) {
 	primary := &fakeServer{err: ErrArticleNotFound}
@@ -126,9 +125,6 @@ func TestPoolRoundRobinsWithinAPriority(t *testing.T) {
 	if first.calls != 2 || second.calls != 2 {
 		t.Fatalf("spread %d/%d; want 2/2", first.calls, second.calls)
 	}
-	if got := pool.Conns(); got != 20 {
-		t.Fatalf("Conns() = %d; want both servers of the group", got)
-	}
 }
 
 // fakeQuotaStore is the persistence a quota needs to survive a restart.
@@ -165,9 +161,6 @@ func TestPoolSkipsAnExhaustedServer(t *testing.T) {
 	if err != nil || string(body) != "backup" {
 		t.Fatalf("got %q, %v; want the backup once the quota is spent", body, err)
 	}
-	if got := pool.Conns(); got != 10 {
-		t.Fatalf("Conns() = %d; want only the group still in play", got)
-	}
 }
 
 func TestPoolRestoresAndResetsQuota(t *testing.T) {
@@ -200,9 +193,6 @@ func TestPoolDisablesAServerThatKeepsFailing(t *testing.T) {
 	}
 	if broken.calls != 2 {
 		t.Fatalf("tried the broken server %d times; want it disabled after 2 failures", broken.calls)
-	}
-	if got := pool.Conns(); got != 10 {
-		t.Fatalf("Conns() = %d; want only the group still in play", got)
 	}
 }
 
