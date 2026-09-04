@@ -13,14 +13,14 @@ import (
 
 var ErrUnexpectedUnmount = errors.New("unexpected unmount, unmounted from external?")
 
-func Setup() *FileSystem {
+func Setup(batchDelay time.Duration, narrowMissSize int64) *FileSystem {
 	// Create root directory node
 	root := &dirNode{
 		modTime: time.Now(),
 	}
 
 	// Initialize filesystem
-	return &FileSystem{root: root}
+	return &FileSystem{root: root, batchDelay: batchDelay, narrowMissSize: narrowMissSize}
 }
 
 // Mount attaches the tree at path. The root inode only accepts children once it

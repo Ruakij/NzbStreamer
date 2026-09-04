@@ -20,15 +20,67 @@ import (
 // fileNode represents a file in the read-only filesystem.
 type fileNode struct {
 	fs.Inode
-	modTime  time.Time
-	openable presentation.Openable
-	size     int64
+	modTime        time.Time
+	openable       presentation.Openable
+	size           int64
+	batchDelay     time.Duration
+	narrowMissSize int64
 }
+
+// nextFileHandle ties an Open's debug lines to its Read and Close ones.
+var nextFileHandle atomic.Uint64
 
 type file struct {
 	reader io.ReaderAt
 	closer io.Closer
+	id     uint64
+	name   string
 }
+
+// seekLoggingReadSeekCloser logs the seeks a positional caller forces on a
+// stream; lying backward inside narrowMissLimit is a reorder worth warning
+// about. Only the batching adapter calls it, so no locking is needed.
+type seekLoggingReadSeekCloser struct {
+	handle         uint64
+	name           string
+	r              io.ReadSeekCloser
+	narrowMissSize int64
+	pos            int64
+	posSet         bool
+}
+
+func (s *seekLoggingReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
+	if whence == io.SeekStart {
+		if missed := s.pos - offset; s.posSet && missed > 0 && missed <= s.narrowMissSize {
+			slog.Warn("Read narrowly missed ordering", "handle", s.handle, "name", s.name, "offset", offset, "cursor", s.pos, "missed_by", missed)
+		}
+	}
+
+	slog.Debug("Seek start", "handle", s.handle, "name", s.name, "offset", offset, "whence", whence)
+	start := time.Now()
+	position, err := s.r.Seek(offset, whence)
+	if err != nil {
+		s.posSet = false
+		slog.Error("Seek error", "handle", s.handle, "name", s.name, "offset", offset, "whence", whence, "error", err, "elapsed", time.Since(start))
+		return 0, fmt.Errorf("failed seeking: %w", err)
+	}
+	s.pos, s.posSet = position, true
+	slog.Debug("Seek done", "handle", s.handle, "name", s.name, "offset", position, "elapsed", time.Since(start))
+
+	return position, nil
+}
+
+func (s *seekLoggingReadSeekCloser) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	s.pos += int64(n)
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.posSet = false
+	}
+
+	return n, err
+}
+
+func (s *seekLoggingReadSeekCloser) Close() error { return s.r.Close() }
 
 // dirNode represents a directory in the filesystem.
 type dirNode struct {
@@ -139,18 +191,30 @@ func convertTimeToFuseAttr(t time.Time) (time uint64, timeNs uint32, err error) 
 var _ = fs.NodeOpener((*fileNode)(nil))
 
 func (n *fileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	id := nextFileHandle.Add(1)
+	name := n.EmbeddedInode().Path(nil)
+	start := time.Now()
+	slog.Debug("Open start", "handle", id, "name", name)
+
 	reader, err := n.openable.Open()
 	if err != nil {
-		slog.Error("Error opening file", "error", err)
+		slog.Error("Error opening file", "handle", id, "name", name, "error", err, "elapsed", time.Since(start))
 		return nil, 0, syscall.EIO
 	}
 
-	fh := &file{
-		reader: readeratwrapper.Positional(reader),
-		closer: reader,
+	fh := &file{closer: reader, id: id, name: name}
+	// An addressable reader stays concurrent; the rest are serialised through
+	// the batching adapter and arrive at the stream sorted by offset.
+	if positional, ok := reader.(io.ReaderAt); ok {
+		fh.reader = positional
+	} else {
+		logged := &seekLoggingReadSeekCloser{handle: id, name: name, r: reader, narrowMissSize: n.narrowMissSize}
+		batched := readeratwrapper.NewReadSeekerBatchedAt(logged, n.batchDelay)
+		fh.reader = batched
+		fh.closer = batched
 	}
 
-	slog.Debug("Open", "reader", fmt.Sprintf("%p", reader), "name", n.EmbeddedInode().Path(nil))
+	slog.Debug("Open done", "handle", id, "name", name, "elapsed", time.Since(start))
 
 	return fh, 0, syscall.F_OK
 }
@@ -188,22 +252,31 @@ var _ = fs.FileReleaser((*file)(nil))
 // Release closes the reader the handle was opened with, which is what returns
 // its descriptors and pooled readers.
 func (f *file) Release(ctx context.Context) syscall.Errno {
+	slog.Debug("Close start", "handle", f.id, "name", f.name)
+	start := time.Now()
+
 	if err := f.closer.Close(); err != nil {
-		slog.Error("Error closing reader", "handle", f, "error", err)
+		slog.Error("Error closing reader", "handle", f.id, "name", f.name, "error", err, "elapsed", time.Since(start))
 		return syscall.EIO
 	}
 
+	slog.Debug("Close done", "handle", f.id, "name", f.name, "elapsed", time.Since(start))
 	return 0
 }
 
 var _ = fs.FileReader((*file)(nil))
 
 func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	slog.Debug("Read start", "handle", f.id, "name", f.name, "offset", off, "len", len(dest))
+	start := time.Now()
+
 	n, err := f.reader.ReadAt(dest, off)
 	if err != nil && !errors.Is(err, io.EOF) {
-		slog.Error("Error reading", "handle", f, "len", len(dest), "offset", off, "error", err)
+		slog.Error("Error reading", "handle", f.id, "name", f.name, "offset", off, "len", len(dest), "error", err, "elapsed", time.Since(start))
 		return nil, syscall.EIO
 	}
+
+	slog.Debug("Read done", "handle", f.id, "name", f.name, "offset", off, "bytes", n, "elapsed", time.Since(start))
 
 	return &readResult{
 		buf: dest[:n],
@@ -214,9 +287,11 @@ func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 
 // FileSystem manages the root directory and dynamic file modifications.
 type FileSystem struct {
-	root    *dirNode
-	server  *fuse.Server
-	mounted atomic.Bool
+	root           *dirNode
+	server         *fuse.Server
+	mounted        atomic.Bool
+	batchDelay     time.Duration
+	narrowMissSize int64
 }
 
 // Mounted reports whether the tree is attached; false once it is unmounted,
@@ -251,7 +326,7 @@ func (fsManager *FileSystem) AddFile(fullpath string, modTime time.Time, openabl
 
 	// Add file
 	fileName := parts[len(parts)-1]
-	file := &fileNode{modTime: modTime, openable: openable, size: size}
+	file := &fileNode{modTime: modTime, openable: openable, size: size, batchDelay: fsManager.batchDelay, narrowMissSize: fsManager.narrowMissSize}
 	fileInode := currentInode.NewInode(context.Background(), file, fs.StableAttr{Mode: fuse.S_IFREG})
 	currentInode.AddChild(fileName, fileInode, true)
 	return nil

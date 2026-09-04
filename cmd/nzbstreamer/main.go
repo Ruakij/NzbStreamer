@@ -164,7 +164,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	// Mount
 	var mount *fusemount.FileSystem
 	if c.Mount.Path != "" {
-		mount = fusemount.Setup()
+		mount = fusemount.Setup(c.Mount.BatchDelay, int64(c.Mount.NarrowMissSize))
 		presenters = append(presenters, mount)
 	}
 
