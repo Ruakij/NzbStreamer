@@ -1,6 +1,15 @@
 version: "2"
 
 linters:
+  enable:
+    - bodyclose
+    - contextcheck
+    - errorlint
+    - gocritic
+    - nilerr
+    - rowserrcheck
+    - unconvert
+    - wastedassign
   exclusions:
     presets:
       # Close, Flush and os.Remove on a cleanup path. Every one of them here is a
