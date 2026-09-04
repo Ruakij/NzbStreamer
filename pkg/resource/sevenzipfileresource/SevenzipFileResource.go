@@ -1,3 +1,5 @@
+// Package sevenzipfileresource serves one file out of a sevenzip archive
+// delivered as a resource, decompressing on the fly.
 package sevenzipfileresource
 
 import (

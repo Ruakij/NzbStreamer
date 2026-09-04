@@ -1,3 +1,5 @@
+// Package diskcache stores byte blobs on disk under path-like keys, with
+// pluggable lru or fifo eviction.
 package diskcache
 
 import (

@@ -1,3 +1,5 @@
+// Package presentation is the seam between the service and its filesystem
+// views: an openable handle for one file, and the presenter that mounts it.
 package presentation
 
 import (

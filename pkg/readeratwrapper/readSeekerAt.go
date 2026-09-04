@@ -1,3 +1,5 @@
+// Package readeratwrapper turns io.Reader and io.ReadSeeker into io.ReaderAt,
+// pooling and batching so parallel readers share a single stream.
 package readeratwrapper
 
 import (

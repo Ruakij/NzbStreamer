@@ -1,3 +1,5 @@
+// Package mergerresource concatenates resources into one stream by reading
+// each in turn.
 package mergerresource
 
 import (

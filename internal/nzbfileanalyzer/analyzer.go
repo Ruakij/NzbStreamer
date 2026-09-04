@@ -1,3 +1,5 @@
+// Package nzbfileanalyzer reconciles the disagreeing size conventions of nzb
+// producers and estimates the size of each segment from them.
 package nzbfileanalyzer
 
 import (

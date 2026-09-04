@@ -2,6 +2,7 @@ package readaheadresource_test
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"math/rand"
 	"testing"
@@ -71,7 +72,7 @@ func TestReadReportsEndOnlyWhenEmpty(t *testing.T) {
 	buffer := make([]byte, len(want))
 	for read := 0; ; {
 		n, err := reader.Read(buffer)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			if n != 0 {
 				t.Fatalf("Read = %d bytes with io.EOF", n)
 			}

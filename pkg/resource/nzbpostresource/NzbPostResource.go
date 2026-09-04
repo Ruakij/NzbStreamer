@@ -1,3 +1,5 @@
+// Package nzbpostresource serves one usenet post: each read fetches, decodes
+// and stitches the corresponding segment from the server.
 package nzbpostresource
 
 import (

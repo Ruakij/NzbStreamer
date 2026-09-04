@@ -1,3 +1,5 @@
+// Package fileresource is a ReadSeekCloseableResource serving a file on
+// disk.
 package fileresource
 
 import (

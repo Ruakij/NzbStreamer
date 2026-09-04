@@ -1,3 +1,5 @@
+// Package parallelmergerresource concatenates resources into one stream,
+// prefetching upcoming ones while the current is read.
 package parallelmergerresource
 
 import (

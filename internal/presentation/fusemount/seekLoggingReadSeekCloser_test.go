@@ -213,7 +213,7 @@ func TestSeekLoggingReadSeekCloserComposesWithBatchingAdapter(t *testing.T) {
 	}
 
 	// beyond the end reads as zero bytes with EOF
-	if n, err := b.ReadAt(make([]byte, 4), 100); err != io.EOF || n != 0 {
+	if n, err := b.ReadAt(make([]byte, 4), 100); !errors.Is(err, io.EOF) || n != 0 {
 		t.Fatalf("ReadAt(100): n=%d err=%v, want 0 io.EOF", n, err)
 	}
 

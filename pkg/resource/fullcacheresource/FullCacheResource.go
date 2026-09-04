@@ -1,3 +1,6 @@
+// Package fullcacheresource fetches its underlying resource fully up front,
+// into a disk cache when one is configured, so later reads never touch the
+// server.
 package fullcacheresource
 
 import (

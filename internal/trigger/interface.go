@@ -1,3 +1,5 @@
+// Package trigger defines the hook by which an nzb source reports files
+// arriving and leaving.
 package trigger
 
 import "git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"

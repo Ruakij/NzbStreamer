@@ -1,3 +1,5 @@
+// Package nzbstore keeps the nzbs the service knows about and the outcome of
+// adding each one.
 package nzbstore
 
 import (

@@ -1,3 +1,5 @@
+// Package webdav presents the nzb tree over the WebDAV protocol, with
+// optional basic auth.
 package webdav
 
 import (

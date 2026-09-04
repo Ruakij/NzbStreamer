@@ -1,3 +1,5 @@
+// Package filenameops decides what role a filename plays in a release and
+// groups, sorts and matches the files of one release.
 package filenameops
 
 import (

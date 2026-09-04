@@ -1,3 +1,5 @@
+// Package readaheadresource wraps a resource to issue reads for future
+// positions before they are asked for.
 package readaheadresource
 
 import (

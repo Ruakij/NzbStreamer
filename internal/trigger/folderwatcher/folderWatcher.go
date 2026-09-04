@@ -1,3 +1,5 @@
+// Package folderwatcher is the trigger that polls a folder for nzb files and
+// optionally deletes each once the service takes it.
 package folderwatcher
 
 import (

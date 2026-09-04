@@ -1,3 +1,4 @@
+// Package fusemount serves the nzb tree as a FUSE filesystem.
 package fusemount
 
 import (

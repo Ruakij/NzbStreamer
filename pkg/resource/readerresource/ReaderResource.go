@@ -1,3 +1,5 @@
+// Package readerresource adapts an io.ReadSeekCloser into a
+// ReadSeekCloseableResource.
 package readerresource
 
 import (

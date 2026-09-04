@@ -1,3 +1,5 @@
+// Package resource defines the read, size and close interfaces every file
+// object in the streamer implements.
 package resource
 
 import (

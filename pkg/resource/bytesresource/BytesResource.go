@@ -1,3 +1,5 @@
+// Package bytesresource is a ReadSeekCloseableResource backed by an in-memory
+// byte slice.
 package bytesresource
 
 import (

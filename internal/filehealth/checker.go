@@ -1,3 +1,5 @@
+// Package filehealth probes a sample of a file's segments on the server and
+// reports the files that look too incomplete to serve.
 package filehealth
 
 import (

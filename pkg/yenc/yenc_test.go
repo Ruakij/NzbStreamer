@@ -96,7 +96,11 @@ func TestDecodeAllocatesForThePartNotTheFile(t *testing.T) {
 
 func TestDecodeRejectsATruncatedBody(t *testing.T) {
 	article := encode(bytes.Repeat([]byte{7}, 1000), 128)
-	cut := article[:strings.Index(article, "=yend")]
+	i := strings.Index(article, "=yend")
+	if i < 0 {
+		t.Fatal("encoded article lacks the end marker")
+	}
+	cut := article[:i]
 
 	if _, err := yenc.Decode(bufio.NewReader(strings.NewReader(cut))); err == nil {
 		t.Error("a body cut short decoded without an error")

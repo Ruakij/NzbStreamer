@@ -129,7 +129,7 @@ func TestReadSeekerBatchedAtShortReadIsEOF(t *testing.T) {
 	b := newBatched(t, f, time.Millisecond)
 
 	n, err := b.ReadAt(make([]byte, 16), 7)
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Fatalf("want io.EOF, got %v", err)
 	}
 	if n != 3 {
@@ -142,7 +142,7 @@ func TestReadSeekerBatchedAtAtAndBeyondEOF(t *testing.T) {
 	b := newBatched(t, f, time.Millisecond)
 
 	for _, off := range []int64{4, 100} {
-		if n, err := b.ReadAt(make([]byte, 4), off); err != io.EOF || n != 0 {
+		if n, err := b.ReadAt(make([]byte, 4), off); !errors.Is(err, io.EOF) || n != 0 {
 			t.Fatalf("off %d: n=%d err=%v, want 0 with io.EOF", off, n, err)
 		}
 	}

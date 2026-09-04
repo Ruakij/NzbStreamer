@@ -1,3 +1,5 @@
+// Package adaptiveparallelmergerresource merges a list of resources into one
+// stream, reading in parallel or sequentially depending on the access.
 package adaptiveparallelmergerresource
 
 import (

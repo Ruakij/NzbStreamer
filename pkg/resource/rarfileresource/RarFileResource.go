@@ -1,3 +1,5 @@
+// Package rarfileresource serves one file out of a rar archive whose volumes
+// arrive as resources.
 package rarfileresource
 
 import (

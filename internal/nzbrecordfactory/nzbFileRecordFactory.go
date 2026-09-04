@@ -1,3 +1,5 @@
+// Package nzbrecordfactory turns an nzb into the stack of resources that
+// serves each of the files it contains.
 package nzbrecordfactory
 
 import (

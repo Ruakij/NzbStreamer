@@ -1,3 +1,4 @@
+// Package iofsops flattens an fs.FS tree into a map of paths to file info.
 package iofsops
 
 import (

@@ -1,3 +1,5 @@
+// Package nzbservice is the download orchestrator: it drives nzbs from
+// arrival through the queue to the filesystem presenters.
 package nzbservice
 
 import (

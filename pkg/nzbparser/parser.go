@@ -1,3 +1,5 @@
+// Package nzbparser parses an nzb document into the files and segments it
+// describes, resolving charsets and guessing missing names.
 package nzbparser
 
 import (
