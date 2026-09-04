@@ -26,7 +26,7 @@ func Setup(level slog.Level) {
 
 // New is the handler Setup installs, writing to somewhere else.
 func New(out io.Writer, level slog.Level) slog.Handler {
-	return &handler{level: level, out: log.New(out, "", log.LstdFlags)}
+	return &handler{level: level, out: log.New(out, "", log.LstdFlags|log.Lmicroseconds)}
 }
 
 type handler struct {

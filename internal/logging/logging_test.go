@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/logging"
 )
@@ -28,5 +29,14 @@ func TestALineSaysWhichPackageItCameFrom(t *testing.T) {
 	}
 	if !strings.HasSuffix(lines[1], "WARN [logging_test] from a logger with attributes nzb=Some.Release") {
 		t.Errorf("a loggers own attributes stay behind the message, got %q", lines[1])
+	}
+
+	// The timestamp the log package writes has sub-second precision.
+	const layout = "2006/01/02 15:04:05.999999"
+	for _, line := range lines {
+		ts := line[:len(layout)]
+		if _, err := time.Parse(layout, ts); err != nil {
+			t.Errorf("timestamp %q lacks sub-second precision, line %q", ts, line)
+		}
 	}
 }
