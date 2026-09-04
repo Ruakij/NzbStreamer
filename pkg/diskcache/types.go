@@ -17,6 +17,7 @@ type Cache struct {
 	mu          *sync.RWMutex
 	items       map[string]CacheItemHeader
 	currentSize int64
+	indexed     chan struct{}
 }
 
 type CacheOptions struct {

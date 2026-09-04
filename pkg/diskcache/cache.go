@@ -43,31 +43,55 @@ func NewCache(options *CacheOptions) (*Cache, error) {
 		mu:      &sync.RWMutex{},
 		options: options,
 		items:   make(map[string]CacheItemHeader),
+		indexed: make(chan struct{}),
 	}
 
-	if err := cache.loadExistingItems(); err != nil {
-		return nil, err
-	}
-
-	// Run sizeEvict, when current size is too large for maxSize
-	if cache.options.MaxSize > 0 && cache.currentSize > cache.options.MaxSize {
-		err := cache.maxSizeEvict(0)
-		if err != nil {
-			return nil, fmt.Errorf("failed initial evicting: %w", err)
-		}
-	}
+	go cache.index()
 
 	return cache, nil
 }
 
-// loadExistingItems walks the cache dir, since a key may name a subdirectory.
-// The key of an item is its path relative to the cache dir.
-func (c *Cache) loadExistingItems() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// Indexed is closed once what was on disk at startup has been counted. Until
+// then the cache serves and stores normally; it just knows about less than it
+// holds, so it evicts less than it could.
+func (c *Cache) Indexed() <-chan struct{} {
+	return c.indexed
+}
 
+func (c *Cache) index() {
+	defer close(c.indexed)
+
+	slog.Debug("Indexing cache", "dir", c.options.CacheDir)
+	start := time.Now()
+
+	if err := c.loadExistingItems(); err != nil {
+		slog.Error("Failed indexing cache", "dir", c.options.CacheDir, "error", err)
+		return
+	}
+
+	items, size, maxSize := c.Stats()
+	slog.Info("Cache indexed", "items", items, "bytes", size, "max bytes", maxSize, "took", time.Since(start))
+
+	if maxSize > 0 && size > maxSize {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		if err := c.maxSizeEvict(0); err != nil {
+			slog.Error("Failed evicting down to the cache size limit", "bytes", size, "max bytes", maxSize, "error", err)
+		}
+	}
+}
+
+// loadExistingItems walks the cache dir, since a key may name a subdirectory.
+// The key of an item is its path relative to the cache dir. It takes the lock
+// per item rather than for the whole walk, so a read does not wait for it.
+func (c *Cache) loadExistingItems() error {
 	err := filepath.WalkDir(c.options.CacheDir, func(itemPath string, entry fs.DirEntry, err error) error {
 		if err != nil {
+			// Something removed while the walk runs is not an error
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		if entry.IsDir() {
@@ -79,13 +103,19 @@ func (c *Cache) loadExistingItems() error {
 
 		info, err := entry.Info()
 		if err != nil {
-			// An item evicted while the walk runs is not an error
 			return nil //nolint:nilerr
 		}
 
-		key := strings.TrimPrefix(itemPath, c.options.CacheDir+string(filepath.Separator))
+		key := filepath.ToSlash(strings.TrimPrefix(itemPath, c.options.CacheDir+string(filepath.Separator)))
 
-		c.items[filepath.ToSlash(key)] = CacheItemHeader{
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		// One written while the walk runs is already counted
+		if _, exists := c.items[key]; exists {
+			return nil
+		}
+		c.items[key] = CacheItemHeader{
 			ModTime: info.ModTime(),
 			Size:    info.Size(),
 		}
@@ -210,6 +240,10 @@ func (c *Cache) SetWithReader(key Key, reader io.Reader) (int64, error) {
 	header, exists := c.items[key.String()]
 	if !exists {
 		header = CacheItemHeader{ModTime: time.Now()}
+	} else {
+		// Replacing what is already counted, which the startup index may have
+		// been what counted
+		c.currentSize -= header.Size
 	}
 	header.Size = totalWritten
 	c.items[key.String()] = header

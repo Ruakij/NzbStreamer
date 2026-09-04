@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
 )
@@ -16,7 +17,32 @@ func newCache(t *testing.T, dir string) *diskcache.Cache {
 	if err != nil {
 		t.Fatalf("failed creating cache: %v", err)
 	}
+
+	select {
+	case <-cache.Indexed():
+	case <-time.After(10 * time.Second):
+		t.Fatal("cache did not finish indexing")
+	}
+
 	return cache
+}
+
+// Storing while the startup index runs must not count the item twice, since
+// both the walk and the write see it.
+func TestAnItemStoredTwiceIsCountedOnce(t *testing.T) {
+	dir := t.TempDir()
+	cache := newCache(t, dir)
+
+	for range 2 {
+		if _, err := cache.Set(diskcache.Key{"an-nzb", "segment-a"}, []byte("payload")); err != nil {
+			t.Fatalf("failed storing: %v", err)
+		}
+	}
+
+	items, bytes, _ := cache.Stats()
+	if items != 1 || bytes != int64(len("payload")) {
+		t.Errorf("got %d items of %d bytes, want 1 of %d", items, bytes, len("payload"))
+	}
 }
 
 func TestAKeyOfSeveralPartsIsStoredAsADirectory(t *testing.T) {
