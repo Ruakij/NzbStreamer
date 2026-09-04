@@ -34,7 +34,7 @@ func newTestResource(t *testing.T, key string, content []byte) (*fullcacheresour
 	}
 
 	underlying := &countingResource{content: content}
-	return fullcacheresource.NewFullCacheResource(underlying, key, cache, &fullcacheresource.FullCacheResourceOptions{}), underlying, cache
+	return fullcacheresource.NewFullCacheResource(underlying, diskcache.Key{key}, cache, &fullcacheresource.FullCacheResourceOptions{}), underlying, cache
 }
 
 func TestReadFetchesOnceAcrossManyReads(t *testing.T) {
@@ -102,7 +102,7 @@ func TestReadAfterEvictionRefetches(t *testing.T) {
 		t.Fatalf("failed first read: %v", err)
 	}
 
-	if err := cache.Remove("segment-c"); err != nil {
+	if err := cache.Remove(diskcache.Key{"segment-c"}); err != nil {
 		t.Fatalf("failed evicting: %v", err)
 	}
 

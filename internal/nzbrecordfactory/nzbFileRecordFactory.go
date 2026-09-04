@@ -1,11 +1,11 @@
 package nzbrecordfactory
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"path"
 	"slices"
+	"strings"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbfileanalyzer"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
@@ -70,7 +70,7 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData
 	known := f.knownSizes(nzbData)
 	sizer := f.sizer(nzbData, known)
 
-	rawFiles := f.buildRawFiles(nzbData, sizer, known)
+	rawFiles := f.buildRawFiles(nzbData, sizer, known, cachePrefix(nzbData))
 
 	files := make(map[string]presentation.Openable, len(rawFiles))
 	if err := f.expand(rawFiles, "", 0, nzbData.Meta["Password"], files); err != nil {
@@ -91,10 +91,8 @@ func (f *NzbFileFactory) DiscardSegmentStackFromNzbData(nzbData *nzbparser.NzbDa
 	ids := segmentIDs(nzbData)
 
 	if f.cache != nil {
-		for _, id := range ids {
-			if err := f.cache.Remove(id); err != nil && !errors.Is(err, diskcache.ErrItemNotFound) {
-				slog.Warn("Failed removing cached segment", "segment", id, "error", err)
-			}
+		if err := f.cache.RemoveAll(diskcache.Key{cachePrefix(nzbData)}); err != nil {
+			slog.Warn("Failed removing cached segments", "nzb", nzbData.MetaName, "error", err)
 		}
 	}
 
@@ -103,6 +101,10 @@ func (f *NzbFileFactory) DiscardSegmentStackFromNzbData(nzbData *nzbparser.NzbDa
 			slog.Warn("Failed forgetting segment sizes", "nzb", nzbData.MetaName, "error", err)
 		}
 	}
+}
+
+func cachePrefix(nzbData *nzbparser.NzbData) string {
+	return strings.ReplaceAll(nzbData.MetaName, "/", "_")
 }
 
 func segmentIDs(nzbData *nzbparser.NzbData) []string {
@@ -192,11 +194,11 @@ func settleConvention(nzbData *nzbparser.NzbData, sizer nzbfileanalyzer.SegmentS
 }
 
 // buildRawFiles creates the initial map of raw file resources
-func (f *NzbFileFactory) buildRawFiles(nzbData *nzbparser.NzbData, sizer nzbfileanalyzer.SegmentSizer, known map[string]int64) map[string]resource.ReadSeekCloseableResource {
+func (f *NzbFileFactory) buildRawFiles(nzbData *nzbparser.NzbData, sizer nzbfileanalyzer.SegmentSizer, known map[string]int64, cachePrefix string) map[string]resource.ReadSeekCloseableResource {
 	rawFiles := make(map[string]resource.ReadSeekCloseableResource, len(nzbData.Files))
 	for i := range nzbData.Files {
 		file := &nzbData.Files[i]
-		rawFiles[file.Filename] = f.BuildFileResourceFromNzbFile(file, sizer, known)
+		rawFiles[file.Filename] = f.BuildFileResourceFromNzbFile(file, sizer, known, cachePrefix)
 	}
 	return rawFiles
 }
@@ -275,7 +277,7 @@ func (f *NzbFileFactory) archiveOpener(extension string) func([]resource.ReadSee
 	return nil
 }
 
-func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, sizer nzbfileanalyzer.SegmentSizer, known map[string]int64) *adaptiveparallelmergerresource.AdaptiveParallelMergerResource {
+func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, sizer nzbfileanalyzer.SegmentSizer, known map[string]int64, cachePrefix string) *adaptiveparallelmergerresource.AdaptiveParallelMergerResource {
 	totalSegments := len(nzbFiles.Segments)
 	cachedSegmentResources := make([]resource.ReadSeekCloseableResource, 0, totalSegments)
 
@@ -289,7 +291,7 @@ func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, 
 		segmentResource := f.BuildResourceFromNzbSegment(nzbSegment, nzbFiles.Groups[0], sizer, known)
 		cachedSegmentResource := fullcacheresource.NewFullCacheResource(
 			segmentResource,
-			nzbSegment.ID,
+			diskcache.Key{cachePrefix, nzbSegment.ID},
 			f.cache,
 			&fullcacheresource.FullCacheResourceOptions{
 				SizeAlwaysFromResource: false,

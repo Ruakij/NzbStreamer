@@ -33,7 +33,7 @@ func keyMutex(key string) *sync.Mutex {
 // FullCacheResource caches underlying Record by fully reading its content into cache
 type FullCacheResource struct {
 	UnderlyingResource resource.ReadCloseableResource
-	CacheKey           string
+	CacheKey           diskcache.Key
 	Cache              *diskcache.Cache
 	cachedSize         int64
 	cachedSizeExact    bool
@@ -45,7 +45,7 @@ type FullCacheResourceOptions struct {
 	SizeAlwaysFromResource bool
 }
 
-func NewFullCacheResource(underlyingResource resource.ReadCloseableResource, cacheKey string, cache *diskcache.Cache, options *FullCacheResourceOptions) *FullCacheResource {
+func NewFullCacheResource(underlyingResource resource.ReadCloseableResource, cacheKey diskcache.Key, cache *diskcache.Cache, options *FullCacheResourceOptions) *FullCacheResource {
 	return &FullCacheResource{
 		UnderlyingResource: underlyingResource,
 		options:            options,
@@ -84,7 +84,7 @@ func (r *FullCacheResource) SizeHint() (int64, error) {
 // Prefetch stores the content in the cache without handing out a reader. A
 // demand read arriving later finds the file and does no fetch of its own.
 func (r *FullCacheResource) Prefetch() error {
-	mu := keyMutex(r.CacheKey)
+	mu := keyMutex(r.CacheKey.String())
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -125,7 +125,7 @@ func (r *FullCacheResource) Size() (int64, error) {
 }
 
 func (r *FullCacheResource) size() (size int64, exact bool, err error) {
-	mu := keyMutex(r.CacheKey)
+	mu := keyMutex(r.CacheKey.String())
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -275,7 +275,7 @@ func (r *FullCacheResourceReader) file() (*os.File, error) {
 
 // openCacheFile ensures the segment is cached and keeps its file open for subsequent reads.
 func (r *FullCacheResourceReader) openCacheFile() error {
-	mu := keyMutex(r.resource.CacheKey)
+	mu := keyMutex(r.resource.CacheKey.String())
 	mu.Lock()
 	defer mu.Unlock()
 

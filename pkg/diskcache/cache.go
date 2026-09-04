@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -58,30 +60,40 @@ func NewCache(options *CacheOptions) (*Cache, error) {
 	return cache, nil
 }
 
+// loadExistingItems walks the cache dir, since a key may name a subdirectory.
+// The key of an item is its path relative to the cache dir.
 func (c *Cache) loadExistingItems() error {
-	files, err := os.ReadDir(c.options.CacheDir)
-	if err != nil {
-		return fmt.Errorf("failed reading dir: %w", err)
-	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for _, file := range files {
-		filePath := filepath.Join(c.options.CacheDir, file.Name())
-		info, err := os.Stat(filePath)
+	err := filepath.WalkDir(c.options.CacheDir, func(itemPath string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			continue
+			return err
 		}
-		if info.IsDir() {
-			continue
+		if entry.IsDir() {
+			if itemPath == c.options.TmpCacheDir {
+				return fs.SkipDir
+			}
+			return nil
 		}
 
-		c.items[file.Name()] = CacheItemHeader{
+		info, err := entry.Info()
+		if err != nil {
+			// An item evicted while the walk runs is not an error
+			return nil //nolint:nilerr
+		}
+
+		key := strings.TrimPrefix(itemPath, c.options.CacheDir+string(filepath.Separator))
+
+		c.items[filepath.ToSlash(key)] = CacheItemHeader{
 			ModTime: info.ModTime(),
 			Size:    info.Size(),
 		}
 		c.currentSize += info.Size()
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed reading dir: %w", err)
 	}
 
 	return nil
@@ -112,14 +124,19 @@ func (c *Cache) maxSizeEvict(requiredSpace int64) error {
 
 const ReadBufferSize = 1024 * 1024 // 1MB buffer for reading, adjust size as needed
 
-func (c *Cache) SetWithReader(key string, reader io.Reader) (int64, error) {
-	// Define the path for the temporary file
-	tempFilePath := filepath.Join(c.options.TmpCacheDir, key)
-
-	file, err := os.Create(tempFilePath)
+func (c *Cache) SetWithReader(key Key, reader io.Reader) (int64, error) {
+	finalFilePath, err := key.path(c.options.CacheDir)
 	if err != nil {
-		return 0, fmt.Errorf("failed creating file '%s': %w", tempFilePath, err)
+		return 0, err
 	}
+
+	// The temp file is named by the cache rather than by the key, which may name
+	// a subdirectory the tmp dir does not have
+	file, err := os.CreateTemp(c.options.TmpCacheDir, "")
+	if err != nil {
+		return 0, fmt.Errorf("failed creating temp file: %w", err)
+	}
+	tempFilePath := file.Name()
 	defer func() {
 		file.Close()
 		// Clean up the temporary file in case of an error
@@ -180,7 +197,9 @@ func (c *Cache) SetWithReader(key string, reader io.Reader) (int64, error) {
 		return totalWritten, fmt.Errorf("failed syncing file: %w", err)
 	}
 
-	finalFilePath := filepath.Join(c.options.CacheDir, key)
+	if err = ensureDirExists(filepath.Dir(finalFilePath)); err != nil {
+		return totalWritten, err
+	}
 	err = os.Rename(tempFilePath, finalFilePath)
 	if err != nil {
 		return totalWritten, fmt.Errorf("faile drenaming file: %w", err)
@@ -188,59 +207,98 @@ func (c *Cache) SetWithReader(key string, reader io.Reader) (int64, error) {
 
 	// Successfully updated, update header
 	c.mu.Lock()
-	header, exists := c.items[key]
+	header, exists := c.items[key.String()]
 	if !exists {
 		header = CacheItemHeader{ModTime: time.Now()}
 	}
 	header.Size = totalWritten
-	c.items[key] = header
+	c.items[key.String()] = header
 	c.currentSize += totalWritten
 	c.mu.Unlock()
 
 	return totalWritten, nil
 }
 
-func (c *Cache) Set(key string, data []byte) (int64, error) {
+func (c *Cache) Set(key Key, data []byte) (int64, error) {
 	return c.SetWithReader(key, bytes.NewReader(data))
 }
 
-func (c *Cache) Remove(key string) error {
+func (c *Cache) Remove(key Key) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, exists := c.items[key]; !exists {
+	if _, exists := c.items[key.String()]; !exists {
 		return ErrItemNotFound
 	}
 
-	return c.removeFile(key)
+	return c.removeFile(key.String())
 }
 
+// RemoveAll drops every item whose key sits under prefix
+func (c *Cache) RemoveAll(prefix Key) error {
+	dirPath, err := prefix.path(c.options.CacheDir)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := os.RemoveAll(dirPath); err != nil {
+		return fmt.Errorf("removing dir failed: %w", err)
+	}
+
+	for key, header := range c.items {
+		if strings.HasPrefix(key, prefix.String()+"/") {
+			c.currentSize -= header.Size
+			delete(c.items, key)
+		}
+	}
+
+	return nil
+}
+
+// removeFile takes the joined key of the items map, which is what the eviction
+// policy hook picks from.
 func (c *Cache) removeFile(key string) error {
-	filePath := filepath.Join(c.options.CacheDir, key)
+	filePath, err := Key(strings.Split(key, "/")).path(c.options.CacheDir)
+	if err != nil {
+		return err
+	}
+
 	if _, exists := c.items[key]; exists {
 		if err := os.Remove(filePath); err != nil {
 			return fmt.Errorf("removing file failed: %w", err)
 		}
 		c.currentSize -= c.items[key].Size
 		delete(c.items, key)
+
+		// The last item leaves its directory behind; a directory still
+		// holding items fails this and stays
+		if dir := filepath.Dir(filePath); dir != c.options.CacheDir {
+			os.Remove(dir)
+		}
 	}
 	return nil
 }
 
 // Open returns the item's file and size. Callers may hold the file for as long as
 // they like: eviction only unlinks, so an open descriptor keeps working.
-func (c *Cache) Open(key string) (*os.File, int64, error) {
+func (c *Cache) Open(key Key) (*os.File, int64, error) {
 	c.mu.Lock()
-	header, exists := c.items[key]
+	header, exists := c.items[key.String()]
 	if !exists {
 		c.mu.Unlock()
 		return nil, 0, ErrItemNotFound
 	}
 	header.ModTime = time.Now()
-	c.items[key] = header
+	c.items[key.String()] = header
 	c.mu.Unlock()
 
-	filePath := filepath.Join(c.options.CacheDir, key)
+	filePath, err := key.path(c.options.CacheDir)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	// Mirror access-time to disk so LRU order survives a restart
 	if err := os.Chtimes(filePath, header.ModTime, header.ModTime); err != nil {
@@ -264,9 +322,9 @@ func (c *Cache) Stats() (items int, bytes, maxBytes int64) {
 	return len(c.items), c.currentSize, c.options.MaxSize
 }
 
-func (c *Cache) Exists(key string) (bool, CacheItemHeader) {
+func (c *Cache) Exists(key Key) (bool, CacheItemHeader) {
 	c.mu.RLock()
-	header, exists := c.items[key]
+	header, exists := c.items[key.String()]
 	c.mu.RUnlock()
 
 	return exists, header
