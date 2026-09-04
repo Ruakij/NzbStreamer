@@ -16,8 +16,6 @@ github.com/bodgit/sevenzip v1.6.5 h1:7H7BxgmeX0j6UX42lH+KXQ92WgMQJ49DoocFdfHbCng
 github.com/bodgit/sevenzip v1.6.5/go.mod h1:GhuB6Lq1xCpP1sps+horjZ8lgiKPJcy2zUX3prla9wc=
 github.com/bodgit/windows v1.0.1 h1:tF7K6KOluPYygXa3Z2594zxlkbKPAOvqr97etrGNIz4=
 github.com/bodgit/windows v1.0.1/go.mod h1:a6JLwrB4KrTR5hBpp8FI9/9W9jJfeQ2h4XDXU74ZCdM=
-github.com/chrisfarms/yenc v0.0.0-20140520125709-00bca2f8b3cb h1:BK9pqCayfiXrcRypTPxDsunA6hPJtOyOTJYY2DJ429g=
-github.com/chrisfarms/yenc v0.0.0-20140520125709-00bca2f8b3cb/go.mod h1:V4bkS2felTTOSIsYx9JivzrbdBOuksi02ZkzfbHUVAk=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dgryski/trifles v0.0.0-20230903005119-f50d829f2e54 h1:SG7nF6SRlWhcT7cNTs5R6Hk4V2lcmLz2NsG2VnInyNo=

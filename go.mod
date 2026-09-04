@@ -7,7 +7,6 @@ require (
 	github.com/agnivade/levenshtein v1.2.1
 	github.com/arl/statsviz v0.8.2
 	github.com/bodgit/sevenzip v1.6.5
-	github.com/chrisfarms/yenc v0.0.0-20140520125709-00bca2f8b3cb
 	github.com/emersion/go-webdav v0.7.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/hanwen/go-fuse/v2 v2.11.0

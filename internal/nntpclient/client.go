@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"strconv"
@@ -15,7 +14,8 @@ import (
 	"time"
 
 	"astuart.co/nntp"
-	"github.com/chrisfarms/yenc"
+
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/yenc"
 )
 
 // Response codes, from RFC 3977 and the AUTHINFO from RFC 4643.
@@ -275,21 +275,22 @@ func (c *Client) getSegment(group, id string) ([]byte, error) {
 		return nil, fmt.Errorf("%w to article '%s': %d %s", ErrUnexpectedResponse, id, res.Code, res.Message)
 	}
 
-	part, err := yenc.Decode(res.Body)
+	// The decoder reads the dot-stuffed stream itself, up to and including the
+	// terminator, so the connection is on the next response afterwards
+	reader, ok := res.Body.(*nntp.Reader)
+	if !ok {
+		c.drop(cn)
+		return nil, fmt.Errorf("%w to article '%s': body is a %T", ErrUnexpectedResponse, id, res.Body)
+	}
+
+	body, err := yenc.Decode(reader.R)
 	if err != nil {
 		c.drop(cn)
 		return nil, fmt.Errorf("failed yenc-decoding article '%s': %w", id, err)
 	}
 
-	// The decoder stops at the yenc trailer, which sits before the terminator of
-	// the nntp response; a connection is only reusable once that is consumed too
-	if _, err := io.Copy(io.Discard, res.Body); err != nil {
-		c.drop(cn)
-		return nil, fmt.Errorf("failed draining article '%s': %w", id, err)
-	}
-
 	c.release(cn)
-	return part.Body, nil
+	return body, nil
 }
 
 func (c *Client) segmentExists(id string) (bool, error) {
