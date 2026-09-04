@@ -1,33 +1,72 @@
 package fullcacheresource
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 )
 
+// maxPrealloc bounds what a size hint may reserve, since it comes from the nzb
+// and a segment is a fraction of it. Anything larger grows as it is read.
+const maxPrealloc = 4 << 20
+
+var ErrFetchAbandoned = errors.New("the fetch of this segment did not finish")
+
+// fetching is one download of a cache-key. Every reader that wants the key
+// while it runs waits on it and is served the same bytes, so a segment two
+// chunks of the readahead window straddle is fetched once and read back never.
+type fetching struct {
+	done chan struct{}
+	data []byte
+	err  error
+	refs int
+}
+
 var (
-	mutexMapMutex sync.Mutex             = sync.Mutex{}
-	mutexMap      map[string]*sync.Mutex = make(map[string]*sync.Mutex)
+	fetchingMutex sync.Mutex
+	fetchingByKey = make(map[string]*fetching)
 )
 
-// keyMutex serializes fetch-and-store for a cache-key, so concurrent readers of the
-// same segment download it once.
-func keyMutex(key string) *sync.Mutex {
-	mutexMapMutex.Lock()
-	defer mutexMapMutex.Unlock()
-
-	mu, exists := mutexMap[key]
-	if !exists {
-		mu = &sync.Mutex{}
-		mutexMap[key] = mu
+// fetchOnce runs fetch unless another caller is already running it for key, and
+// returns what that call produced. The entry is dropped once the last waiter
+// has it, so a later reader finds the item in the cache instead.
+func fetchOnce(key string, fetch func() ([]byte, error)) ([]byte, error) {
+	fetchingMutex.Lock()
+	f, joined := fetchingByKey[key]
+	if !joined {
+		f = &fetching{done: make(chan struct{})}
+		fetchingByKey[key] = f
 	}
-	return mu
+	f.refs++
+	fetchingMutex.Unlock()
+
+	if !joined {
+		// A fetch that panics still releases the waiters, with an error rather
+		// than the empty content they would take a nil for
+		f.err = ErrFetchAbandoned
+		func() {
+			defer close(f.done)
+			data, err := fetch()
+			f.data, f.err = data, err
+		}()
+	}
+	<-f.done
+
+	fetchingMutex.Lock()
+	f.refs--
+	if f.refs == 0 {
+		delete(fetchingByKey, key)
+	}
+	fetchingMutex.Unlock()
+
+	return f.data, f.err
 }
 
 // FullCacheResource caches underlying Record by fully reading its content into cache
@@ -35,9 +74,10 @@ type FullCacheResource struct {
 	UnderlyingResource resource.ReadCloseableResource
 	CacheKey           diskcache.Key
 	Cache              *diskcache.Cache
-	cachedSize         int64
-	cachedSizeExact    bool
-	options            *FullCacheResourceOptions
+	// Size is settled by whichever reader gets there first, and read by all of them
+	cachedSize      atomic.Int64
+	cachedSizeExact atomic.Bool
+	options         *FullCacheResourceOptions
 }
 
 type FullCacheResourceOptions struct {
@@ -46,13 +86,15 @@ type FullCacheResourceOptions struct {
 }
 
 func NewFullCacheResource(underlyingResource resource.ReadCloseableResource, cacheKey diskcache.Key, cache *diskcache.Cache, options *FullCacheResourceOptions) *FullCacheResource {
-	return &FullCacheResource{
+	r := &FullCacheResource{
 		UnderlyingResource: underlyingResource,
 		options:            options,
 		CacheKey:           cacheKey,
 		Cache:              cache,
-		cachedSize:         -1,
 	}
+	r.cachedSize.Store(-1)
+
+	return r
 }
 
 type FullCacheResourceReader struct {
@@ -61,7 +103,11 @@ type FullCacheResourceReader struct {
 	// Cache-file kept open for the readers lifetime; reads are positional, so no seeking
 	fileMutex sync.Mutex
 	cacheFile *os.File
-	index     int64
+	// data is what this reader fetched, where it did; a loaded reader has one of
+	// the two and an empty segment neither
+	data   []byte
+	loaded bool
+	index  int64
 }
 
 func (r *FullCacheResource) Open() (io.ReadSeekCloser, error) {
@@ -96,35 +142,29 @@ func (r *FullCacheResource) Size() (int64, error) {
 }
 
 func (r *FullCacheResource) size() (size int64, exact bool, err error) {
-	mu := keyMutex(r.CacheKey.String())
-	mu.Lock()
-	defer mu.Unlock()
-
-	if r.cachedSizeExact {
-		return r.cachedSize, true, nil
+	if r.cachedSizeExact.Load() {
+		return r.cachedSize.Load(), true, nil
 	}
 
 	if !r.options.SizeAlwaysFromResource {
 		if exists, header := r.Cache.Exists(r.CacheKey); exists {
-			r.cachedSize = header.Size
-			r.cachedSizeExact = true
-			return r.cachedSize, true, nil
+			r.setExactSize(header.Size)
+			return header.Size, true, nil
 		}
 	}
 
 	// Not cached yet, so only the underlying resource can answer
 	if sized, ok := r.UnderlyingResource.(resource.Sized); ok {
 		if size, err := sized.Size(); err == nil {
-			r.cachedSize = size
-			r.cachedSizeExact = true
+			r.setExactSize(size)
 			return size, true, nil
 		} else if !errors.Is(err, resource.ErrSizeNotExact) {
 			return 0, false, fmt.Errorf("failed getting size from underlying resource: %w", err)
 		}
 	}
 
-	if r.cachedSize >= 0 {
-		return r.cachedSize, false, nil
+	if size := r.cachedSize.Load(); size >= 0 {
+		return size, false, nil
 	}
 
 	size, err = r.UnderlyingResource.SizeHint()
@@ -132,14 +172,20 @@ func (r *FullCacheResource) size() (size int64, exact bool, err error) {
 		return 0, false, fmt.Errorf("failed getting size-hint from underlying resource: %w", err)
 	}
 
-	r.cachedSize = size
+	r.cachedSize.Store(size)
 	return size, false, nil
+}
+
+// setExactSize records a size known to be exact, which nothing revises later.
+func (r *FullCacheResource) setExactSize(size int64) {
+	r.cachedSize.Store(size)
+	r.cachedSizeExact.Store(true)
 }
 
 func (r *FullCacheResourceReader) Close() error {
 	r.fileMutex.Lock()
 	cacheFile := r.cacheFile
-	r.cacheFile = nil
+	r.cacheFile, r.data, r.loaded = nil, nil, false
 	r.fileMutex.Unlock()
 
 	if cacheFile != nil {
@@ -199,87 +245,108 @@ func (r *FullCacheResourceReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	if r.resource.cachedSize > 0 && r.index >= r.resource.cachedSize {
+	if size := r.resource.cachedSize.Load(); size > 0 && r.index >= size {
 		return 0, io.EOF
 	}
 
-	cacheFile, err := r.file()
-	if err != nil {
-		return 0, err
-	}
-
-	n, err := cacheFile.ReadAt(p, r.index)
+	n, err := r.ReadAt(p, r.index)
 	r.index += int64(n)
 
 	return n, err
 }
 
-// ReadAt reads at an absolute offset in the segment, which the cache-file
-// answers directly. It carries no position, so concurrent calls run in parallel.
+// ReadAt reads at an absolute offset in the segment, answered by the fetched
+// content or by the cache-file. It carries no position, so concurrent calls run
+// in parallel.
 func (r *FullCacheResourceReader) ReadAt(p []byte, off int64) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
 
-	cacheFile, err := r.file()
-	if err != nil {
-		return 0, err
-	}
-
-	//nolint:wrapcheck // io.EOF has to reach the caller unwrapped
-	return cacheFile.ReadAt(p, off)
-}
-
-// file is the cache-file of this reader, stored and opened on first use.
-func (r *FullCacheResourceReader) file() (*os.File, error) {
 	r.fileMutex.Lock()
-	defer r.fileMutex.Unlock()
-
-	if r.cacheFile == nil {
-		if err := r.openCacheFile(); err != nil {
-			return nil, err
+	if !r.loaded {
+		if err := r.load(); err != nil {
+			r.fileMutex.Unlock()
+			return 0, err
 		}
+		r.loaded = true
+	}
+	data, cacheFile := r.data, r.cacheFile
+	r.fileMutex.Unlock()
+
+	if cacheFile != nil {
+		//nolint:wrapcheck // io.EOF has to reach the caller unwrapped
+		return cacheFile.ReadAt(p, off)
 	}
 
-	return r.cacheFile, nil
+	if off >= int64(len(data)) {
+		return 0, io.EOF
+	}
+	n := copy(p, data[off:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+
+	return n, nil
 }
 
-// openCacheFile ensures the segment is cached and keeps its file open for subsequent reads.
-func (r *FullCacheResourceReader) openCacheFile() error {
-	mu := keyMutex(r.resource.CacheKey.String())
-	mu.Lock()
-	defer mu.Unlock()
-
+// load makes the segment readable, from the cache-file where it is cached and
+// from the content of a fetch where it is not. Requires fileMutex.
+func (r *FullCacheResourceReader) load() error {
 	file, size, err := r.resource.Cache.Open(r.resource.CacheKey)
-	if errors.Is(err, diskcache.ErrItemNotFound) {
-		// Item was evicted between reads, or was never fetched
-		if r.underlyingReader == nil {
-			r.underlyingReader, err = r.resource.UnderlyingResource.Open()
-			if err != nil {
-				return fmt.Errorf("failed reopening underlying resource: %w", err)
-			}
-		}
+	if err == nil {
+		r.cacheFile = file
+		r.resource.setExactSize(size)
 
-		if _, err := r.resource.Cache.SetWithReader(r.resource.CacheKey, r.underlyingReader); err != nil {
-			return err
-		}
-		// Free resources, we wont need it anymore
-		if err := r.underlyingReader.Close(); err != nil {
-			return fmt.Errorf("failed closing underlying reader: %w", err)
-		}
-		r.underlyingReader = nil
-
-		file, size, err = r.resource.Cache.Open(r.resource.CacheKey)
-		if err != nil {
-			return fmt.Errorf("failed getting item from cache immediately after writing: %w", err)
-		}
-	} else if err != nil {
+		return nil
+	}
+	if !errors.Is(err, diskcache.ErrItemNotFound) {
 		return fmt.Errorf("failed getting item from cache: %w", err)
 	}
 
-	r.cacheFile = file
-	r.resource.cachedSize = size
-	r.resource.cachedSizeExact = true
+	// Item was evicted between reads, or was never fetched
+	data, err := fetchOnce(r.resource.CacheKey.String(), r.fetch)
+	if err != nil {
+		return err
+	}
+
+	r.data = data
+	r.resource.setExactSize(int64(len(data)))
 
 	return nil
+}
+
+// fetch reads the underlying resource whole and stores it. Its content serves
+// the readers waiting on it, so a miss does not write the segment and read it
+// straight back.
+func (r *FullCacheResourceReader) fetch() ([]byte, error) {
+	if r.underlyingReader == nil {
+		reader, err := r.resource.UnderlyingResource.Open()
+		if err != nil {
+			return nil, fmt.Errorf("failed reopening underlying resource: %w", err)
+		}
+		r.underlyingReader = reader
+	}
+
+	// Sized from the hint, so the content is not copied through a growing buffer
+	hint, err := r.resource.UnderlyingResource.SizeHint()
+	if err != nil {
+		return nil, fmt.Errorf("failed getting size-hint from underlying resource: %w", err)
+	}
+	buffer := bytes.NewBuffer(make([]byte, 0, min(max(hint, 0), maxPrealloc)))
+	if _, err := buffer.ReadFrom(r.underlyingReader); err != nil {
+		return nil, fmt.Errorf("failed reading underlying resource: %w", err)
+	}
+
+	if err := r.underlyingReader.Close(); err != nil {
+		return nil, fmt.Errorf("failed closing underlying reader: %w", err)
+	}
+	r.underlyingReader = nil
+
+	data := buffer.Bytes()
+	if _, err := r.resource.Cache.Set(r.resource.CacheKey, data); err != nil {
+		return nil, err
+	}
+
+	return data, nil
 }
