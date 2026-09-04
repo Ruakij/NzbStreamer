@@ -36,14 +36,15 @@ import (
 
 const ShutdownTimeout time.Duration = 3 * time.Second
 
-const prefetchQueueMarginDivisor = 4
+const prefetchOvercommitDivisor = 4
 
-// prefetchQueueMargin defaults to a quarter of the pool.
-func prefetchQueueMargin(configured, conns int) int {
-	if configured >= 0 {
-		return configured
+// prefetchOvercommit defaults to a quarter of the pool. Every value is a legal
+// setting, so an unset one is nil rather than a sentinel.
+func prefetchOvercommit(configured *int, conns int) int {
+	if configured != nil {
+		return *configured
 	}
-	return conns / prefetchQueueMarginDivisor
+	return conns / prefetchOvercommitDivisor
 }
 
 // completeDir is the path a download client api reports as the folder finished
@@ -156,21 +157,14 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		Cooldown: c.Usenet.BreakerCooldown,
 	})
 
-	// Setup prefetch, sharing the connections and the queue for them across all
-	// open files. Any server may serve any fetch, so the concurrency is the sum;
-	// the queue margin is the pool's, since which servers a fetch queues on
-	// changes when a quota runs out.
-	prefetchMaxConn := c.Prefetch.MaxConn
-	if prefetchMaxConn <= 0 {
-		prefetchMaxConn = totalConns
-	}
+	overcommit := prefetchOvercommit(c.Prefetch.Overcommit, nntpPool.Conns())
 	adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{
-		Concurrency: prefetchMaxConn,
+		Concurrency: nntpPool.Conns() + max(overcommit, 0),
 		LeadTime:    c.Prefetch.Time,
 		MinLead:     c.Prefetch.MinSegments,
 		MaxLead:     c.Prefetch.MaxSegments,
-		Queued:      nntpPool.Waiting,
-		QueueMargin: prefetchQueueMargin(c.Prefetch.QueueMargin, nntpPool.Conns()),
+		Pressure:    nntpPool.Pressure,
+		Overcommit:  overcommit,
 	})
 
 	// Setup cache

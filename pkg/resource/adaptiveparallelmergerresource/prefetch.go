@@ -17,10 +17,11 @@ type PrefetchSettings struct {
 	// and stays bounded once it is. A MaxLead of 0 disables prefetching.
 	MinLead int
 	MaxLead int
-	// Queued reports fetches already waiting for a connection; prefetch stops
-	// adding once more than QueueMargin of them are. Nil drops the gate.
-	Queued      func() int
-	QueueMargin int
+	// Pressure reports fetches already waiting for a connection
+	// Nil drops the gate.
+	Pressure func() int
+	// Overcommit is the pressure prefetch stops at
+	Overcommit int
 }
 
 type prefetchSettings struct {
@@ -42,11 +43,11 @@ func SetPrefetch(settings PrefetchSettings) {
 	})
 }
 
-// queueIsFull reads the queue before the fetch is launched, so a burst can
-// overshoot it by whatever is submitted before any of it queues; the budget
-// bounds that.
-func (s *prefetchSettings) queueIsFull() bool {
-	return s.Queued != nil && s.Queued() > s.QueueMargin
+// atCapacity reads the pool before the fetch is launched, so a burst can
+// overshoot it by whatever is submitted before any of it reaches a connection;
+// the budget bounds that.
+func (s *prefetchSettings) atCapacity() bool {
+	return s.Pressure != nil && s.Pressure() >= s.Overcommit
 }
 
 // consumptionRate is what the consumer has taken per second since the read head
@@ -169,7 +170,7 @@ func (r *AdaptiveParallelMergerResourceReader) prefetchFrom(index int) {
 
 		// What is queued already keeps the connections busy; more only lengthens
 		// the wait of a demand read behind it
-		if settings.queueIsFull() {
+		if settings.atCapacity() {
 			r.prefetchedTo = i
 			return
 		}

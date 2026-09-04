@@ -25,6 +25,7 @@ func (f *fakeServer) SegmentExists(_ string) (bool, error) {
 
 func (f *fakeServer) Waiting() int { return 1 }
 func (f *fakeServer) Conns() int   { return 10 }
+func (f *fakeServer) Free() int    { return 4 }
 
 func TestPoolDescendsOnNotFound(t *testing.T) {
 	primary := &fakeServer{err: ErrArticleNotFound}

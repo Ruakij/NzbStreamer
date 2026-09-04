@@ -19,6 +19,7 @@ type Server interface {
 	SegmentExists(id string) (bool, error)
 	Waiting() int
 	Conns() int
+	Free() int
 }
 
 // QuotaStore persists what a metered server has spent. A count that does not
@@ -260,6 +261,13 @@ func (p *Pool) Waiting() int {
 // Conns reports the connections in play in that same group.
 func (p *Pool) Conns() int {
 	return p.sumActive(Server.Conns)
+}
+
+// Pressure reports the fetches queued for a connection less the connections
+// free, in that same group. It is negative while the group has spare capacity
+// and positive once work is waiting, so one number says how loaded it is.
+func (p *Pool) Pressure() int {
+	return p.sumActive(Server.Waiting) - p.sumActive(Server.Free)
 }
 
 func (p *Pool) sumActive(of func(Server) int) int {

@@ -105,6 +105,12 @@ func (c *Client) Conns() int {
 	return c.config.MaxConns
 }
 
+// Free reports how many of them are not in use. A slot is taken for the whole
+// of a request, so this counts the connections a fetch could start on now.
+func (c *Client) Free() int {
+	return len(c.slots)
+}
+
 func New(config Config) *Client {
 	if config.MaxConns < 1 {
 		config.MaxConns = 1

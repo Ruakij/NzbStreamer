@@ -110,48 +110,60 @@ func TestPrefetchWarmsMinimumLeadAhead(t *testing.T) {
 	}
 }
 
-// A queue past the margin means the connections have work waiting, so prefetch
-// stops rather than putting a demand read further back in it.
-func TestPrefetchStopsAtTheQueueMargin(t *testing.T) {
-	const margin = 2
+// Pressure at the overcommit means the connections are as loaded as they may
+// get, so prefetch stops rather than putting a demand read further back.
+// Overcommit is signed, so the same gate expresses leaving connections free,
+// filling them exactly, and queueing beyond them.
+func TestPrefetchStopsAtTheOvercommit(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		overcommit int
+		// stops is a pressure the gate must refuse, runs one it must allow
+		stops, runs int
+	}{
+		{"leaving connections free", -4, -4, -5},
+		{"filling the free connections", 0, 0, -1},
+		{"queueing beyond them", 2, 2, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pressure := test.stops
+			adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{
+				Concurrency: 8,
+				LeadTime:    time.Minute,
+				MinLead:     4,
+				MaxLead:     8,
+				Pressure:    func() int { return pressure },
+				Overcommit:  test.overcommit,
+			})
+			defer adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{})
 
-	queued := 0
-	adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{
-		Concurrency: 8,
-		LeadTime:    time.Minute,
-		MinLead:     4,
-		MaxLead:     8,
-		Queued:      func() int { return queued },
-		QueueMargin: margin,
-	})
-	defer adaptiveparallelmergerresource.SetPrefetch(adaptiveparallelmergerresource.PrefetchSettings{})
+			resources, counters := countingResources(20, 10)
 
-	resources, counters := countingResources(20, 10)
+			reader, err := adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(resources).Open()
+			if err != nil {
+				t.Fatalf("failed opening merger: %v", err)
+			}
+			defer reader.Close()
 
-	reader, err := adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(resources).Open()
-	if err != nil {
-		t.Fatalf("failed opening merger: %v", err)
+			if _, err := reader.Read(make([]byte, 5)); err != nil {
+				t.Fatalf("failed reading: %v", err)
+			}
+			for i, counter := range counters {
+				if got := counter.prefetchs.Load(); got != 0 {
+					t.Fatalf("resource %d was prefetched %d times at pressure %d", i, got, pressure)
+				}
+			}
+
+			// The pool has room again, so the next read fills the lead
+			pressure = test.runs
+			if _, err := reader.Read(make([]byte, 5)); err != nil {
+				t.Fatalf("failed reading: %v", err)
+			}
+			waitFor(t, "the lead to be warmed once the pool had room", func() bool {
+				return counters[3].prefetchs.Load() == 1
+			})
+		})
 	}
-	defer reader.Close()
-
-	queued = margin + 1
-	if _, err := reader.Read(make([]byte, 5)); err != nil {
-		t.Fatalf("failed reading: %v", err)
-	}
-	for i, counter := range counters {
-		if got := counter.prefetchs.Load(); got != 0 {
-			t.Fatalf("resource %d was prefetched %d times with the queue past its margin", i, got)
-		}
-	}
-
-	// The queue drained, so the next read fills the lead again
-	queued = 0
-	if _, err := reader.Read(make([]byte, 5)); err != nil {
-		t.Fatalf("failed reading: %v", err)
-	}
-	waitFor(t, "the lead to be warmed once the queue drained", func() bool {
-		return counters[3].prefetchs.Load() == 1
-	})
 }
 
 func TestReadersAreOpenedLazilyAndClosedBehind(t *testing.T) {
