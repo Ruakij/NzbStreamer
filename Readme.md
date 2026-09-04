@@ -79,6 +79,8 @@ This is required if you want to use the mount on the host or in a different cont
 3. The container must have the `SYS_ADMIN` capability to allow the use of FUSE.
 4. The `/dev/fuse` device must be accessible to the container.
 
+The image runs as uid 1000, so every bind-mounted directory must be writable by it, and the mountpoint must be owned by it, which is what `fusermount` checks before mounting for a non-root user. `chown 1000:1000 cache watch metadata mount` covers it; pass a different `user:` if that uid does not fit.
+
 # 3. Problems
 
 ## 3.1. Segment- and File-sizes
