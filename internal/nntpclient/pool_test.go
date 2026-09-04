@@ -74,6 +74,41 @@ func TestPoolStopsOnAuthFailure(t *testing.T) {
 	}
 }
 
+// probeServer answers a probe and remembers whether it was asked.
+type probeServer struct {
+	fakeServer
+	err    error
+	probed bool
+}
+
+func (p *probeServer) Probe() error {
+	p.probed = true
+	return p.err
+}
+
+func TestProbingReportsARejectedServerBeforeAnythingReadsFromIt(t *testing.T) {
+	rejected := &probeServer{err: ErrAuthFailed}
+	skipped := &probeServer{}
+	pool := NewPool([]ServerConfig{
+		{Server: rejected, Name: "primary", Priority: 1, Probe: true},
+		{Server: skipped, Name: "backup", Priority: 2},
+	}, nil, BreakerConfig{})
+
+	pool.Probe()
+
+	if !rejected.probed || skipped.probed {
+		t.Fatalf("probed primary %v and backup %v; want only the one configured for it", rejected.probed, skipped.probed)
+	}
+
+	health := pool.Health()
+	if health[0].Up || health[0].Reason != "auth rejected" {
+		t.Fatalf("primary is %+v; want it out of rotation for its credentials", health[0])
+	}
+	if !health[1].Up {
+		t.Fatalf("backup is %+v; want it untouched", health[1])
+	}
+}
+
 func TestPoolRoundRobinsWithinAPriority(t *testing.T) {
 	first := &fakeServer{body: []byte("a")}
 	second := &fakeServer{body: []byte("b")}

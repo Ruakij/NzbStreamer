@@ -147,6 +147,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 			Priority:    server.Priority,
 			QuotaBytes:  server.QuotaBytes,
 			QuotaPeriod: server.QuotaPeriod,
+			Probe:       server.Probe,
 		})
 		totalConns += server.MaxConn
 	}
@@ -255,6 +256,8 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	// runs in the background and the presenters are up while it fills in; what
 	// must not read a half-restored library waits for service.Ready
 	go func() {
+		nntpPool.Probe()
+
 		if err := service.Init(); err != nil {
 			slog.Error("Failed initializing service", "error", err)
 			os.Exit(1)

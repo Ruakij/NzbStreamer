@@ -39,6 +39,9 @@ type ServerConfig struct {
 	Priority    int
 	QuotaBytes  int64
 	QuotaPeriod time.Duration
+	// Probe checks the server at startup rather than leaving it to the first
+	// read that needs it
+	Probe bool
 }
 
 type poolServer struct {
@@ -112,6 +115,45 @@ func NewPool(servers []ServerConfig, store QuotaStore, breaker BreakerConfig) *P
 		return pool.priorities[i].servers[0].Priority < pool.priorities[j].servers[0].Priority
 	})
 	return pool
+}
+
+// Probe asks each server configured for it whether it answers and accepts the
+// credentials, and reports what it found. A rejection disables the server here
+// exactly as one during a fetch would, so the health endpoint says so from the
+// start instead of after the first read that happened to need that server.
+//
+// The servers are asked at once, since the startup this holds up would
+// otherwise wait out the timeout and the retries of every unreachable one in
+// turn.
+func (p *Pool) Probe() {
+	var probes sync.WaitGroup
+	var probed, failed atomic.Int64
+	for _, pr := range p.priorities {
+		for _, server := range pr.servers {
+			prober, ok := server.Server.(interface{ Probe() error })
+			if !server.ServerConfig.Probe || !ok {
+				continue
+			}
+
+			probed.Add(1)
+			probes.Add(1)
+			go func() {
+				defer probes.Done()
+
+				slog.Debug("Probing news server", "server", server.Name)
+				if err := prober.Probe(); err != nil {
+					failed.Add(1)
+					p.failed(server, err)
+					slog.Debug("News server failed", "server", server.Name, "error", err)
+					return
+				}
+				slog.Debug("News server ok", "server", server.Name)
+			}()
+		}
+	}
+	probes.Wait()
+
+	slog.Info("News servers probed", "servers", probed.Load(), "unreachable", failed.Load())
 }
 
 // GetSegment tries each server in turn until one has the article.

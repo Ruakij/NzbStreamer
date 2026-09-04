@@ -19,6 +19,7 @@ type UsenetServerConfig struct {
 	Priority    int           `env:"PRIORITY"`                   // Priority, lower is chosen first; servers sharing a priority share the load round robin. Defaults to 1 for the unindexed server and to its index for the others
 	QuotaBytes  int64         `env:"QUOTA_BYTES"`                // Bytes this server may serve per period; 0 is unmetered. A server whose quota is spent is skipped as if it were not configured
 	QuotaPeriod time.Duration `env:"QUOTA_PERIOD, default=720h"` // How long a quota lasts before it resets; the reset happens on the first fetch after it ends
+	Probe       bool          `env:"PROBE, default=true"`        // Connect to the server at startup, so rejected credentials and a host that is unreachable are reported then rather than by the first read that needs it
 }
 
 // UsenetConfig is what every server shares: they are properties of how this

@@ -30,7 +30,7 @@ func TestUsenetServersReadsIndexedServers(t *testing.T) {
 	}
 	want := UsenetServerConfig{
 		Host: "block.example", Port: 563, TLS: true, User: "user", Password: "pass",
-		MaxConn: 5, Priority: 2, QuotaBytes: 1000, QuotaPeriod: 24 * time.Hour,
+		MaxConn: 5, Priority: 2, QuotaBytes: 1000, QuotaPeriod: 24 * time.Hour, Probe: true,
 	}
 	if servers[1] != want {
 		t.Fatalf("second server is %+v; want %+v", servers[1], want)

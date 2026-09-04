@@ -124,6 +124,7 @@ Zip archives are not unpacked.
 | `USENET_n_PRIORITY`               | n                      | Priority, lower is chosen first; servers sharing a priority share the load round robin |
 | `USENET_n_QUOTA_BYTES`            | 0                      | Bytes this server may serve per period; 0 is unmetered |
 | `USENET_n_QUOTA_PERIOD`           | 720h                   | Quota-lifetime |
+| `USENET_n_PROBE`                  | true                   | Connect to the server at startup, so rejected credentials and an unreachable host are immediately detected |
 | **Usenet**, shared by every server
 | `USENET_MAX_ATTEMPTS`             | 3                      | Attempts a request gets before its error is reported |
 | `USENET_RETRY_BACKOFF`            | 1s                     | Wait after the first failed attempt, doubled after each further one |

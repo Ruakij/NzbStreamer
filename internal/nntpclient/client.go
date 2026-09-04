@@ -209,6 +209,21 @@ func (c *Client) SegmentExists(id string) (bool, error) {
 	return exists, err
 }
 
+// Probe takes a connection and gives it straight back, which dials, reads the
+// greeting and authenticates. Nothing else asks a server anything until a read
+// needs it, so a wrong password is otherwise discovered whenever that happens.
+// The connection stays in the pool, warm.
+func (c *Client) Probe() error {
+	return c.retry("probing "+c.config.Host, func() error {
+		cn, _, err := c.acquire()
+		if err != nil {
+			return err
+		}
+		c.release(cn)
+		return nil
+	})
+}
+
 // retry runs op until it succeeds or the attempts run out, waiting a doubling
 // backoff in between. A missing article is the servers final answer, and so are
 // rejected credentials: both are reported as they are rather than retried.
