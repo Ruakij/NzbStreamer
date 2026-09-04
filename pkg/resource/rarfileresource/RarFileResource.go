@@ -62,8 +62,9 @@ func (r *RarFileResource) options() []rardecode.Option {
 	}
 }
 
-// GetRarFiles lists up to limit members. It reads block headers only and stops
-// once limit is reached, so it touches no more volumes than it has to.
+// GetRarFiles lists up to limit members, or all of them when limit is not
+// positive. It reads block headers only and stops once limit is reached, so a
+// bounded listing touches no more volumes than it has to.
 func (r *RarFileResource) GetRarFiles(limit int) ([]*rardecode.FileHeader, error) {
 	reader, err := rardecode.OpenReader(firstVolumeName, r.options()...)
 	if err != nil {
@@ -72,7 +73,7 @@ func (r *RarFileResource) GetRarFiles(limit int) ([]*rardecode.FileHeader, error
 	defer reader.Close()
 
 	headers := make([]*rardecode.FileHeader, 0, 1) // Expect at least 1 file
-	for len(headers) < limit {
+	for limit <= 0 || len(headers) < limit {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
 			break

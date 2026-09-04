@@ -4,18 +4,46 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"strings"
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 )
 
 // firstVolumeName is the name the archive is opened under. rardecode derives
-// every following volume name from it by incrementing the digit run, so
-// volumeName has to stay in step with it.
+// every following volume name from it, so volumeName and oldVolumeName have to
+// stay in step with it.
 const firstVolumeName = "volume.part0001.rar"
 
+// volumeName is the new naming scheme, name.part0002.rar upwards.
 func volumeName(index int) string {
 	return fmt.Sprintf("volume.part%04d.rar", index+1)
+}
+
+// oldVolumeName is the next name in the old naming scheme, .r00 upwards, which
+// rardecode derives from the previous volume by incrementing the last three
+// characters of the extension. Which scheme it uses comes from the archive
+// header, not from the name it was opened with, so a volume answers to both.
+func oldVolumeName(previous string) string {
+	dot := strings.LastIndex(previous, ".")
+	extension := []byte(previous[dot+1:])
+
+	if len(extension) < 3 || extension[1] < '0' || extension[1] > '9' || extension[2] < '0' || extension[2] > '9' {
+		return previous[:dot+2] + "00"
+	}
+
+	for i := 2; i >= 0; i-- {
+		if extension[i] != '9' {
+			extension[i]++
+			break
+		}
+		if i == 0 {
+			extension[i] = 'A'
+		} else {
+			extension[i] = '0'
+		}
+	}
+	return previous[:dot+1] + string(extension)
 }
 
 // volumeFS presents an ordered set of rar volumes to rardecode, which addresses
@@ -28,9 +56,14 @@ type volumeFS struct {
 }
 
 func newVolumeFS(volumes []resource.ReadSeekCloseableResource) *volumeFS {
-	index := make(map[string]int, len(volumes))
+	index := make(map[string]int, 2*len(volumes))
+	old := firstVolumeName
 	for i := range volumes {
 		index[volumeName(i)] = i
+		if i > 0 {
+			old = oldVolumeName(old)
+			index[old] = i
+		}
 	}
 	return &volumeFS{volumes: volumes, index: index}
 }

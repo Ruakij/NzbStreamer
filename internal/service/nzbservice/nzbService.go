@@ -18,6 +18,7 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/trigger"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/filenameops"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 	"github.com/agnivade/levenshtein"
 	"golang.org/x/sync/errgroup"
 )
@@ -349,6 +350,14 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 // A decoder stream is left alone: its length is exact from the archive header
 // and seeking it would decode the whole member.
 func measureFile(file presentation.Openable) error {
+	// A file that already answers exactly has nothing to measure, and opening it
+	// to find that out would walk an archives headers
+	if sized, ok := file.(resource.Sized); ok {
+		if _, err := sized.Size(); err == nil {
+			return nil
+		}
+	}
+
 	reader, err := file.Open()
 	if err != nil {
 		return fmt.Errorf("failed opening file: %w", err)
@@ -383,7 +392,14 @@ func (s *Service) isBlacklistedNzbFile(filename string) bool {
 	return false
 }
 
+// deobfuscateFilename names a file after the nzb where its own name says
+// nothing. Only content is renamed: an .nfo or an .sfv carries no obfuscated
+// name worth repairing, and naming it after the release makes it look like one.
 func (s *Service) deobfuscateFilename(filepath string, paths []string, nzbData *nzbparser.NzbData) string {
+	if filenameops.Classify(filepath) != filenameops.ClassContent {
+		return filepath
+	}
+
 	filename := path.Base(filepath)
 	basePath := strings.TrimLeft(filepath[:len(filepath)-len(filename)], "/")
 	fileExtension := path.Ext(filename)

@@ -32,6 +32,44 @@ func TestVolumeNamesFormRarSequence(t *testing.T) {
 	}
 }
 
+// An archive whose header asks for the old naming scheme is walked as .r00
+// upwards from the first volumes name, so the same volume answers to both.
+func TestVolumeFSServesOldVolumeNames(t *testing.T) {
+	fsys := newTestFS("first", "second", "third")
+
+	for name, want := range map[string]string{
+		"volume.part0001.r00": "second",
+		"volume.part0001.r01": "third",
+	} {
+		file, err := fsys.Open(name)
+		if err != nil {
+			t.Fatalf("opening %s: %v", name, err)
+		}
+		got, err := io.ReadAll(file)
+		file.Close()
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		if string(got) != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestOldVolumeNamesFormRarSequence(t *testing.T) {
+	cases := map[string]string{
+		"volume.part0001.rar": "volume.part0001.r00",
+		"volume.part0001.r00": "volume.part0001.r01",
+		"volume.part0001.r09": "volume.part0001.r10",
+		"volume.part0001.r99": "volume.part0001.s00",
+	}
+	for previous, want := range cases {
+		if got := oldVolumeName(previous); got != want {
+			t.Errorf("oldVolumeName(%q) = %q, want %q", previous, got, want)
+		}
+	}
+}
+
 func TestVolumeFSServesVolumesInOrder(t *testing.T) {
 	fsys := newTestFS("first", "second")
 
