@@ -131,7 +131,7 @@ func (p *Pool) Probe() {
 	for _, pr := range p.priorities {
 		for _, server := range pr.servers {
 			prober, ok := server.Server.(interface{ Probe() error })
-			if !server.ServerConfig.Probe || !ok {
+			if !server.Probe || !ok {
 				continue
 			}
 
