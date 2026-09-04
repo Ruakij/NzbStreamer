@@ -134,7 +134,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 			}),
 			Name:        server.Host,
 			Priority:    server.Priority,
-			QuotaBytes:  server.QuotaBytes,
+			QuotaBytes:  int64(server.QuotaBytes),
 			QuotaPeriod: server.QuotaPeriod,
 			Probe:       server.Probe,
 		})
@@ -148,7 +148,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	// Setup cache
 	segmentCache, err := diskcache.NewCache(&diskcache.CacheOptions{
 		CacheDir:             c.Cache.Path,
-		MaxSize:              c.Cache.MaxSize,
+		MaxSize:              int64(c.Cache.MaxSize),
 		MaxSizeEvictBlocking: false,
 	})
 	if err != nil {
@@ -170,7 +170,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 
 	// Setup services
 	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpPool.GetSegment, store, c.NzbConfig.ProbeSizeConvention, c.NzbConfig.MaxArchiveDepth)
-	factory.SetReadahead(c.Readahead.Size, c.Readahead.Chunk)
+	factory.SetReadahead(int(c.Readahead.Size), int(c.Readahead.Chunk))
 
 	folderTrigger := folderwatcher.NewFolderWatcher(c.FolderWatcher.Path, c.FolderWatcher.Consume)
 
@@ -210,7 +210,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	// Mount before the service restores its tree: an inode only takes children
 	// once the filesystem it belongs to is mounted
 	if c.Mount.Path != "" {
-		if err = mount.Mount(c.Mount.Path, c.Mount.Options, c.Mount.MaxBackground, c.Mount.MaxReadAhead); err != nil {
+		if err = mount.Mount(c.Mount.Path, c.Mount.Options, c.Mount.MaxBackground, int(c.Mount.MaxReadAhead)); err != nil {
 			slog.Error("Mounting failed", "error", err)
 			os.Exit(1)
 		}

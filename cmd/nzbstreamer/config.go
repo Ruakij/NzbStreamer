@@ -17,7 +17,7 @@ type UsenetServerConfig struct {
 	Password    string        `env:"PASS, required"`             // Usenet password
 	MaxConn     int           `env:"MAX_CONN, default=20"`       // Maximum Usenet connections to use
 	Priority    int           `env:"PRIORITY"`                   // Priority, lower is chosen first; servers sharing a priority share the load round robin. Defaults to 1 for the unindexed server and to its index for the others
-	QuotaBytes  int64         `env:"QUOTA_BYTES"`                // Bytes this server may serve per period; 0 is unmetered. A server whose quota is spent is skipped as if it were not configured
+	QuotaBytes  Bytes         `env:"QUOTA_BYTES"`                // Bytes this server may serve per period; 0 is unmetered. A server whose quota is spent is skipped as if it were not configured
 	QuotaPeriod time.Duration `env:"QUOTA_PERIOD, default=720h"` // How long a quota lasts before it resets; the reset happens on the first fetch after it ends
 	Probe       bool          `env:"PROBE, default=true"`        // Connect to the server at startup, so rejected credentials and a host that is unreachable are reported then rather than by the first read that needs it
 }
@@ -57,13 +57,13 @@ type MountConfig struct {
 	Options []string `env:"MOUNT_OPTIONS"` // Additional Options for FUSE mount; See mount.fuse3 Manpage for more information
 	// A read here waits on a news server, so these decide the throughput of a
 	// sequential read rather than the connections do
-	MaxBackground int `env:"MOUNT_MAX_BACKGROUND, default=64"`     // Reads the kernel may have in flight per mount
-	MaxReadAhead  int `env:"MOUNT_MAX_READAHEAD, default=8388608"` // Bytes the kernel reads ahead of a sequential reader; a request is capped at 1 MiB, so this is how many it issues
+	MaxBackground int   `env:"MOUNT_MAX_BACKGROUND, default=64"` // Reads the kernel may have in flight per mount
+	MaxReadAhead  Bytes `env:"MOUNT_MAX_READAHEAD, default=8M"`  // Bytes the kernel reads ahead of a sequential reader; a request is capped at 1 MiB, so this is how many it issues
 }
 
 type CacheConfig struct {
 	Path    string `env:"CACHE_PATH, default=.cache"` // Path for segment-cache
-	MaxSize int64  `env:"CACHE_MAX_SIZE, default=0"`  // Maximum cache size in bytes, if unset allows unlimited size (not recommended)
+	MaxSize Bytes  `env:"CACHE_MAX_SIZE, default=0"`  // Maximum cache size, if unset allows unlimited size (not recommended)
 }
 
 type MetadataConfig struct {
@@ -71,8 +71,8 @@ type MetadataConfig struct {
 }
 
 type ReadaheadConfig struct {
-	Size  int `env:"READAHEAD_SIZE, default=33554432"` // Bytes held warm ahead of each open file; 0 disables readahead
-	Chunk int `env:"READAHEAD_CHUNK, default=1048576"` // Bytes fetched per chunk; SIZE/CHUNK is how many run at once, and one chunk is served segment by segment, so around one segment reads fastest
+	Size  Bytes `env:"READAHEAD_SIZE, default=32M"` // Bytes held warm ahead of each open file; 0 disables readahead
+	Chunk Bytes `env:"READAHEAD_CHUNK, default=1M"` // Bytes fetched per chunk; SIZE/CHUNK is how many run at once, and one chunk is served segment by segment, so around one segment reads fastest
 }
 
 type FolderWatcherConfig struct {
