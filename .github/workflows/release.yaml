@@ -33,6 +33,8 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          # ci built this commit already; the layers it exported are the same ones
+          cache-from: type=gha
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           sbom: true

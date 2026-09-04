@@ -12,36 +12,61 @@ on:
 permissions:
   contents: read
 
+# A push supersedes the run of the commit before it, so drop that one instead of
+# waiting for a verdict on code nobody has any more.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   go:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check:
+          - gofmt -l cmd internal pkg | tee /dev/stderr | (! read)
+          - go vet ./...
+          - go test -race ./...
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: gofmt -l cmd internal pkg | tee /dev/stderr | (! read)
-      - run: go vet ./...
-      - run: go test -race ./...
+      - run: ${{ matrix.check }}
+
+  lint:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.2
 
-  security:
+  # Reachability-aware, so it only fails on vulnerabilities we actually call.
+  # It installs its own Go, hence no setup-go step; go-version-input must be
+  # cleared or it collides with go-version-file.
+  govulncheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # Reachability-aware, so it only fails on vulnerabilities we actually call.
-      # It installs its own Go, hence no setup-go step; go-version-input must be
-      # cleared or it collides with go-version-file.
       - uses: golang/govulncheck-action@v1.1.0
         with:
           repo-checkout: false
           go-version-file: go.mod
           go-version-input: ""
-      # Source-tree scan: go.sum against the vulnerability databases trivy tracks,
-      # plus committed secrets, which matter here because the config this project
-      # takes is news server credentials.
+
+  # Source-tree scan: go.sum against the vulnerability databases trivy tracks,
+  # plus committed secrets, which matter here because the config this project
+  # takes is news server credentials.
+  source-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
       - uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
@@ -63,6 +88,8 @@ jobs:
           push: false
           load: true
           tags: nzbstreamer:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       - uses: aquasecurity/trivy-action@v0.36.0
         # The yaml ignore file is not one of the paths trivy picks up on its own
         env:
