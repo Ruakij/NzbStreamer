@@ -2,6 +2,7 @@ package sqlstore
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -126,7 +127,7 @@ func (s *Store) flushSegmentSizes() {
 	}
 
 	if err := s.writeSegmentSizes(pending); err != nil {
-		logger.Error("Failed storing segment sizes", "count", len(pending), "error", err)
+		slog.Error("Failed storing segment sizes", "count", len(pending), "error", err)
 	}
 }
 

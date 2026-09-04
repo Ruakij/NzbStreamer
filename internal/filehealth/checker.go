@@ -11,8 +11,6 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
 
-var logger = slog.With("Module", "FileHealth")
-
 var ErrSegmentsMissing = errors.New("segments missing on server")
 
 // SegmentExistsFunc reports whether a segment is retrievable from the server.
@@ -119,7 +117,7 @@ func (c *DefaultChecker) CheckFiles(nzbData *nzbparser.NzbData) []error {
 		case decide(result.missing, result.checked, limit, c.config.Confidence) == verdictDiscard:
 			err = fmt.Errorf("%w: %d of %d checked", ErrSegmentsMissing, result.missing, result.checked)
 		case result.missing > 0:
-			logger.Warn("File has missing segments, but within what par2 could repair",
+			slog.Warn("File has missing segments, but within what par2 could repair",
 				"file", content[i].Filename,
 				"missing", result.missing,
 				"checked", result.checked,

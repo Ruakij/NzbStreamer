@@ -3,6 +3,7 @@ package nzbservice
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
@@ -72,7 +73,7 @@ func (s *Service) Add(nzbData *nzbparser.NzbData, category string) (string, erro
 		err := s.addNzb(nzbData, true)
 		s.finish(nzbData.MetaName, err)
 		if err != nil {
-			logger.Error("Couldnt add nzb", "MetaName", nzbData.MetaName, "error", err)
+			slog.Error("Couldnt add nzb", "MetaName", nzbData.MetaName, "error", err)
 		}
 	}()
 
@@ -253,7 +254,7 @@ func (s *Service) failedRebuild(id string, err error) {
 	s.queueMutex.Unlock()
 
 	if err := s.store.SetStage(id, string(StageFailed), message); err != nil {
-		logger.Error("Failed recording a rebuild that failed", "MetaName", id, "error", err)
+		slog.Error("Failed recording a rebuild that failed", "MetaName", id, "error", err)
 	}
 }
 
@@ -305,7 +306,7 @@ func (s *Service) finish(id string, err error) {
 	s.queueMutex.Unlock()
 
 	if err := s.store.SetStage(id, string(stage), message); err != nil {
-		logger.Error("Failed recording how an add ended", "MetaName", id, "stage", stage, "error", err)
+		slog.Error("Failed recording how an add ended", "MetaName", id, "stage", stage, "error", err)
 	}
 }
 

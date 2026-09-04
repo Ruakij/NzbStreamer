@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"slices"
 	"sync"
 
@@ -26,7 +27,7 @@ func (s *Service) storeFiles(metaName string, tree map[string]presentation.Opena
 	for fullPath, file := range tree {
 		size, exact, err := presentedSize(file)
 		if err != nil {
-			logger.Warn("Failed sizing a file, so the next start rebuilds this tree",
+			slog.Warn("Failed sizing a file, so the next start rebuilds this tree",
 				"nzb", metaName, "file", fullPath, "error", err)
 			return
 		}
@@ -34,7 +35,7 @@ func (s *Service) storeFiles(metaName string, tree map[string]presentation.Opena
 	}
 
 	if err := s.store.SetFiles(metaName, s.treeKey, files); err != nil {
-		logger.Error("Failed storing the files of an nzb, so the next start rebuilds its tree",
+		slog.Error("Failed storing the files of an nzb, so the next start rebuilds its tree",
 			"nzb", metaName, "error", err)
 	}
 }
@@ -60,24 +61,24 @@ func presentedSize(file presentation.Openable) (size int64, exact bool, err erro
 // tree from other settings, or one from before they were stored, is rebuilt.
 func (s *Service) restoreTree(record nzbstore.Record) bool {
 	if s.treeKey == "" || record.TreeKey != s.treeKey {
-		logger.Debug("Rebuilding a tree, since it was stored under other settings",
+		slog.Debug("Rebuilding a tree, since it was stored under other settings",
 			"nzb", record.Data.MetaName, "stored", record.TreeKey, "settings", s.treeKey)
 		return false
 	}
 
 	files, err := s.store.Files(record.Data.MetaName)
 	if err != nil {
-		logger.Error("Failed reading the stored files of an nzb, rebuilding its tree",
+		slog.Error("Failed reading the stored files of an nzb, rebuilding its tree",
 			"nzb", record.Data.MetaName, "error", err)
 		return false
 	}
 	if len(files) == 0 {
-		logger.Debug("Rebuilding a tree, since nothing is stored of what it presents",
+		slog.Debug("Rebuilding a tree, since nothing is stored of what it presents",
 			"nzb", record.Data.MetaName)
 		return false
 	}
 
-	logger.Debug("Restored a tree from the store", "nzb", record.Data.MetaName, "files", len(files))
+	slog.Debug("Restored a tree from the store", "nzb", record.Data.MetaName, "files", len(files))
 
 	tree := &lazyTree{service: s, data: record.Data}
 	presented := make(map[string]presentation.Openable, len(files))
@@ -153,7 +154,7 @@ func (s *Service) reconcile(nzbData *nzbparser.NzbData, tree map[string]presenta
 		return
 	}
 
-	logger.Warn("An nzb built a different tree than was stored for it, presenting the built one",
+	slog.Warn("An nzb built a different tree than was stored for it, presenting the built one",
 		"nzb", nzbData.MetaName, "stored", presented, "built", built)
 
 	go func() {

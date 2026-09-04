@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -50,7 +51,7 @@ func (s *Store) flushServerUsage() {
 			name, u.used, u.periodStart.Unix(),
 		)
 		if err != nil {
-			logger.Error("Failed storing server usage", "server", name, "error", err)
+			slog.Error("Failed storing server usage", "server", name, "error", err)
 		}
 	}
 }

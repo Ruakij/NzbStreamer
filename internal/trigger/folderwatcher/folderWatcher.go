@@ -17,8 +17,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var logger = slog.With("Module", "FolderWatcher")
-
 var ErrUnknownListener = errors.New("unknown listener id")
 
 // FolderWatcher notifies listeners about new files in directory
@@ -67,7 +65,7 @@ func (fw *folderWatcher) Init() {
 
 	err := fw.startFsNotifyScan()
 	if err != nil {
-		logger.Error("Error when setting up FsNotifyScan, continuing with polling", "error", err)
+		slog.Error("Error when setting up FsNotifyScan, continuing with polling", "error", err)
 	}
 }
 
@@ -122,7 +120,7 @@ func (fw *folderWatcher) scanDirectory() {
 
 	files, err := os.ReadDir(fw.watchFolder)
 	if err != nil {
-		logger.Error("Error reading directory", "err", err)
+		slog.Error("Error reading directory", "err", err)
 		return
 	}
 
@@ -136,7 +134,7 @@ func (fw *folderWatcher) scanDirectory() {
 
 		info, err := file.Info()
 		if err != nil {
-			logger.Error("Failed to stat file", "filename", file.Name(), "err", err)
+			slog.Error("Failed to stat file", "filename", file.Name(), "err", err)
 			continue
 		}
 
@@ -148,7 +146,7 @@ func (fw *folderWatcher) scanDirectory() {
 
 		content, err := os.ReadFile(filepath.Join(fw.watchFolder, file.Name()))
 		if err != nil {
-			logger.Error("Failed to read file", "filename", file.Name(), "err", err)
+			slog.Error("Failed to read file", "filename", file.Name(), "err", err)
 			continue
 		}
 
@@ -158,7 +156,7 @@ func (fw *folderWatcher) scanDirectory() {
 		hash := string(sum[:])
 		if seenAs, done := fw.processed[hash]; done {
 			if seenAs != file.Name() {
-				logger.Debug("Skipping file already processed under another name", "filename", file.Name(), "seenAs", seenAs)
+				slog.Debug("Skipping file already processed under another name", "filename", file.Name(), "seenAs", seenAs)
 			}
 			continue
 		}
@@ -167,7 +165,7 @@ func (fw *folderWatcher) scanDirectory() {
 		group.Go(func() error {
 			if fw.processFile(file.Name(), content) && fw.consume {
 				if err := os.Remove(filepath.Join(fw.watchFolder, file.Name())); err != nil {
-					logger.Error("Failed to delete processed file", "filename", file.Name(), "err", err)
+					slog.Error("Failed to delete processed file", "filename", file.Name(), "err", err)
 				}
 			}
 			return nil
@@ -185,7 +183,7 @@ func (fw *folderWatcher) scanDirectory() {
 func (fw *folderWatcher) processFile(filename string, content []byte) bool {
 	nzbData, err := nzbparser.ParseNzb(bytes.NewReader(content), filename)
 	if err != nil {
-		logger.Error("Failed to parse nzb", "filename", filename, "err", err)
+		slog.Error("Failed to parse nzb", "filename", filename, "err", err)
 		return false
 	}
 
@@ -198,7 +196,7 @@ func (fw *folderWatcher) processFile(filename string, content []byte) bool {
 			}
 			fmt.Fprintf(&msg, "%v", warn)
 		}
-		logger.Warn("Warnings while checking Nzb", "filename", filename, "msg", msg.String())
+		slog.Warn("Warnings while checking Nzb", "filename", filename, "msg", msg.String())
 	}
 	if len(errors) > 0 {
 		var msg strings.Builder
@@ -208,7 +206,7 @@ func (fw *folderWatcher) processFile(filename string, content []byte) bool {
 			}
 			fmt.Fprintf(&msg, "%v", err)
 		}
-		logger.Warn("Errors while checking Nzb", "filename", filename, "msg", msg.String())
+		slog.Warn("Errors while checking Nzb", "filename", filename, "msg", msg.String())
 		return false
 	}
 
@@ -216,7 +214,7 @@ func (fw *folderWatcher) processFile(filename string, content []byte) bool {
 	defer fw.wg.Done()
 
 	if len(fw.addHooks) == 0 {
-		logger.Warn("Cannot notify, no listeners found", "filename", filename)
+		slog.Warn("Cannot notify, no listeners found", "filename", filename)
 		return false
 	}
 
@@ -227,7 +225,7 @@ func (fw *folderWatcher) processFile(filename string, content []byte) bool {
 		}
 		err := hook(nzbData)
 		if err != nil {
-			logger.Error("Error executing hook:", "filename", filename, "err", err)
+			slog.Error("Error executing hook:", "filename", filename, "err", err)
 			accepted = false
 		}
 	}

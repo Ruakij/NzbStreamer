@@ -24,8 +24,6 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
 
-var logger = slog.With("Module", "Sabnzbd")
-
 // Version reported to a client. Sonarr requires 0.7.0 or newer, reads the
 // history retention settings introduced in 4.3 to decide whether this client
 // removes completed downloads on its own, and treats the literal "develop" as a
@@ -85,7 +83,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mode := query.Get("mode")
-	logger.Debug("Request", "mode", mode, "query", query.Encode())
+	slog.Debug("Request", "mode", mode, "query", query.Encode())
 
 	switch mode {
 	case "version":
@@ -224,7 +222,7 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request, query map[stri
 		return
 	}
 
-	logger.Info("Accepted nzb", "id", id, "category", first(query, "cat", "category"))
+	slog.Info("Accepted nzb", "id", id, "category", first(query, "cat", "category"))
 	writeJSON(w, map[string]any{"status": true, "nzo_ids": []string{id}})
 }
 
@@ -311,7 +309,7 @@ func (h *Handler) delete(w http.ResponseWriter, query map[string][]string, remov
 			writeError(w, err.Error())
 			return
 		}
-		logger.Info("Removed nzb on client request", "id", id)
+		slog.Info("Removed nzb on client request", "id", id)
 	}
 
 	writeJSON(w, map[string]any{"status": true})
@@ -383,7 +381,7 @@ func first(query map[string][]string, keys ...string) string {
 func writeJSON(w http.ResponseWriter, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(body); err != nil {
-		logger.Error("Failed writing response", "error", err)
+		slog.Error("Failed writing response", "error", err)
 	}
 }
 

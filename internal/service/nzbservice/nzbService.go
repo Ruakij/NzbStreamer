@@ -25,8 +25,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var logger = slog.With("Module", "NzbService")
-
 type TriggerListener struct {
 	trigger.Trigger
 	listenerID int
@@ -176,12 +174,12 @@ func (s *Service) SetExactSizeClasses(classes []filenameops.FileClass) {
 func (s *Service) Init() error {
 	defer s.ready.Store(true)
 
-	logger.Debug("Getting nzbData from store")
+	slog.Debug("Getting nzbData from store")
 	records, err := s.store.List()
 	if err != nil {
 		return fmt.Errorf("failed listing nzbs in store: %w", err)
 	}
-	logger.Info("Loaded Nzb store", "items", len(records))
+	slog.Info("Loaded Nzb store", "items", len(records))
 	started := time.Now()
 	restored, rebuilt := 0, 0
 
@@ -214,12 +212,12 @@ func (s *Service) Init() error {
 				// restore that is over with an item still in it
 				defer func() {
 					s.rebuilding(record.Data.MetaName, false)
-					logger.Info("Rebuilt nzb", "MetaName", record.Data.MetaName,
+					slog.Info("Rebuilt nzb", "MetaName", record.Data.MetaName,
 						"remaining", s.restoring.Add(-1))
 				}()
 
 				if err := s.addNzb(record.Data, false); err != nil {
-					logger.Error("Couldnt rebuild nzb", "MetaName", record.Data.MetaName, "error", err)
+					slog.Error("Couldnt rebuild nzb", "MetaName", record.Data.MetaName, "error", err)
 					s.failedRebuild(record.Data.MetaName, err)
 				}
 				return nil
@@ -233,9 +231,9 @@ func (s *Service) Init() error {
 		// The process died mid-add. Nothing of it was kept beyond the nzb, so
 		// the add starts again rather than picking up
 		default:
-			logger.Info("Resuming interrupted add", "MetaName", record.Data.MetaName, "stage", record.Stage)
+			slog.Info("Resuming interrupted add", "MetaName", record.Data.MetaName, "stage", record.Stage)
 			if _, err := s.Add(record.Data, record.Category); err != nil {
-				logger.Error("Couldnt resume add", "MetaName", record.Data.MetaName, "error", err)
+				slog.Error("Couldnt resume add", "MetaName", record.Data.MetaName, "error", err)
 			}
 		}
 	}
@@ -245,15 +243,15 @@ func (s *Service) Init() error {
 	// between listing the store and finishing looks finished while they are
 	// missing
 	if rebuilding := s.restoring.Load(); rebuilding > 0 {
-		logger.Info("Rebuilding nzb trees, their files appear as each one finishes", "nzbs", rebuilding)
+		slog.Info("Rebuilding nzb trees, their files appear as each one finishes", "nzbs", rebuilding)
 	}
 
 	_ = group.Wait()
 
-	logger.Info("Restored nzbs", "restored", restored, "rebuilt", rebuilt,
+	slog.Info("Restored nzbs", "restored", restored, "rebuilt", rebuilt,
 		"took", time.Since(started).Truncate(time.Millisecond))
 
-	logger.Debug("Registering at triggers")
+	slog.Debug("Registering at triggers")
 	for _, trigger := range s.triggers {
 		trigger.listenerID, err = trigger.AddListener(s.AddNzb, s.RemoveNzb)
 		if err != nil {
@@ -261,7 +259,7 @@ func (s *Service) Init() error {
 		}
 	}
 
-	logger.Debug("Init complete")
+	slog.Debug("Init complete")
 
 	return nil
 }
@@ -291,7 +289,7 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	release := s.acquireAdd()
 	defer release()
 
-	logger.Debug("Adding nzb", "MetaName", nzbData.MetaName)
+	slog.Debug("Adding nzb", "MetaName", nzbData.MetaName)
 
 	s.mutex.Lock()
 	if _, exists := s.nzbFiledata[nzbData.MetaName]; exists {
@@ -314,7 +312,7 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 
 	s.filterNzbFiles(nzbData)
 	if len(nzbData.Files) == 0 {
-		logger.Warn("After blacklist, no nzb-files left", "MetaName", nzbData.MetaName)
+		slog.Warn("After blacklist, no nzb-files left", "MetaName", nzbData.MetaName)
 		return nil
 	}
 
@@ -326,7 +324,7 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 
 		if healthErrors := s.healthChecker.CheckFiles(nzbData); len(healthErrors) > 0 {
 			for _, err := range healthErrors {
-				logger.Warn("Unhealthy file detected",
+				slog.Warn("Unhealthy file detected",
 					"nzb", nzbData.MetaName,
 					"error", err)
 			}
@@ -345,7 +343,7 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 		return err
 	}
 	if len(tree) == 0 {
-		logger.Warn("After blacklist, no files left", "MetaName", nzbData.MetaName)
+		slog.Warn("After blacklist, no files left", "MetaName", nzbData.MetaName)
 		return nil
 	}
 
@@ -356,7 +354,7 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	// The record already holds it: enqueue wrote it there when the add was
 	// accepted, and finish records how this ends
 
-	logger.Info("Added nzb", "MetaName", nzbData.MetaName)
+	slog.Info("Added nzb", "MetaName", nzbData.MetaName)
 
 	return nil
 }
@@ -422,7 +420,7 @@ func (s *Service) register(nzbData *nzbparser.NzbData, tree map[string]presentat
 
 		for _, presenter := range s.presenters {
 			if err := presenter.AddFile(fullPath, modTime, file); err != nil {
-				logger.Error("Failed adding segment-stack as file", "nzb", nzbData.MetaName, "error", err)
+				slog.Error("Failed adding segment-stack as file", "nzb", nzbData.MetaName, "error", err)
 			}
 		}
 	}
@@ -439,7 +437,7 @@ func (s *Service) measure(metaName string, tree map[string]presentation.Openable
 		}
 		if err := measureFile(file); err != nil {
 			// A size that could not be measured is a worse size, not a missing file
-			logger.Warn("Failed measuring file, leaving the estimate in place",
+			slog.Warn("Failed measuring file, leaving the estimate in place",
 				"nzb", metaName, "file", fullPath, "error", err)
 		}
 	}
@@ -616,7 +614,7 @@ func (s *Service) Delete(id string) error {
 		return fmt.Errorf("%w: %s", ErrNzbNotFound, id)
 	}
 
-	logger.Debug("Removing nzb", "MetaName", id)
+	slog.Debug("Removing nzb", "MetaName", id)
 
 	// Thousands of unlinks and a database write, so it happens once the nzb is
 	// out of the presenters rather than under the lock every read waits on. The
@@ -630,7 +628,7 @@ func (s *Service) Delete(id string) error {
 		return fmt.Errorf("failed removing nzb %s from store: %w", id, err)
 	}
 
-	logger.Info("Removed nzb", "MetaName", id)
+	slog.Info("Removed nzb", "MetaName", id)
 	return nil
 }
 
@@ -640,7 +638,7 @@ func (s *Service) unregister(metaName string) {
 	for _, filepath := range s.nzbFiles[metaName] {
 		for _, presenter := range s.presenters {
 			if err := presenter.RemoveFile(filepath); err != nil {
-				logger.Error("Failed removing file from presenter",
+				slog.Error("Failed removing file from presenter",
 					"nzb", metaName,
 					"file", filepath,
 					"error", err)

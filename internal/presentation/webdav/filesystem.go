@@ -24,8 +24,6 @@ var (
 	ErrFileNotFound       = os.ErrNotExist
 )
 
-var logger = slog.With("Module", "Webdav")
-
 type Node struct {
 	File     *simpleFile
 	Parent   *Node
@@ -213,7 +211,7 @@ func (fs *FS) Open(ctx context.Context, name string) (io.ReadCloser, error) {
 		fileReader.reader = reader
 	}
 
-	logger.Debug("Open", "reader", fmt.Sprintf("%p", fileReader.reader), "name", name)
+	slog.Debug("Open", "reader", fmt.Sprintf("%p", fileReader.reader), "name", name)
 
 	return fileReader, nil
 }
@@ -314,7 +312,7 @@ type simpleFileReader struct {
 }
 
 func (sf *simpleFileReader) Close() (err error) {
-	logger.Debug("Close", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name)
+	slog.Debug("Close", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name)
 	if sf.reader != nil {
 		err = sf.reader.Close()
 		sf.reader = nil
@@ -326,7 +324,7 @@ func (sf *simpleFileReader) Read(p []byte) (n int, err error) {
 	if sf.reader != nil {
 		n, err = sf.reader.Read(p)
 		if err != nil && !errors.Is(err, io.EOF) {
-			logger.Error("Read error", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name, "len(p)", len(p), "err", err)
+			slog.Error("Read error", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name, "len(p)", len(p), "err", err)
 		}
 		return n, err
 	}
@@ -348,11 +346,11 @@ func (sf *simpleFileReader) Seek(offset int64, whence int) (int64, error) {
 		}
 	}
 
-	logger.Debug("Seek", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name, "offset", offset, "whence", whence)
+	slog.Debug("Seek", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name, "offset", offset, "whence", whence)
 	if sf.reader != nil {
 		n, err := sf.reader.Seek(offset, whence)
 		if err != nil {
-			logger.Error("Seek error", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name, "offset", offset, "whence", whence, "err", err)
+			slog.Error("Seek error", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name, "offset", offset, "whence", whence, "err", err)
 		}
 		return n, err
 	}
@@ -367,7 +365,7 @@ func (sf *simpleFileReader) Readdir(count int) ([]os.FileInfo, error) {
 	sf.fs.mu.RLock()
 	defer sf.fs.mu.RUnlock()
 
-	logger.Debug("Readdir", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name)
+	slog.Debug("Readdir", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name)
 
 	if !sf.simpleFile.isDir {
 		return nil, fmt.Errorf("%s is not a directory", sf.simpleFile.name)
@@ -386,7 +384,7 @@ func (sf *simpleFileReader) Readdir(count int) ([]os.FileInfo, error) {
 }
 
 func (sf *simpleFileReader) Stat() (os.FileInfo, error) {
-	logger.Debug("Stat", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name)
+	slog.Debug("Stat", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name)
 	return sf.simpleFile, nil
 }
 

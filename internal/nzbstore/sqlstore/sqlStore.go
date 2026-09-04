@@ -7,7 +7,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -21,8 +20,6 @@ import (
 
 //go:embed migrations/sqlite/*.sql
 var migrations embed.FS
-
-var logger = slog.With("Module", "SqlStore")
 
 type Store struct {
 	db *sql.DB

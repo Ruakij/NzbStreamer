@@ -15,8 +15,6 @@ import (
 	"github.com/arl/statsviz"
 )
 
-var logger = slog.With("Module", "HttpServer")
-
 // WebdavPrefix is the subtree webdav is served under, which its filesystem has
 // to strip off a lookup.
 const WebdavPrefix = "/webdav"
@@ -67,7 +65,7 @@ func registerDebug(mux *http.ServeMux) {
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 	if err := statsviz.Register(mux, statsviz.Root("/debug/statsviz")); err != nil {
-		logger.Error("Failed registering statsviz", "error", err)
+		slog.Error("Failed registering statsviz", "error", err)
 	}
 }
 
@@ -87,11 +85,11 @@ func Listen(ctx context.Context, address string, handler http.Handler) error {
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			logger.Error("Server shutdown error", "error", err)
+			slog.Error("Server shutdown error", "error", err)
 		}
 	}()
 
-	logger.Info("Server starting", "Address", address)
+	slog.Info("Server starting", "Address", address)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("failed listening: %w", err)
 	}

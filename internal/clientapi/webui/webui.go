@@ -14,8 +14,6 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
 
-var logger = slog.With("Module", "WebUI")
-
 const maxUploadBytes = 32 << 20
 
 // Service is the part of nzbservice this api projects.
@@ -93,7 +91,7 @@ func (h *Handler) add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Info("Accepted nzb", "id", id)
+	slog.Info("Accepted nzb", "id", id)
 	writeJSON(w, map[string]any{"id": id})
 }
 
@@ -137,6 +135,6 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func encode(w http.ResponseWriter, body any) {
 	if err := json.NewEncoder(w).Encode(body); err != nil {
-		logger.Error("Failed writing response", "error", err)
+		slog.Error("Failed writing response", "error", err)
 	}
 }

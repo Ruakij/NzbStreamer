@@ -15,6 +15,7 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/clientapi/webui"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/filehealth"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/httpserver"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/logging"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore/sqlstore"
@@ -97,8 +98,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		os.Exit(1)
 	}
 
-	// Setup logging
-	slog.SetLogLoggerLevel(c.Logging.Level)
+	logging.Setup(c.Logging.Level)
 
 	servers, err := usenetServers(ctx)
 	if err != nil {

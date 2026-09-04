@@ -20,8 +20,6 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/sevenzipfileresource"
 )
 
-var logger = slog.With("Module", "NzbRecordFactory")
-
 // SegmentSizeStore is what the factory needs of the metadata store: the decoded
 // lengths it already knows, and somewhere to report the ones it learns. A
 // decoded length is a fact about an immutable post, so it is keyed by message-id
@@ -95,14 +93,14 @@ func (f *NzbFileFactory) DiscardSegmentStackFromNzbData(nzbData *nzbparser.NzbDa
 	if f.cache != nil {
 		for _, id := range ids {
 			if err := f.cache.Remove(id); err != nil && !errors.Is(err, diskcache.ErrItemNotFound) {
-				logger.Warn("Failed removing cached segment", "segment", id, "error", err)
+				slog.Warn("Failed removing cached segment", "segment", id, "error", err)
 			}
 		}
 	}
 
 	if f.sizeStore != nil {
 		if err := f.sizeStore.ForgetSegments(ids); err != nil {
-			logger.Warn("Failed forgetting segment sizes", "nzb", nzbData.MetaName, "error", err)
+			slog.Warn("Failed forgetting segment sizes", "nzb", nzbData.MetaName, "error", err)
 		}
 	}
 }
@@ -128,7 +126,7 @@ func (f *NzbFileFactory) knownSizes(nzbData *nzbparser.NzbData) map[string]int64
 	if err != nil {
 		// Not knowing a size is the normal state, so a failed lookup costs
 		// measurement later and never correctness
-		logger.Warn("Failed reading known segment sizes", "nzb", nzbData.MetaName, "error", err)
+		slog.Warn("Failed reading known segment sizes", "nzb", nzbData.MetaName, "error", err)
 		return nil
 	}
 
@@ -159,11 +157,11 @@ func (f *NzbFileFactory) sizer(nzbData *nzbparser.NzbData, known map[string]int6
 	if err != nil {
 		// Estimated sizes are the state this nzb was already in, so a failed
 		// probe costs measurement on a later seek and never correctness
-		logger.Warn("Failed probing size convention", "nzb", nzbData.MetaName, "error", err)
+		slog.Warn("Failed probing size convention", "nzb", nzbData.MetaName, "error", err)
 		return sizer
 	}
 
-	logger.Debug("Probed size convention", "nzb", nzbData.MetaName, "convention", probed.Convention())
+	slog.Debug("Probed size convention", "nzb", nzbData.MetaName, "convention", probed.Convention())
 	return probed
 }
 
@@ -184,7 +182,7 @@ func settleConvention(nzbData *nzbparser.NzbData, sizer nzbfileanalyzer.SegmentS
 
 			sizer = sizer.SettleWith(segment.BytesHint, int(size))
 			if sizer.Convention() != nzbfileanalyzer.ConventionUnknown {
-				logger.Debug("Settled size convention from a known segment size", "nzb", nzbData.MetaName, "convention", sizer.Convention())
+				slog.Debug("Settled size convention from a known segment size", "nzb", nzbData.MetaName, "convention", sizer.Convention())
 				return sizer
 			}
 		}
@@ -253,7 +251,7 @@ func (f *NzbFileFactory) unpack(groupFilename, archivePath string, volumes []res
 	}
 
 	if depth >= f.maxArchiveDepth {
-		logger.Warn("Archive nested deeper than the limit, leaving it packed",
+		slog.Warn("Archive nested deeper than the limit, leaving it packed",
 			"archive", archivePath, "limit", f.maxArchiveDepth)
 		return nil, nil
 	}

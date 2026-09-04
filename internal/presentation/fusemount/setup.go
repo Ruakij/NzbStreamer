@@ -11,8 +11,6 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
-var logger = slog.With("Module", "Fuse")
-
 var ErrUnexpectedUnmount = errors.New("unexpected unmount, unmounted from external?")
 
 func Setup() *FileSystem {
@@ -41,7 +39,7 @@ func (fsManager *FileSystem) Mount(path string, mountOptions []string) error {
 	if err != nil {
 		return fmt.Errorf("failed mounting: %w", err)
 	}
-	logger.Info("Mounted", "path", path)
+	slog.Info("Mounted", "path", path)
 
 	fsManager.server = server
 	fsManager.mounted.Store(true)
@@ -60,7 +58,7 @@ func (fsManager *FileSystem) Serve(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		logger.Debug("Context cancelled, unmounting")
+		slog.Debug("Context cancelled, unmounting")
 		if err := server.Unmount(); err != nil {
 			return fmt.Errorf("unmounting failed: %w", err)
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -140,7 +141,7 @@ var _ = fs.NodeOpener((*fileNode)(nil))
 func (n *fileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	reader, err := n.openable.Open()
 	if err != nil {
-		logger.Error("Error opening file", "error", err)
+		slog.Error("Error opening file", "error", err)
 		return nil, 0, syscall.EIO
 	}
 
@@ -149,7 +150,7 @@ func (n *fileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint3
 		closer: reader,
 	}
 
-	logger.Debug("Open", "reader", fmt.Sprintf("%p", reader), "name", n.EmbeddedInode().Path(nil))
+	slog.Debug("Open", "reader", fmt.Sprintf("%p", reader), "name", n.EmbeddedInode().Path(nil))
 
 	return fh, 0, syscall.F_OK
 }
@@ -176,7 +177,7 @@ var _ = fs.NodeReader((*fileNode)(nil))
 func (n *fileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	file, ok := f.(*file)
 	if !ok {
-		logger.Error("Error reading, invalid filehandle", "handle", f, "len", len(dest), "offset", off)
+		slog.Error("Error reading, invalid filehandle", "handle", f, "len", len(dest), "offset", off)
 		return nil, syscall.EINVAL // Invalid argument error
 	}
 	return file.Read(ctx, dest, off)
@@ -188,7 +189,7 @@ var _ = fs.FileReleaser((*file)(nil))
 // its descriptors and pooled readers.
 func (f *file) Release(ctx context.Context) syscall.Errno {
 	if err := f.closer.Close(); err != nil {
-		logger.Error("Error closing reader", "handle", f, "error", err)
+		slog.Error("Error closing reader", "handle", f, "error", err)
 		return syscall.EIO
 	}
 
@@ -200,7 +201,7 @@ var _ = fs.FileReader((*file)(nil))
 func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	n, err := f.reader.ReadAt(dest, off)
 	if err != nil && !errors.Is(err, io.EOF) {
-		logger.Error("Error reading", "handle", f, "len", len(dest), "offset", off, "error", err)
+		slog.Error("Error reading", "handle", f, "len", len(dest), "offset", off, "error", err)
 		return nil, syscall.EIO
 	}
 
