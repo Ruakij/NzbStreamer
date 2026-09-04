@@ -84,15 +84,26 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData
 	if err := f.expand(rawFiles, "", 0, nzbData.Meta["Password"], files); err != nil {
 		return files, err
 	}
-	if f.readaheadSize > 0 && f.readaheadChunk > 0 {
-		for name, file := range files {
-			if underlying, ok := file.(resource.ReadSeekCloseableResource); ok {
-				files[name] = readaheadresource.New(underlying, f.readaheadSize, f.readaheadChunk)
-			}
+	for name, file := range files {
+		if _, windowed := file.(*readaheadresource.Resource); windowed {
+			continue // A raw file presented as it is carries its window already
+		}
+		if underlying, ok := file.(resource.ReadSeekCloseableResource); ok {
+			files[name] = f.withReadahead(underlying)
 		}
 	}
 
 	return files, nil
+}
+
+// withReadahead puts a window in front of a resource, or hands it back where
+// readahead is switched off.
+func (f *NzbFileFactory) withReadahead(underlying resource.ReadSeekCloseableResource) resource.ReadSeekCloseableResource {
+	if f.readaheadSize <= 0 || f.readaheadChunk <= 0 {
+		return underlying
+	}
+
+	return readaheadresource.New(underlying, f.readaheadSize, f.readaheadChunk)
 }
 
 // DiscardSegmentStackFromNzbData throws away everything the stack accumulated
@@ -213,7 +224,10 @@ func (f *NzbFileFactory) buildRawFiles(nzbData *nzbparser.NzbData, sizer nzbfile
 	rawFiles := make(map[string]resource.ReadSeekCloseableResource, len(nzbData.Files))
 	for i := range nzbData.Files {
 		file := &nzbData.Files[i]
-		rawFiles[file.Filename] = f.BuildFileResourceFromNzbFile(file, sizer, known, cachePrefix)
+		// The window sits above the merger, so an archive decodes out of one too
+		// rather than a segment at a time: the volumes are addressable whatever
+		// the member inside them turns out to be
+		rawFiles[file.Filename] = f.withReadahead(f.BuildFileResourceFromNzbFile(file, sizer, known, cachePrefix))
 	}
 	return rawFiles
 }

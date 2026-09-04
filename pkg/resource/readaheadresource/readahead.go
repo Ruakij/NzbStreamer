@@ -89,6 +89,12 @@ func (r *reader) Read(p []byte) (int, error) {
 	r.mu.Unlock()
 
 	n, err := r.ReadAt(p, position)
+	// A stream reports the end on the read that has nothing left, not together
+	// with bytes; rardecode keeps the error of a filled read and carries it into
+	// the next volume
+	if n > 0 && errors.Is(err, io.EOF) {
+		err = nil
+	}
 
 	r.mu.Lock()
 	r.position = position + int64(n)
