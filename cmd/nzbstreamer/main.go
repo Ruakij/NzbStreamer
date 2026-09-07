@@ -131,6 +131,9 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 				Timeout:  c.Usenet.Timeout,
 
 				IdleTimeout: c.Usenet.IdleTimeout,
+
+				ConnectionPipeliningSize: c.Usenet.ConnectionPipeliningSize,
+				MinFreeConns:             c.Usenet.MinFreeConns,
 			}),
 			Name:        server.Host,
 			Priority:    server.Priority,

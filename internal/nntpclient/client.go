@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,12 +24,16 @@ const (
 	serverReady       = 200
 	serverReadyNoPost = 201
 	groupJoined       = 211
-	articleExists     = 223
-	authAccepted      = 281
-	passwordNeeded    = 381
-	authRejected      = 481
-	noArticleWithID   = 430
-	connsExceeded     = 502
+	// an ARTICLE answers 220; 222 is the BODY response, which some servers send
+	// to an ARTICLE addressed by message-id
+	articleFollows     = 220
+	articleFollowsBody = 222
+	articleExists      = 223
+	authAccepted       = 281
+	passwordNeeded     = 381
+	authRejected       = 481
+	noArticleWithID    = 430
+	connsExceeded      = 502
 )
 
 var (
@@ -73,6 +78,14 @@ type Config struct {
 	Timeout time.Duration
 	// IdleTimeout after which an unused connection is closed; defaults when unset
 	IdleTimeout time.Duration
+	// ConnectionPipeliningSize is the largest number of not-yet-answered ARTICLE
+	// commands a single connection may have written, so the transfer of one
+	// segment overlaps the round trip of the next. 1 or less keeps one request
+	// at a time per connection, which is the plain synchronous path.
+	ConnectionPipeliningSize int
+	// MinFreeConns is how many unloaded connections the pipelined path keeps
+	// dialled ahead of demand. 0 only dials on demand.
+	MinFreeConns int
 }
 
 // Client is a pool of news server connections.
@@ -83,11 +96,29 @@ type Config struct {
 // process. Retrying makes that a matter of minutes.
 type Client struct {
 	config Config
-	dial   func() (*conn, error)
+	// dial opens a connection ready for synchronous commands; dialNet is the
+	// raw socket underneath it, which the pipelined path takes over itself
+	dial    func() (*conn, error)
+	dialNet func() (net.Conn, error)
 	// idle holds connections that are ready for a command
 	idle chan *conn
 	// slots holds one token per connection the client is allowed to have open
 	slots chan struct{}
+
+	// The pipelined path, see pipeline.go. pipes is what a fetch is choosen
+	// from and pipeCount counts them including one being dialled, which is what
+	// bounds them; freed wakes a fetch that found all of them full. mu guards
+	// the choice, which has to see every connection's load at once.
+	mu        sync.Mutex
+	pipes     map[*pipeConn]struct{}
+	pipeCount int
+	// dialing counts the connections being handshaked, waiting the fetches that
+	// have not found one yet, dialErr the last failed dial.
+	dialing int
+	waiting int
+	dialErr error
+	freed   chan struct{}
+	canPipe bool
 }
 
 // Conns reports how many connections this client may have open at once.
@@ -108,15 +139,27 @@ func New(config Config) *Client {
 	if config.IdleTimeout <= 0 {
 		config.IdleTimeout = 2 * time.Minute
 	}
+	if config.ConnectionPipeliningSize < 1 {
+		config.ConnectionPipeliningSize = 1
+	}
 
 	client := &Client{
 		config: config,
 		idle:   make(chan *conn, config.MaxConns),
 		slots:  make(chan struct{}, config.MaxConns),
 	}
+	client.dialNet = client.dialNetwork
 	client.dial = client.dialServer
 	for range config.MaxConns {
 		client.slots <- struct{}{}
+	}
+	// Pipelining needs a window of at least two to be one, and a connection to
+	// hold back for the commands that stay synchronous, so a single-connection
+	// account uses the plain path whatever the window is set to.
+	if config.ConnectionPipeliningSize >= 2 && config.MaxConns >= 2 {
+		client.canPipe = true
+		client.pipes = make(map[*pipeConn]struct{})
+		client.freed = make(chan struct{}, 1)
 	}
 
 	go client.reapIdle()
@@ -165,6 +208,12 @@ func (c *Client) reapPass() time.Duration {
 			}
 
 		default:
+		}
+	}
+
+	if c.canPipe {
+		if due := c.reapPipes(); due < wait {
+			wait = due
 		}
 	}
 
@@ -250,7 +299,16 @@ func (c *Client) retry(what string, op func() error) error {
 	return fmt.Errorf("%s failed after %d attempts: %w", what, c.config.Attempts, err)
 }
 
+// getSegment fetches one segment, over a pipelined connection where the config
+// asked for one and over a connection of its own otherwise.
 func (c *Client) getSegment(group, id string) ([]byte, error) {
+	if c.canPipe {
+		return c.pipelineFetch(group, id)
+	}
+	return c.getSegmentSync(group, id)
+}
+
+func (c *Client) getSegmentSync(group, id string) ([]byte, error) {
 	cn, reused, err := c.acquire()
 	if err != nil {
 		return nil, err
@@ -371,9 +429,11 @@ func (c *Client) drop(cn *conn) {
 	c.slots <- struct{}{}
 }
 
-func (c *Client) dialServer() (*conn, error) {
+// dialNetwork opens the socket. It is the whole of what the two paths share:
+// the synchronous one hands it to astuart.co/nntp, the pipelined one speaks to
+// it itself.
+func (c *Client) dialNetwork() (net.Conn, error) {
 	address := net.JoinHostPort(c.config.Host, strconv.Itoa(c.config.Port))
-
 	dialer := &net.Dialer{Timeout: c.config.Timeout}
 
 	var netConn net.Conn
@@ -386,6 +446,14 @@ func (c *Client) dialServer() (*conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed connecting to %s: %w", address, err)
 	}
+	return netConn, nil
+}
+
+func (c *Client) dialServer() (*conn, error) {
+	netConn, err := c.dialNet()
+	if err != nil {
+		return nil, err
+	}
 
 	// The handshake reads the servers welcome line, so it needs a deadline of
 	// its own; acquire sets the one that covers the request itself
@@ -395,11 +463,11 @@ func (c *Client) dialServer() (*conn, error) {
 	welcome, nntpConn, err := nntp.NewConn(netConn)
 	if err != nil {
 		netConn.Close()
-		return nil, fmt.Errorf("failed nntp handshake with %s: %w", address, err)
+		return nil, fmt.Errorf("failed nntp handshake with %s: %w", netConn.RemoteAddr(), err)
 	}
 	if err := greeting(welcome); err != nil {
 		netConn.Close()
-		return nil, fmt.Errorf("%s refused the connection: %w", address, err)
+		return nil, fmt.Errorf("%s refused the connection: %w", netConn.RemoteAddr(), err)
 	}
 	cn.Conn = nntpConn
 
@@ -417,22 +485,56 @@ func (c *Client) dialServer() (*conn, error) {
 // rather than to the first command, which would then read the greeting as its
 // own response.
 func greeting(welcome string) error {
-	fields := strings.Fields(welcome)
-	if len(fields) == 0 {
-		return fmt.Errorf("%w: empty welcome line", ErrUnexpectedResponse)
+	code, msg, err := parseStatus(welcome)
+	if err != nil {
+		return err
+	}
+	return greetingCode(code, msg)
+}
+
+// parseStatus splits a "NNN <rest>" response line into its code and the rest.
+func parseStatus(line string) (int, string, error) {
+	line = strings.TrimSpace(line)
+	fields := strings.SplitN(line, " ", 2)
+	if line == "" {
+		return 0, "", fmt.Errorf("%w: empty response line", ErrUnexpectedResponse)
 	}
 	code, err := strconv.Atoi(fields[0])
 	if err != nil {
-		return fmt.Errorf("%w: unreadable welcome line %q", ErrUnexpectedResponse, welcome)
+		return 0, "", fmt.Errorf("%w: unreadable response line %q", ErrUnexpectedResponse, line)
 	}
+	if len(fields) == 1 {
+		return code, "", nil
+	}
+	return code, fields[1], nil
+}
 
+func greetingCode(code int, msg string) error {
 	switch code {
 	case serverReady, serverReadyNoPost:
 		return nil
 	case connsExceeded:
-		return fmt.Errorf("%w: %s", ErrTooManyConnections, strings.TrimSpace(welcome))
+		return fmt.Errorf("%w: %d %s", ErrTooManyConnections, code, msg)
 	default:
-		return fmt.Errorf("%w: %s", ErrUnexpectedResponse, strings.TrimSpace(welcome))
+		return fmt.Errorf("%w: %d %s", ErrUnexpectedResponse, code, msg)
+	}
+}
+
+// authCode is the verdict on an AUTHINFO response. A rejection and a full
+// account arrive the same way and are opposite things: one will answer
+// identically forever, the other passes on its own. Anything else is a protocol
+// answer this does not understand - 482 out of sequence among them - which is
+// worth another attempt rather than the verdict that the credentials are wrong.
+func authCode(code int, msg string) error {
+	switch code {
+	case authAccepted:
+		return nil
+	case authRejected:
+		return fmt.Errorf("%w: %d %s", ErrAuthFailed, code, msg)
+	case connsExceeded:
+		return fmt.Errorf("%w: %d %s", ErrTooManyConnections, code, msg)
+	default:
+		return fmt.Errorf("%w to AUTHINFO: %d %s", ErrUnexpectedResponse, code, msg)
 	}
 }
 
@@ -526,19 +628,5 @@ func (c *conn) authenticate(user, pass string) error {
 		}
 	}
 
-	// A rejection and a full account arrive the same way and are opposite
-	// things: one will answer identically forever, the other passes on its own.
-	// Anything else is a protocol answer this does not understand - 482 out of
-	// sequence among them - which is worth another attempt rather than the
-	// verdict that the credentials are wrong.
-	switch res.Code {
-	case authAccepted:
-		return nil
-	case authRejected:
-		return fmt.Errorf("%w: %d %s", ErrAuthFailed, res.Code, res.Message)
-	case connsExceeded:
-		return fmt.Errorf("%w: %d %s", ErrTooManyConnections, res.Code, res.Message)
-	default:
-		return fmt.Errorf("%w to AUTHINFO: %d %s", ErrUnexpectedResponse, res.Code, res.Message)
-	}
+	return authCode(res.Code, res.Message)
 }

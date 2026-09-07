@@ -130,6 +130,8 @@ Zip archives are not unpacked.
 | `USENET_RETRY_BACKOFF`            | 1s                     | Wait after the first failed attempt, doubled after each further one |
 | `USENET_TIMEOUT`                  | 30s                    | Timeout for connecting and for completing a single request |
 | `USENET_IDLE_TIMEOUT`             | 2m                     | Time after which an unused connection is closed |
+| `NNTP_PIPELINE_SIZE`              | 4                      | How many requests a connection may use at once; minimim 1; this optimizes the use of the connections |
+| `NNTP_MIN_FREE_CONNS`             | 1                      | Connections kept warm ahead of demand, so a request finds a warm connection; 0 only dials on demand |
 | `USENET_BREAKER_FAILURES`         | 3                      | Consecutive failures which disables uisng a server for cooldown-time; 0 never disables |
 | `USENET_BREAKER_COOLDOWN`         | 5m                     | How long a disabled server waits for |
 

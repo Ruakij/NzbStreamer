@@ -31,6 +31,9 @@ type UsenetConfig struct {
 	Timeout      time.Duration `env:"USENET_TIMEOUT, default=30s"`      // Timeout for connecting and for completing a single request
 	IdleTimeout  time.Duration `env:"USENET_IDLE_TIMEOUT, default=2m"`  // Time after which an unused connection is closed; 0 or less falls back to the default
 
+	ConnectionPipeliningSize int `env:"NNTP_PIPELINE_SIZE, default=4"`  // How many requests a connection may use at once; minimim 1; this optimizes the use of the connections
+	MinFreeConns             int `env:"NNTP_MIN_FREE_CONNS, default=1"` // Connections kept warm ahead of demand, so a request finds a warm connection; 0 only dials on demand
+
 	BreakerFailures int           `env:"USENET_BREAKER_FAILURES, default=3"`  // Consecutive failed requests that disable a server, so the others carry the load instead of every request descending past it; 0 never disables one for failures. Rejected credentials disable it for the rest of the process whatever this is set to, and the accounts connection limit is only logged, since using fewer connections is the only fix for it
 	BreakerCooldown time.Duration `env:"USENET_BREAKER_COOLDOWN, default=5m"` // How long a disabled server is skipped for; the first request after it decides whether it is disabled again
 }
