@@ -42,6 +42,10 @@ type QueueItem struct {
 	Category string `json:"category"`
 	Stage    Stage  `json:"stage"`
 	Bytes    int64  `json:"bytes"`
+	// Archived is a finished add a client removed from its history. It is a
+	// property of the record only: the nzb stays presented and its files stay
+	// readable, which is what makes it different from Delete
+	Archived bool `json:"archived"`
 
 	Added    time.Time `json:"added"`
 	Finished time.Time `json:"finished"`
@@ -86,9 +90,33 @@ func (s *Service) Queue() []QueueItem {
 }
 
 // History lists the finished adds, oldest first, including the ones restored
-// from the store on startup.
+// from the store on startup and the archived ones, which carry the flag.
 func (s *Service) History() []QueueItem {
 	return s.items(true)
+}
+
+// Archive takes a finished add out of the default history listing and leaves
+// everything it built in place. It is what a client means by removing a
+// download: it has imported what it wanted, and the record is only in its way.
+// Delete is the one that removes the files.
+func (s *Service) Archive(id string, archived bool) error {
+	s.queueMutex.Lock()
+	item := s.find(id)
+	if item == nil {
+		s.queueMutex.Unlock()
+		return fmt.Errorf("%w: %s", ErrNzbNotFound, id)
+	}
+	if !item.Done() {
+		s.queueMutex.Unlock()
+		return fmt.Errorf("%w: %s", ErrNzbStillRunning, id)
+	}
+	item.Archived = archived
+	s.queueMutex.Unlock()
+
+	if err := s.store.SetArchived(id, archived); err != nil {
+		return fmt.Errorf("failed recording archived nzb %s: %w", id, err)
+	}
+	return nil
 }
 
 func (s *Service) items(done bool) []QueueItem {
@@ -212,6 +240,7 @@ func (s *Service) restore(record nzbstore.Record) {
 		Category: record.Category,
 		Stage:    Stage(record.Stage),
 		Bytes:    totalBytes(record.Data),
+		Archived: record.Archived,
 		Added:    record.AddedAt,
 		Finished: record.FinishedAt,
 		Err:      record.Err,

@@ -2,6 +2,7 @@ package webui_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,6 +21,7 @@ type fakeService struct {
 
 	cancelled []string
 	deleted   []string
+	archived  []string
 }
 
 func (s *fakeService) Add(nzbData *nzbparser.NzbData, _ string) (string, error) {
@@ -37,6 +39,11 @@ func (s *fakeService) Cancel(id string) error {
 
 func (s *fakeService) Delete(id string) error {
 	s.deleted = append(s.deleted, id)
+	return nil
+}
+
+func (s *fakeService) Archive(id string, archived bool) error {
+	s.archived = append(s.archived, fmt.Sprintf("%s/%t", id, archived))
 	return nil
 }
 
@@ -98,7 +105,7 @@ func TestRemoveRoutesAction(t *testing.T) {
 	service := &fakeService{}
 	handler := webui.NewHandler(service)
 
-	for _, action := range []string{"cancel", "delete"} {
+	for _, action := range []string{"cancel", "delete", "archive", "restore"} {
 		request := httptest.NewRequest(http.MethodPost, "/api/remove", strings.NewReader("id=x&action="+action))
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
@@ -114,5 +121,8 @@ func TestRemoveRoutesAction(t *testing.T) {
 	}
 	if len(service.deleted) != 1 || service.deleted[0] != "x" {
 		t.Errorf("delete got %v, want [x]", service.deleted)
+	}
+	if fmt.Sprint(service.archived) != "[x/true x/false]" {
+		t.Errorf("archive and restore got %v", service.archived)
 	}
 }

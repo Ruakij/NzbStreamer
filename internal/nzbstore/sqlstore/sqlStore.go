@@ -109,7 +109,7 @@ func (s *Store) Ping() (nzbs int, err error) {
 }
 
 func (s *Store) List() ([]nzbstore.Record, error) {
-	rows, err := s.db.Query("SELECT name, raw, stage, error, category, added_at, finished_at, tree_key FROM nzb ORDER BY added_at")
+	rows, err := s.db.Query("SELECT name, raw, stage, error, category, added_at, finished_at, tree_key, archived FROM nzb ORDER BY added_at")
 	if err != nil {
 		return nil, fmt.Errorf("failed listing nzbs: %w", err)
 	}
@@ -122,7 +122,7 @@ func (s *Store) List() ([]nzbstore.Record, error) {
 		var raw []byte
 		var addedAt int64
 		var finishedAt sql.NullInt64
-		if err := rows.Scan(&name, &raw, &record.Stage, &record.Err, &record.Category, &addedAt, &finishedAt, &record.TreeKey); err != nil {
+		if err := rows.Scan(&name, &raw, &record.Stage, &record.Err, &record.Category, &addedAt, &finishedAt, &record.TreeKey, &record.Archived); err != nil {
 			return nil, fmt.Errorf("failed reading nzb row: %w", err)
 		}
 
@@ -160,7 +160,7 @@ func (s *Store) Add(data *nzbparser.NzbData, stage, category string) error {
 
 	_, err := s.db.Exec(
 		"INSERT INTO nzb (name, raw, stage, category, added_at) VALUES (?, ?, ?, ?, ?)"+
-			" ON CONFLICT (name) DO UPDATE SET raw = excluded.raw, stage = excluded.stage, category = excluded.category, error = '', added_at = excluded.added_at, finished_at = NULL, tree_key = ''",
+			" ON CONFLICT (name) DO UPDATE SET raw = excluded.raw, stage = excluded.stage, category = excluded.category, error = '', added_at = excluded.added_at, finished_at = NULL, tree_key = '', archived = 0",
 		data.MetaName, data.Raw, stage, category, time.Now().Unix(),
 	)
 	if err != nil {
@@ -176,6 +176,14 @@ func (s *Store) SetStage(name, stage, errMessage string) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed recording stage of %s: %w", name, err)
+	}
+	return nil
+}
+
+func (s *Store) SetArchived(name string, archived bool) error {
+	_, err := s.db.Exec("UPDATE nzb SET archived = ? WHERE name = ?", archived, name)
+	if err != nil {
+		return fmt.Errorf("failed recording archived state of %s: %w", name, err)
 	}
 	return nil
 }

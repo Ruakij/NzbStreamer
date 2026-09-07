@@ -108,6 +108,11 @@ function createRow(id, action) {
   row.cells[0].append(title);
   const stage = document.createElement("span");
   row.cells[2].append(stage);
+  if (action === "delete") {
+    const archive = document.createElement("button");
+    archive.className = "archive";
+    row.cells[5].append(archive);
+  }
   const button = document.createElement("button");
   button.textContent = action === "cancel" ? "Cancel" : "Delete";
   button.onclick = () => remove(id, action, button);
@@ -147,6 +152,12 @@ function render(tbody, items, action, files = {}) {
       err?.remove();
     }
     if (action === "delete") updateFiles(name, files[item.id] || [], item.id);
+    const archive = tr.cells[5].querySelector(".archive");
+    if (archive) {
+      const next = item.archived ? "restore" : "archive";
+      setText(archive, item.archived ? "Restore" : "Archive");
+      archive.onclick = () => remove(item.id, next, archive);
+    }
     setText(tr.cells[1], item.category || "");
     const stage = tr.cells[2].firstElementChild;
     stage.className = "stage " + item.stage;
@@ -214,6 +225,11 @@ async function remove(id, action, button) {
   }
 }
 
+// An archived add is still presented; the flag only says which half of the
+// history it belongs to.
+const showArchived = document.querySelector("#show-archived input");
+showArchived.onchange = () => poll();
+
 let polling = false;
 
 async function poll() {
@@ -224,7 +240,8 @@ async function poll() {
     if (!response.ok) throw new Error(response.status);
     const data = await response.json();
     render(document.getElementById("queue"), data.queue, "cancel");
-    render(document.getElementById("history"), data.history, "delete", data.files || {});
+    const history = (data.history || []).filter((item) => !!item.archived === showArchived.checked);
+    render(document.getElementById("history"), history, "delete", data.files || {});
     document.getElementById("offline").classList.remove("on");
   } catch {
     // leave the last render up; an empty table would read as "nothing added"

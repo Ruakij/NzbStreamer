@@ -24,6 +24,7 @@ type Service interface {
 	Files() map[string][]string
 	Cancel(id string) error
 	Delete(id string) error
+	Archive(id string, archived bool) error
 }
 
 type Handler struct {
@@ -98,6 +99,8 @@ func (h *Handler) add(w http.ResponseWriter, r *http.Request) {
 
 // remove takes the action from the caller, because the page knows which block
 // the row is in: a queued item is cancelled, a finished one is deleted.
+// Archiving only hides a finished one from the default listing; what it built
+// stays presented.
 func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
 	if id == "" {
@@ -111,6 +114,10 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 		err = h.service.Cancel(id)
 	case "delete":
 		err = h.service.Delete(id)
+	case "archive":
+		err = h.service.Archive(id, true)
+	case "restore":
+		err = h.service.Archive(id, false)
 	default:
 		writeError(w, http.StatusBadRequest, "unknown action: "+action)
 		return

@@ -27,6 +27,10 @@ type Record struct {
 	// TreeKey identifies the settings the stored files were built with; the
 	// files are only worth reading back while it still matches
 	TreeKey string
+	// Archived marks a record a client took out of its history. It changes
+	// nothing about the nzb: the files stay presented and the record stays
+	// here, only the default history listing leaves it out
+	Archived bool
 }
 
 // File is one path an nzb presents, as it was presented when the add finished.
@@ -45,6 +49,9 @@ type NzbStore interface {
 	Add(data *nzbparser.NzbData, stage, category string) error
 	// SetStage records how the add ended
 	SetStage(name, stage, errMessage string) error
+	// SetArchived takes a record out of the default history listing, or puts it
+	// back
+	SetArchived(name string, archived bool) error
 	// SetFiles replaces what an nzb presents, under the key the tree was built
 	// with
 	SetFiles(name, treeKey string, files []File) error

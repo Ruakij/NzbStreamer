@@ -31,6 +31,7 @@ type fakeService struct {
 	added     []string
 	cancelled []string
 	deleted   []string
+	archived  []string
 	addErr    error
 }
 
@@ -52,6 +53,11 @@ func (s *fakeService) Cancel(id string) error {
 
 func (s *fakeService) Delete(id string) error {
 	s.deleted = append(s.deleted, id)
+	return nil
+}
+
+func (s *fakeService) Archive(id string, archived bool) error {
+	s.archived = append(s.archived, fmt.Sprintf("%s/%t", id, archived))
 	return nil
 }
 
@@ -242,23 +248,69 @@ func TestQueueAndHistoryCarryWhatAClientReads(t *testing.T) {
 
 // A client deletes from the queue while an add runs and from the history once it
 // has imported. They are different calls and they mean different things here.
-func TestDeletingFromTheQueueCancelsAndFromTheHistoryRemoves(t *testing.T) {
+func TestDeletingFromTheQueueCancelsAndFromTheHistoryArchives(t *testing.T) {
 	service := &fakeService{}
 	handler := sabnzbd.NewHandler(service, sabnzbd.Config{})
 
 	if status := call(t, handler, "mode=queue&name=delete&value=Some.Release&del_files=1")["status"]; status != true {
 		t.Errorf("queue delete answered %v", status)
 	}
-	if status := call(t, handler, "mode=history&name=delete&value=Other.Release&del_files=0")["status"]; status != true {
+	// What an *arr sends once it has imported. del_files is set whenever it
+	// believes it owns the files, and here those are the ones it imported from
+	if status := call(t, handler, "mode=history&name=delete&value=Other.Release&del_files=1")["status"]; status != true {
 		t.Errorf("history delete answered %v", status)
+	}
+	if status := call(t, handler, "mode=history&name=delete&value=Gone.Release&archive=0")["status"]; status != true {
+		t.Errorf("history delete with archive=0 answered %v", status)
 	}
 
 	if fmt.Sprint(service.cancelled) != "[Some.Release]" {
 		t.Errorf("cancelled: %v", service.cancelled)
 	}
-	// del_files=0 changes nothing: the record and the files are one thing here
-	if fmt.Sprint(service.deleted) != "[Other.Release]" {
+	if fmt.Sprint(service.archived) != "[Other.Release/true]" {
+		t.Errorf("archived: %v", service.archived)
+	}
+	// archive=0 is the only thing that takes the files away
+	if fmt.Sprint(service.deleted) != "[Gone.Release]" {
 		t.Errorf("deleted: %v", service.deleted)
+	}
+}
+
+// Where nothing reads the presented files after an import, a client removing a
+// download can mean what it means everywhere else.
+func TestDeleteOnRemoveMakesAHistoryDeleteRemoveTheNzb(t *testing.T) {
+	service := &fakeService{}
+	handler := sabnzbd.NewHandler(service, sabnzbd.Config{DeleteOnRemove: true})
+
+	call(t, handler, "mode=history&name=delete&value=Some.Release&del_files=1")
+	// A client that names the parameter has said what it wants
+	call(t, handler, "mode=history&name=delete&value=Kept.Release&archive=1")
+
+	if fmt.Sprint(service.deleted) != "[Some.Release]" {
+		t.Errorf("deleted: %v", service.deleted)
+	}
+	if fmt.Sprint(service.archived) != "[Kept.Release/true]" {
+		t.Errorf("archived: %v", service.archived)
+	}
+}
+
+// An archived add stays in the store and stays presented; it is only left out of
+// the listing a client reads by default.
+func TestTheHistoryListsArchivedItemsOnlyWhenAsked(t *testing.T) {
+	service := &fakeService{history: []nzbservice.QueueItem{
+		{ID: "Kept.Release", Stage: nzbservice.StageCompleted},
+		{ID: "Archived.Release", Stage: nzbservice.StageCompleted, Archived: true},
+	}}
+	handler := sabnzbd.NewHandler(service, sabnzbd.Config{})
+
+	for query, want := range map[string]string{
+		"mode=history":           "Kept.Release",
+		"mode=history&archive=1": "Archived.Release",
+	} {
+		slots, _ := call(t, handler, query)["history"].(map[string]any)["slots"].([]any)
+		if len(slots) != 1 || slots[0].(map[string]any)["nzo_id"] != want {
+			t.Errorf("%s listed %v", query, slots)
+		}
 	}
 }
 
@@ -289,7 +341,7 @@ func TestAFailureIsReportedTheWayAClientChecksFor(t *testing.T) {
 func TestADeleteThatFailsSaysSo(t *testing.T) {
 	handler := sabnzbd.NewHandler(&failingService{}, sabnzbd.Config{})
 
-	response := call(t, handler, "mode=history&name=delete&value=Some.Release")
+	response := call(t, handler, "mode=history&name=delete&value=Some.Release&archive=0")
 	if response["status"] != false || response["error"] == "" {
 		t.Errorf("a failed delete answered %v", response)
 	}

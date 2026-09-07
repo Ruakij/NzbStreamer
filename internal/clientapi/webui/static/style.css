@@ -42,6 +42,10 @@ button {
 }
 button:hover:not(:disabled) { background: var(--hover); }
 button:disabled { opacity: .5; cursor: default; }
+td button + button { margin-left: .35rem; }
+
+#show-archived { margin-left: .6rem; cursor: pointer; user-select: none; }
+#show-archived input { vertical-align: middle; margin-right: .2rem; }
 
 table {
   border-collapse: collapse; width: 100%;

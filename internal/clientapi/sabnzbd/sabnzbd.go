@@ -40,6 +40,7 @@ type Service interface {
 	History() []nzbservice.QueueItem
 	Cancel(id string) error
 	Delete(id string) error
+	Archive(id string, archived bool) error
 }
 
 type Config struct {
@@ -51,6 +52,11 @@ type Config struct {
 	// Categories offered to a client. A client refuses to save if the category it
 	// is configured with is not among them.
 	Categories []string
+	// DeleteOnRemove makes a client removing a download from its history delete
+	// the nzb rather than archive it, taking its files off the mount with it.
+	// Off by default: a client removes what it has imported, and what it
+	// imported from here is the mount itself
+	DeleteOnRemove bool
 	// Ready holds the whole surface at 503 while it reports false; nil is always
 	// ready. It is the startup restore: reporting an nzb complete before its
 	// files are there is an import that fails and a release that gets
@@ -262,11 +268,23 @@ func (h *Handler) queue(w http.ResponseWriter, query map[string][]string) {
 
 func (h *Handler) history(w http.ResponseWriter, query map[string][]string) {
 	if first(query, "name") == "delete" {
-		h.delete(w, query, h.service.Delete)
+		// Removing a download means archiving it unless the client asks for the
+		// record to go too. What the files it built are to us is the answer to
+		// this: a client stages a download somewhere and copies out of it, but
+		// here the presented tree is the library it imported into, so removing
+		// it takes away what the client just linked to. Where nothing reads
+		// them afterwards, DeleteOnRemove says so; a client that names the
+		// parameter has said what it wants either way.
+		archive := first(query, "archive")
+		if archive == "0" || (archive == "" && h.config.DeleteOnRemove) {
+			h.delete(w, query, h.service.Delete)
+			return
+		}
+		h.delete(w, query, func(id string) error { return h.service.Archive(id, true) })
 		return
 	}
 
-	items := filter(h.service.History(), query)
+	items := filter(archived(h.service.History(), first(query, "archive") == "1"), query)
 	slots := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		slot := map[string]any{
@@ -294,11 +312,25 @@ func (h *Handler) history(w http.ResponseWriter, query map[string][]string) {
 	}})
 }
 
+// archived keeps the half of the history a listing asked for. The two are one
+// list: archiving is a flag on a finished add, not a place it moves to.
+func archived(items []nzbservice.QueueItem, want bool) []nzbservice.QueueItem {
+	kept := make([]nzbservice.QueueItem, 0, len(items))
+	for _, item := range items {
+		if item.Archived == want {
+			kept = append(kept, item)
+		}
+	}
+	return kept
+}
+
 // delete answers `name=delete`, which the queue and the history both use with
-// their own meaning of removing an item. `del_files` is not read: the record of
-// an add and the files it built are one thing here, and deleting one without the
-// other leaves either files nothing can report on or a report on files that are
-// gone.
+// their own meaning of removing an item. `del_files` is not read: a client sets
+// it whenever it believes it owns what it downloaded, and here that is the
+// presented tree itself. Removing the files is `archive=0`, which removes the
+// record with them - the record of an add and the files it built are one thing,
+// and deleting one without the other leaves either files nothing can report on
+// or a report on files that are gone.
 func (h *Handler) delete(w http.ResponseWriter, query map[string][]string, remove func(string) error) {
 	for _, id := range strings.Split(first(query, "value"), ",") {
 		id = strings.TrimSpace(id)
@@ -309,7 +341,7 @@ func (h *Handler) delete(w http.ResponseWriter, query map[string][]string, remov
 			writeError(w, err.Error())
 			return
 		}
-		slog.Info("Removed nzb on client request", "id", id)
+		slog.Info("Removed nzb from a client list", "id", id)
 	}
 
 	writeJSON(w, map[string]any{"status": true})

@@ -55,6 +55,8 @@ type SabnzbdConfig struct {
 	APIKey      string   `env:"SABNZBD_API_KEY"`                         // Api key demanded of every request; unauthenticated when unset
 	CompleteDir string   `env:"SABNZBD_COMPLETE_DIR"`                    // Path reported to a client as the completed-downloads folder, which is where it imports from; defaults to MOUNT_PATH
 	Categories  []string `env:"SABNZBD_CATEGORIES, default=*,tv,movies"` // Categories offered to a client; it refuses to save if the one it is configured with is missing
+	// Removing a download from a client's history deletes the nzb and takes its files off the mount, rather than archiving it. A client removes what it has imported, and here it imported from the mount, so this is only right where nothing reads those files afterwards
+	DeleteOnRemove bool `env:"SABNZBD_DELETE_ON_REMOVE, default=false"`
 }
 
 type MountConfig struct {

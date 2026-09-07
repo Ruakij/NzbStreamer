@@ -258,6 +258,8 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 			CompleteDir: completeDir(c),
 			Categories:  c.Sabnzbd.Categories,
 			Ready:       service.Ready,
+
+			DeleteOnRemove: c.Sabnzbd.DeleteOnRemove,
 		}),
 		Webdav: webdav.BasicAuth(&gowebdav.Handler{FileSystem: webdavFS}, webdavAuth),
 		Debug:  c.HTTP.Debug,

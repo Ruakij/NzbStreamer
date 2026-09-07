@@ -104,6 +104,19 @@ func (s *fakeStore) Add(data *nzbparser.NzbData, stage, category string) error {
 	return nil
 }
 
+func (s *fakeStore) SetArchived(name string, archived bool) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	record, ok := s.records[name]
+	if !ok {
+		return nil
+	}
+	record.Archived = archived
+	s.records[name] = record
+	return nil
+}
+
 func (s *fakeStore) SetStage(name, stage, errMessage string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -554,5 +567,54 @@ func TestARestoredTreeIsListedFromTheStoreAndBuiltOnTheFirstRead(t *testing.T) {
 				t.Errorf("after a read %d trees were built, want 1", got)
 			}
 		})
+	}
+}
+
+// Archiving is what a download client means by removing a finished download: it
+// has imported what it wanted and the record is in its way. Here the tree it
+// imported from is the library, so the files stay.
+func TestArchivingKeepsTheFilesPresentedAndSurvivesARestart(t *testing.T) {
+	store := newFakeStore()
+	factory := &fakeFactory{}
+	presenter := &fakePresenter{files: map[string]presentation.Openable{}}
+	service := nzbservice.NewService(store, factory, []presentation.Presenter{presenter}, nil, healthyChecker{})
+
+	nzbData := &nzbparser.NzbData{
+		MetaName: "Some.Release",
+		Files:    []nzbparser.File{{Filename: "some.release.rar"}},
+	}
+	if _, err := service.Add(nzbData, "tv"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	waitForHistory(t, service)
+
+	if err := service.Archive(nzbData.MetaName, true); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+
+	history := service.History()
+	if len(history) != 1 || !history[0].Archived {
+		t.Fatalf("history after archiving was %+v", history)
+	}
+	if len(presenter.files) == 0 {
+		t.Error("archiving took the files out of the presenter")
+	}
+	if len(factory.discarded) != 0 {
+		t.Errorf("archiving discarded the segment data: %v", factory.discarded)
+	}
+
+	restarted := nzbservice.NewService(store, &fakeFactory{}, []presentation.Presenter{presenter}, nil, healthyChecker{})
+	if err := restarted.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if history := restarted.History(); len(history) != 1 || !history[0].Archived {
+		t.Errorf("history after a restart was %+v", history)
+	}
+
+	if err := service.Archive(nzbData.MetaName, false); err != nil {
+		t.Fatalf("Archive back: %v", err)
+	}
+	if history := service.History(); history[0].Archived {
+		t.Error("restoring left the item archived")
 	}
 }
