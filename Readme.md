@@ -101,39 +101,39 @@ Zip archives are not unpacked.
 
 # 4. Routes
 
-| Path                                | Description                                                   |
-|-------------------------------------|--------------------------------------------------------|
-| `/`                                 | Web ui showing the queue and history |
-| `/sabnzbd/api`                      | SABnzbd-compatible download client api; a client's url base is `http://host:8080/sabnzbd` |
-| `/webdav/`                          | WebDAV, behind basic auth when `WEBDAV_USERNAME` is set |
+| Path                                | Description                                                                                                                   |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `/`                                 | Web ui showing the queue and history                                                                                          |
+| `/sabnzbd/api`                      | SABnzbd-compatible download client api; a client's url base is `http://host:8080/sabnzbd`                                     |
+| `/webdav/`                          | WebDAV, behind basic auth when `WEBDAV_USERNAME` is set                                                                       |
 | `/api/health`                       | Readiness: 200 when the store, cache and mount are up, 503 otherwise; the body reports every component, news servers included |
-| `/api/health/live`                  | Liveness: 200 while the process answers, looking at nothing else |
-| `/debug/pprof/`, `/debug/statsviz/` | Debugging endpoints, off unless `HTTP_DEBUG`                                |
+| `/api/health/live`                  | Liveness: 200 while the process answers, looking at nothing else                                                              |
+| `/debug/pprof/`, `/debug/statsviz/` | Debugging endpoints, off unless `HTTP_DEBUG`                                                                                  |
 
 # 5. Settings
 
-| Name                              | Default                | Description                                      |
-|-----------------------------------|------------------------|--------------------------------------------------|
-| **Usenet server**, once per server, `n` counting up from 1
-| `USENET_n_HOST`*                  |                        | Usenet server host                               |
-| `USENET_n_PORT`                   | 563                    | Usenet server port                               |
-| `USENET_n_TLS`                    | true                   | Use TLS for Usenet connection                    |
-| `USENET_n_USER`*                  |                        | Usenet username                                  |
-| `USENET_n_PASS`*                  |                        | Usenet password                                  |
-| `USENET_n_MAX_CONN`               | 20                     | Maximum Usenet connections to use                |
-| `USENET_n_PRIORITY`               | n                      | Priority, lower is chosen first; servers sharing a priority share the load round robin |
-| `USENET_n_QUOTA_BYTES`            | 0                      | Bytes this server may serve per period; 0 is unmetered |
-| `USENET_n_QUOTA_PERIOD`           | 720h                   | Quota-lifetime |
-| `USENET_n_PROBE`                  | true                   | Connect to the server at startup, so rejected credentials and an unreachable host are immediately detected |
-| **Usenet**, shared by every server
-| `USENET_MAX_ATTEMPTS`             | 3                      | Attempts a request gets before its error is reported |
-| `USENET_RETRY_BACKOFF`            | 1s                     | Wait after the first failed attempt, doubled after each further one |
-| `USENET_TIMEOUT`                  | 30s                    | Timeout for connecting and for completing a single request |
-| `USENET_IDLE_TIMEOUT`             | 2m                     | Time after which an unused connection is closed |
-| `NNTP_PIPELINE_SIZE`              | 4                      | How many requests a connection may use at once; minimim 1; this optimizes the use of the connections |
-| `NNTP_MIN_FREE_CONNS`             | 1                      | Connections kept warm ahead of demand, so a request finds a warm connection; 0 only dials on demand |
-| `USENET_BREAKER_FAILURES`         | 3                      | Consecutive failures which disables uisng a server for cooldown-time; 0 never disables |
-| `USENET_BREAKER_COOLDOWN`         | 5m                     | How long a disabled server waits for |
+| Name                                                       | Default | Description                                                                                                |
+| ---------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------- |
+| **Usenet server**, once per server, `n` counting up from 1 |
+| `USENET_n_HOST`*                                           |         | Usenet server host                                                                                         |
+| `USENET_n_PORT`                                            | 563     | Usenet server port                                                                                         |
+| `USENET_n_TLS`                                             | true    | Use TLS for Usenet connection                                                                              |
+| `USENET_n_USER`*                                           |         | Usenet username                                                                                            |
+| `USENET_n_PASS`*                                           |         | Usenet password                                                                                            |
+| `USENET_n_MAX_CONN`                                        | 20      | Maximum Usenet connections to use                                                                          |
+| `USENET_n_PRIORITY`                                        | n       | Priority, lower is chosen first; servers sharing a priority share the load round robin                     |
+| `USENET_n_QUOTA_BYTES`                                     | 0       | Bytes this server may serve per period; 0 is unmetered                                                     |
+| `USENET_n_QUOTA_PERIOD`                                    | 720h    | Quota-lifetime                                                                                             |
+| `USENET_n_PROBE`                                           | true    | Connect to the server at startup, so rejected credentials and an unreachable host are immediately detected |
+| **Usenet**, shared by every server                         |
+| `USENET_MAX_ATTEMPTS`                                      | 3       | Attempts a request gets before its error is reported                                                       |
+| `USENET_RETRY_BACKOFF`                                     | 1s      | Wait after the first failed attempt, doubled after each further one                                        |
+| `USENET_TIMEOUT`                                           | 30s     | Timeout for connecting and for completing a single request                                                 |
+| `USENET_IDLE_TIMEOUT`                                      | 2m      | Time after which an unused connection is closed                                                            |
+| `NNTP_PIPELINE_SIZE`                                       | 4       | How many requests a connection may use at once; minimim 1; this optimizes the use of the connections       |
+| `NNTP_MIN_FREE_CONNS`                                      | 1       | Connections kept warm ahead of demand, so a request finds a warm connection; 0 only dials on demand        |
+| `USENET_BREAKER_FAILURES`                                  | 3       | Consecutive failures which disables uisng a server for cooldown-time; 0 never disables                     |
+| `USENET_BREAKER_COOLDOWN`                                  | 5m      | How long a disabled server waits for                                                                       |
 
 One server is `USENET_1_HOST` and its siblings; add more by counting up. The
 unindexed form (`USENET_HOST`) is nr. 1 too.
@@ -141,57 +141,59 @@ unindexed form (`USENET_HOST`) is nr. 1 too.
 `PRIORITY` decides the order: lower is chosen first, higher ones are the fallback. Servers sharing a priority are used simultaniously via round robin.
 Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORITY` to 2.
 
-| Name                              | Default                | Description                                      |
-|-----------------------------------|------------------------|--------------------------------------------------|
-| **Trigger**
-| `FOLDER_WATCHER_PATH`             | .watch                 | Watch folder for adding nzbs                     |
-| `FOLDER_WATCHER_CONSUME`          | true                   | Delete an nzb file once it has been added; the metadata database keeps it |
-| **Http**
-| `HTTP_ADDRESS`                    | :8080                  | Address the process listens on; serves the web ui, its api, `/sabnzbd/api` and `/webdav/` |
-| `HTTP_DEBUG`                      | false                  | Serve `/debug/pprof/` and `/debug/statsviz/`     |
-| **Presenters**
-| `WEBDAV_USERNAME`                 |                        | Username for WebDAV basic auth; Authentication disabled when unset |
-| `WEBDAV_PASSWORD`                 |                        | Password for WebDAV basic auth                   |
-| `WEBDAV_LAZY_EXACT_SIZE`          | true                   | Measure the exact size of a file on the GET that needs it, where doing so is cheap, so `Content-Length` is right for one `NZB_EAGER_EXACT_SIZE_CLASSES` left out <br>Disabling it answers every GET from the size hint, which for an estimated size means a truncated response |
-| `MOUNT_PATH`                      |                        | Path for FUSE mount; Disabled when unset         |
-| `MOUNT_OPTIONS`                   |                        | Additional Options for FUSE mount; See mount.fuse3 Manpage for more information |
-| `MOUNT_MAX_BACKGROUND`            | 64                     | Reads the kernel may have in flight per mount; a read here waits on a news server, so this and the readahead below decide the throughput of a sequential read |
-| `MOUNT_MAX_READAHEAD`             | 8M                     | Bytes the kernel reads ahead of a sequential reader; a request is capped at 1 MiB, so this is how many it issues |
-| **Download-Client-Api**
-| `SABNZBD_API_KEY`                 |                        | Api key demanded of every request; unauthenticated when unset |
-| `SABNZBD_COMPLETE_DIR`            |                        | Path reported to a client as the completed-downloads folder, which is where it imports from; defaults to `MOUNT_PATH` |
-| `SABNZBD_CATEGORIES`              | *,tv,movies            | Categories offered to a client; it refuses to save if the one it is configured with is missing |
-| **Cache**
-| `CACHE_PATH`                      | .cache                 | Path for segment-cache                           |
-| `CACHE_MAX_SIZE`                  | 0                      | Maximum cache size in bytes, if unset allows unlimited size (not recommended) |
-| **Metadata**
-| `METADATA_PATH`                   | .metadata/metadata.db  | Path for the metadata database; WAL puts two sibling files next to it |
-| **Readahead**
-| `READAHEAD_SIZE`                  | 32M                    | Bytes held warm ahead of each open file; 0 disables readahead |
-| `READAHEAD_CHUNK`                 | 1M                     | Bytes fetched per chunk; `SIZE`/`CHUNK` is how many run at once, and a chunk is served segment by segment, so around one segment reads fastest |
-| **Nzb-Options**
-| `NZB_FILE_BLACKLIST`              |                        | Early Regex-blacklist, applied after the nzb-file is scanned <br>A file dropped here is not health-checked either, and .par2 dropped here leaves the check without its repair-capacity estimate |
-| `NZB_PROBE_SIZE_CONVENTION`       | 3                      | Segments of an nzb whose size hints do not identify what they count that may be downloaded to settle it, making its sizes exact <br>A segment that settles nothing costs the next attempt; 0 leaves the sizes as estimates until a read has measured them |
-| `NZB_EAGER_EXACT_SIZE_CLASSES`    | content                | File classes measured while an nzb is added, so a listing reports their exact size before anything has read them <br>`content`, `recovery`, `other`, comma-separated, or empty for none. A file posted as it is costs one segment; a member of an archive knows its length from its header and costs nothing. Whatever is left out is measured on its first read instead |
-| `NZB_MAX_ARCHIVE_DEPTH`           | 2                      | Archives unpacked on top of each other, e.g. for an upload that packed a rar set inside a rar set |
-| `NZB_CONCURRENCY`                 | 4                      | Nzbs built at once, whether added or restored on startup; the rest wait in the queue <br>Building one is mostly waiting on the news server, over connections every read shares. 0 or less is unbounded |
-| **Health-Probing**
-| `PROBE_INITIAL_FILE_PERCENT`      | 0.5                    | Segments checked per content file on the first pass, as a percentage of its segments, spread evenly (so first and last)<br>0 disables checking |
-| `PROBE_INITIAL_FILE_MIN_SEGMENTS` | 2                      | Floor on that sample, so a short file is not rounded down to nothing |
-| `PROBE_INITIAL_FILE_MAX_SEGMENTS` | 8                      | Cap on that sample, so a huge file does not turn the add into a download |
-| `PROBE_EXTENSIVE_FILE_PERCENT`    | 1.0                    | Ceiling on the widened sample a file gets when the first pass cannot decide it; 0 skips the second pass |
-| `PROBE_EXTENSIVE_FILE_MAX_SEGMENTS`| 512                   | Absolute cap on that widened sample |
-| `PROBE_MAX_MISSING_PERCENT`       | 100                    | Ceiling on accepted damage regardless of par2; 100 lets par2 capacity govern on its own |
-| `PROBE_PAR2_SAFETY`               | 0.9                    | Fraction of the estimated par2 capacity to trust, since the capacity is itself estimated |
-| `PROBE_UNDECIDED_ACCEPT`          | true                   | Accept a file the second pass still cannot decide |
-| `PROBE_CONFIDENCE`                | 0.95                   | Confidence of the interval the verdict is taken from; lower means fewer escalations and more wrong calls |
-| `PROBE_PARALLEL`                  | 0                      | Concurrent segment-checks; defaults to the sum of the servers connections when 0 |
-| **Filesystem-Options**
-| `FILESYSTEM_BLACKLIST`            | (?i)\.par2$            | Late Regex-blacklist, applied on the actual file added to the filesystem; includes files from archives <br>Can be used to hide archive-files, but leaving unpacked files. Hides .par2 by default, after the health check has counted it |
-| `FILESYSTEM_FLATTEN_MAX_DEPTH`    | 0                      | Unpacks files from folders e.g. archives where possible <br>Can be used to hide archive-group-folder |
-| `FILESYSTEM_FIX_FILENAME_THRESHOLD`| 0.2                   | Threshold for applying filename-fixing when filename doesnt match nzb meta name |
-| **Misc**
-| `LOGLEVEL`                        | INFO                   | Logging level, one of {DEBUG, INFO, WARN, ERROR} |
+| Name                                | Default               | Description                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Trigger**                         |
+| `FOLDER_WATCHER_PATH`               | .watch                | Watch folder for adding nzbs                                                                                                                                                                                                                                                                                                                                             |
+| `FOLDER_WATCHER_CONSUME`            | true                  | Delete an nzb file once it has been added; the metadata database keeps it                                                                                                                                                                                                                                                                                                |
+| **Http**                            |
+| `HTTP_ADDRESS`                      | :8080                 | Address the process listens on; serves the web ui, its api, `/sabnzbd/api` and `/webdav/`                                                                                                                                                                                                                                                                                |
+| `HTTP_DEBUG`                        | false                 | Serve `/debug/pprof/` and `/debug/statsviz/`                                                                                                                                                                                                                                                                                                                             |
+| **Presenters**                      |
+| `WEBDAV_USERNAME`                   |                       | Username for WebDAV basic auth; Authentication disabled when unset                                                                                                                                                                                                                                                                                                       |
+| `WEBDAV_PASSWORD`                   |                       | Password for WebDAV basic auth                                                                                                                                                                                                                                                                                                                                           |
+| `WEBDAV_LAZY_EXACT_SIZE`            | true                  | Measure the exact size of a file on the GET that needs it, where doing so is cheap, so `Content-Length` is right for one `NZB_EAGER_EXACT_SIZE_CLASSES` left out <br>Disabling it answers every GET from the size hint, which for an estimated size means a truncated response                                                                                           |
+| `MOUNT_PATH`                        |                       | Path for FUSE mount; Disabled when unset                                                                                                                                                                                                                                                                                                                                 |
+| `MOUNT_OPTIONS`                     |                       | Additional Options for FUSE mount; See mount.fuse3 Manpage for more information                                                                                                                                                                                                                                                                                          |
+| `MOUNT_MAX_BACKGROUND`              | 64                    | Reads the kernel may have in flight per mount; a read here waits on a news server, so this and the readahead below decide the throughput of a sequential read                                                                                                                                                                                                            |
+| `MOUNT_MAX_READAHEAD`               | 8M                    | Bytes the kernel reads ahead of a sequential reader; a request is capped at 1 MiB, so this is how many it issues                                                                                                                                                                                                                                                         |
+| **Download-Client-Api**             |
+| `SABNZBD_API_KEY`                   |                       | Api key demanded of every request; unauthenticated when unset                                                                                                                                                                                                                                                                                                            |
+| `SABNZBD_COMPLETE_DIR`              |                       | Path reported to a client as the completed-downloads folder, which is where it imports from; defaults to `MOUNT_PATH`                                                                                                                                                                                                                                                    |
+| `SABNZBD_CATEGORIES`                | *,tv,movies           | Categories offered to a client; it refuses to save if the one it is configured with is missing                                                                                                                                                                                                                                                                           |
+| **Cache**                           |
+| `CACHE_PATH`                        | .cache                | Path for segment-cache                                                                                                                                                                                                                                                                                                                                                   |
+| `CACHE_MAX_SIZE`                    | 0                     | Maximum cache size in bytes, if unset allows unlimited size (not recommended)                                                                                                                                                                                                                                                                                            |
+| **Metadata**                        |
+| `METADATA_PATH`                     | .metadata/metadata.db | Path for the metadata database; WAL puts two sibling files next to it                                                                                                                                                                                                                                                                                                    |
+| **Readahead**                       |
+| `READAHEAD_MAX_SIZE`                | 16M                   | Bytes held warm ahead of each open file; 0 disables readahead                                                                                                                                                                                                                                                                                                            |
+| `READAHEAD_CHUNK`                   | 1M                    | Bytes fetched per chunk; `MAX_SIZE`/`CHUNK` is how many run at once, and a chunk is served segment by segment, so around one segment reads fastest                                                                                                                                                                                                                       |
+| `READAHEAD_MIN_SIZE`                | 4M                    | Bytes a reader opens its window on, growing by `RAMP_SPEED` as it reads in order; 0 is the one chunk a read needs, `MAX_SIZE` is a full window and no ramp                                                                                                                                                                                                               |
+| `READAHEAD_RAMP_SPEED`              | 2.0                   | What the warm window multiplies by per chunk read in order, and divides by on a read landing past `MAX_SIZE` ahead of it; 1 or less holds it at `MIN_SIZE`                                                                                                                                                                                                               |
+| **Nzb-Options**                     |
+| `NZB_FILE_BLACKLIST`                |                       | Early Regex-blacklist, applied after the nzb-file is scanned <br>A file dropped here is not health-checked either, and .par2 dropped here leaves the check without its repair-capacity estimate                                                                                                                                                                          |
+| `NZB_PROBE_SIZE_CONVENTION`         | 3                     | Segments of an nzb whose size hints do not identify what they count that may be downloaded to settle it, making its sizes exact <br>A segment that settles nothing costs the next attempt; 0 leaves the sizes as estimates until a read has measured them                                                                                                                |
+| `NZB_EAGER_EXACT_SIZE_CLASSES`      | content               | File classes measured while an nzb is added, so a listing reports their exact size before anything has read them <br>`content`, `recovery`, `other`, comma-separated, or empty for none. A file posted as it is costs one segment; a member of an archive knows its length from its header and costs nothing. Whatever is left out is measured on its first read instead |
+| `NZB_MAX_ARCHIVE_DEPTH`             | 2                     | Archives unpacked on top of each other, e.g. for an upload that packed a rar set inside a rar set                                                                                                                                                                                                                                                                        |
+| `NZB_CONCURRENCY`                   | 4                     | Nzbs built at once, whether added or restored on startup; the rest wait in the queue <br>Building one is mostly waiting on the news server, over connections every read shares. 0 or less is unbounded                                                                                                                                                                   |
+| **Health-Probing**                  |
+| `PROBE_INITIAL_FILE_PERCENT`        | 0.5                   | Segments checked per content file on the first pass, as a percentage of its segments, spread evenly (so first and last)<br>0 disables checking                                                                                                                                                                                                                           |
+| `PROBE_INITIAL_FILE_MIN_SEGMENTS`   | 2                     | Floor on that sample, so a short file is not rounded down to nothing                                                                                                                                                                                                                                                                                                     |
+| `PROBE_INITIAL_FILE_MAX_SEGMENTS`   | 8                     | Cap on that sample, so a huge file does not turn the add into a download                                                                                                                                                                                                                                                                                                 |
+| `PROBE_EXTENSIVE_FILE_PERCENT`      | 1.0                   | Ceiling on the widened sample a file gets when the first pass cannot decide it; 0 skips the second pass                                                                                                                                                                                                                                                                  |
+| `PROBE_EXTENSIVE_FILE_MAX_SEGMENTS` | 512                   | Absolute cap on that widened sample                                                                                                                                                                                                                                                                                                                                      |
+| `PROBE_MAX_MISSING_PERCENT`         | 100                   | Ceiling on accepted damage regardless of par2; 100 lets par2 capacity govern on its own                                                                                                                                                                                                                                                                                  |
+| `PROBE_PAR2_SAFETY`                 | 0.9                   | Fraction of the estimated par2 capacity to trust, since the capacity is itself estimated                                                                                                                                                                                                                                                                                 |
+| `PROBE_UNDECIDED_ACCEPT`            | true                  | Accept a file the second pass still cannot decide                                                                                                                                                                                                                                                                                                                        |
+| `PROBE_CONFIDENCE`                  | 0.95                  | Confidence of the interval the verdict is taken from; lower means fewer escalations and more wrong calls                                                                                                                                                                                                                                                                 |
+| `PROBE_PARALLEL`                    | 0                     | Concurrent segment-checks; defaults to the sum of the servers connections when 0                                                                                                                                                                                                                                                                                         |
+| **Filesystem-Options**              |
+| `FILESYSTEM_BLACKLIST`              | (?i)\.par2$           | Late Regex-blacklist, applied on the actual file added to the filesystem; includes files from archives <br>Can be used to hide archive-files, but leaving unpacked files. Hides .par2 by default, after the health check has counted it                                                                                                                                  |
+| `FILESYSTEM_FLATTEN_MAX_DEPTH`      | 0                     | Unpacks files from folders e.g. archives where possible <br>Can be used to hide archive-group-folder                                                                                                                                                                                                                                                                     |
+| `FILESYSTEM_FIX_FILENAME_THRESHOLD` | 0.2                   | Threshold for applying filename-fixing when filename doesnt match nzb meta name                                                                                                                                                                                                                                                                                          |
+| **Misc**                            |
+| `LOGLEVEL`                          | INFO                  | Logging level, one of {DEBUG, INFO, WARN, ERROR}                                                                                                                                                                                                                                                                                                                         |
 
 *\* Required*
 

@@ -13,7 +13,7 @@ import (
 )
 
 func TestReadAndSeek(t *testing.T) {
-	reader, err := readaheadresource.New(&bytesresource.BytesResource{Content: []byte("0123456789")}, 4, 3).Open()
+	reader, err := readaheadresource.New(&bytesresource.BytesResource{Content: []byte("0123456789")}, 4, 4, 3, 0).Open()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func (r *slowHandle) Close() error { return nil }
 
 func TestReadsAheadInParallel(t *testing.T) {
 	underlying := &slowReader{data: make([]byte, 32)}
-	reader, err := readaheadresource.New(underlying, 16, 4).Open()
+	reader, err := readaheadresource.New(underlying, 16, 16, 4, 0).Open()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestReadsAheadInParallel(t *testing.T) {
 // what serves those reads rather than something a stream drives past it.
 func TestReadAtIsServedFromTheWindow(t *testing.T) {
 	underlying := &slowReader{data: make([]byte, 64)}
-	opened, err := readaheadresource.New(underlying, 16, 4).Open()
+	opened, err := readaheadresource.New(underlying, 16, 16, 4, 0).Open()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,22 +126,18 @@ func TestReadAtIsServedFromTheWindow(t *testing.T) {
 		t.Fatal("reader is not positional; fuse would serialise it behind a seeking wrapper")
 	}
 
+	// The chunks ahead are warm, and one behind the head does not drop them.
+	// Counting every read would race the warming the advancing anchor starts,
+	// so what is asserted is that no chunk was fetched twice; Close waits for
+	// the fetches still in flight.
 	buf := make([]byte, 4)
-	if _, err := reader.ReadAt(buf, 16); err != nil {
-		t.Fatal(err)
-	}
-	if underlying.peak.Load() != 4 {
-		t.Fatalf("peak reads = %d, want the whole window", underlying.peak.Load())
-	}
-
-	// The three chunks ahead are warm, and one behind the head does not drop
-	// them. Counting every read would race the warming the advancing anchor
-	// starts, so what is asserted is that no chunk was fetched twice; Close
-	// waits for the fetches still in flight.
-	for _, off := range []int64{12, 20, 24, 28} {
+	for _, off := range []int64{16, 20, 24, 28, 12} {
 		if _, err := reader.ReadAt(buf, off); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if underlying.peak.Load() != 4 {
+		t.Fatalf("peak reads = %d, want the whole window", underlying.peak.Load())
 	}
 	if err := opened.Close(); err != nil {
 		t.Fatal(err)
@@ -158,5 +154,83 @@ func TestReadAtIsServedFromTheWindow(t *testing.T) {
 		if underlying.each[off] != 1 {
 			t.Fatalf("chunk %d was not held warm", off)
 		}
+	}
+}
+
+// A reader that takes a header and closes must not pay for the whole window.
+func TestShortReadDoesNotFetchTheWholeWindow(t *testing.T) {
+	underlying := &slowReader{data: make([]byte, 1024)}
+	opened, err := readaheadresource.New(underlying, 4, 64, 4, 2).Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := io.ReadFull(opened, make([]byte, 4)); err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if calls := underlying.calls.Load(); calls > 2 {
+		t.Fatalf("one chunk read cost %d fetches, want at most 2 of a 16-chunk window", calls)
+	}
+}
+
+// Scattered reads warm nothing worth having, so the ramp starts again at every
+// jump out of the window rather than growing on forward motion that is not one.
+func TestScatteredReadsDoNotRampTheWindow(t *testing.T) {
+	underlying := &slowReader{data: make([]byte, 1024)}
+	opened, err := readaheadresource.New(underlying, 4, 64, 4, 2).Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reader, ok := opened.(io.ReaderAt)
+	if !ok {
+		t.Fatal("reader is not positional")
+	}
+	buf := make([]byte, 4)
+	for _, off := range []int64{0, 100, 200, 300, 400, 500} {
+		if _, err := reader.ReadAt(buf, off); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if calls := underlying.calls.Load(); calls > 12 {
+		t.Fatalf("6 scattered reads cost %d fetches, want them not to ramp the window", calls)
+	}
+}
+
+// One seek in a stream is a player, not a scattered reader, so what it earned
+// is halved rather than dropped and the read after it is still warm.
+func TestSeekKeepsHalfTheWindow(t *testing.T) {
+	underlying := &slowReader{data: make([]byte, 1024)}
+	opened, err := readaheadresource.New(underlying, 4, 64, 4, 2).Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reader, ok := opened.(io.ReaderAt)
+	if !ok {
+		t.Fatal("reader is not positional")
+	}
+	buf := make([]byte, 4)
+	for _, off := range []int64{0, 4, 8, 12, 16, 500} {
+		if _, err := reader.ReadAt(buf, off); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	underlying.mu.Lock()
+	defer underlying.mu.Unlock()
+	if underlying.each[504] != 1 {
+		t.Fatal("the chunk after the seek was not warmed; the seek dropped the whole window")
 	}
 }

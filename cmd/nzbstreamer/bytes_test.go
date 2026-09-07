@@ -47,15 +47,15 @@ func TestBytesUnmarshal(t *testing.T) {
 // included.
 func TestBytesThroughEnvconfig(t *testing.T) {
 	var config ReadaheadConfig
-	lookup := envconfig.MapLookuper(map[string]string{"READAHEAD_SIZE": "12M"})
+	lookup := envconfig.MapLookuper(map[string]string{"READAHEAD_MAX_SIZE": "12M"})
 	if err := envconfig.ProcessWith(context.Background(), &envconfig.Config{
 		Target: &config, Lookuper: lookup,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	if config.Size != 12*1024*1024 {
-		t.Errorf("size = %d, want 12M", config.Size)
+	if config.MaxSize != 12*1024*1024 {
+		t.Errorf("max size = %d, want 12M", config.MaxSize)
 	}
 	if config.Chunk != 1024*1024 {
 		t.Errorf("chunk = %d, want the 1M default", config.Chunk)

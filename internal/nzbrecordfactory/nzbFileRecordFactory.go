@@ -44,13 +44,17 @@ type NzbFileFactory struct {
 	// archive is a real thing, an unbounded chain of them is a way to spend the
 	// whole add reading headers
 	maxArchiveDepth int
-	readaheadSize   int
+	readaheadMin    int
+	readaheadMax    int
 	readaheadChunk  int
+	rampSpeed       float64
 }
 
-func (f *NzbFileFactory) SetReadahead(size, chunk int) {
-	f.readaheadSize = size
+func (f *NzbFileFactory) SetReadahead(minSize, maxSize, chunk int, rampSpeed float64) {
+	f.readaheadMin = minSize
+	f.readaheadMax = maxSize
 	f.readaheadChunk = chunk
+	f.rampSpeed = rampSpeed
 }
 
 // getSegment is the whole of what the factory needs from a news server.
@@ -101,11 +105,11 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData
 // withReadahead puts a window in front of a resource, or hands it back where
 // readahead is switched off.
 func (f *NzbFileFactory) withReadahead(underlying resource.ReadSeekCloseableResource) resource.ReadSeekCloseableResource {
-	if f.readaheadSize <= 0 || f.readaheadChunk <= 0 {
+	if f.readaheadMax <= 0 || f.readaheadChunk <= 0 {
 		return underlying
 	}
 
-	return readaheadresource.New(underlying, f.readaheadSize, f.readaheadChunk)
+	return readaheadresource.New(underlying, f.readaheadMin, f.readaheadMax, f.readaheadChunk, f.rampSpeed)
 }
 
 // DiscardSegmentStackFromNzbData throws away everything the stack accumulated

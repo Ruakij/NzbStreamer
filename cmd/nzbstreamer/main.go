@@ -173,7 +173,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 
 	// Setup services
 	factory := nzbrecordfactory.NewNzbFileFactory(segmentCache, nntpPool.GetSegment, store, c.NzbConfig.ProbeSizeConvention, c.NzbConfig.MaxArchiveDepth)
-	factory.SetReadahead(int(c.Readahead.Size), int(c.Readahead.Chunk))
+	factory.SetReadahead(int(c.Readahead.MinSize), int(c.Readahead.MaxSize), int(c.Readahead.Chunk), c.Readahead.RampSpeed)
 
 	folderTrigger := folderwatcher.NewFolderWatcher(c.FolderWatcher.Path, c.FolderWatcher.Consume)
 

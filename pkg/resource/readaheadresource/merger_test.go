@@ -44,7 +44,7 @@ func windowOverMerger(t *testing.T) (io.ReadSeekCloser, []byte) {
 		))
 	}
 
-	reader, err := readaheadresource.New(adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(parts), 2048, 512).Open()
+	reader, err := readaheadresource.New(adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(parts), 2048, 2048, 512, 0).Open()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func BenchmarkReadSequential(b *testing.B) {
 	// the readahead window and per-fetch chunk (a 1MB file, 256KB window in
 	// 64KB chunks, exactly like 32M/8M).
 	for b.Loop() {
-		reader, err := readaheadresource.New(adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(parts), 256<<10, 64<<10).Open()
+		reader, err := readaheadresource.New(adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(parts), 256<<10, 256<<10, 64<<10, 0).Open()
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -144,7 +144,7 @@ func BenchmarkReadConcurrent(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		buffer := make([]byte, 64*1024)
 		for pb.Next() {
-			reader, err := readaheadresource.New(adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(parts), 256<<10, 64<<10).Open()
+			reader, err := readaheadresource.New(adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(parts), 256<<10, 256<<10, 64<<10, 0).Open()
 			if err != nil {
 				b.Fatal(err)
 			}

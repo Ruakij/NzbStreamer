@@ -76,8 +76,10 @@ type MetadataConfig struct {
 }
 
 type ReadaheadConfig struct {
-	Size  Bytes `env:"READAHEAD_SIZE, default=32M"` // Bytes held warm ahead of each open file; 0 disables readahead
-	Chunk Bytes `env:"READAHEAD_CHUNK, default=1M"` // Bytes fetched per chunk; SIZE/CHUNK is how many run at once, and one chunk is served segment by segment, so around one segment reads fastest
+	MaxSize   Bytes   `env:"READAHEAD_MAX_SIZE, default=16M"`   // Bytes held warm ahead of each open file; 0 disables readahead
+	Chunk     Bytes   `env:"READAHEAD_CHUNK, default=1M"`       // Bytes fetched per chunk; SIZE/CHUNK is how many run at once, and one chunk is served segment by segment, so around one segment reads fastest
+	MinSize   Bytes   `env:"READAHEAD_MIN_SIZE, default=4M"`    // Bytes a reader opens its window on; 0 is the one chunk a read needs, MAX_SIZE is no ramp
+	RampSpeed float64 `env:"READAHEAD_RAMP_SPEED, default=2.0"` // What the warm window multiplies by per chunk read in order and divides by on a read landing past it; 1 or less keeps it at MIN_SIZE
 }
 
 type FolderWatcherConfig struct {

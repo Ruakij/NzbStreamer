@@ -18,15 +18,22 @@ import (
 // positional reads and webdav only ever a stream.
 type Resource struct {
 	underlying resource.ReadSeekCloseableResource
-	size       int
+	minSize    int
+	maxSize    int
 	chunk      int
+	rampSpeed  float64
 }
 
-func New(underlying resource.ReadSeekCloseableResource, size, chunk int) *Resource {
-	if chunk > size {
-		chunk = size
+func New(underlying resource.ReadSeekCloseableResource, minSize, maxSize, chunk int, rampSpeed float64) *Resource {
+	if chunk > maxSize {
+		chunk = maxSize
 	}
-	return &Resource{underlying: underlying, size: size, chunk: chunk}
+	// Below 1 the window would shrink where it is meant to grow, and 0 would
+	// divide by zero on the way back down
+	if rampSpeed < 1 {
+		rampSpeed = 1
+	}
+	return &Resource{underlying: underlying, minSize: min(minSize, maxSize), maxSize: maxSize, chunk: chunk, rampSpeed: rampSpeed}
 }
 
 func (r *Resource) SizeHint() (int64, error) { return r.underlying.SizeHint() }
@@ -51,11 +58,16 @@ func (r *Resource) Open() (io.ReadSeekCloser, error) {
 		return underlying, nil
 	}
 
+	window := max(1, r.maxSize/r.chunk)
+
 	return &reader{
 		underlying: underlying,
 		readerAt:   readerAt,
 		chunkSize:  int64(r.chunk),
-		window:     max(1, r.size/r.chunk),
+		window:     window,
+		warmMin:    min(window, max(1, r.minSize/r.chunk)),
+		warm:       min(window, max(1, r.minSize/r.chunk)),
+		rampSpeed:  r.rampSpeed,
 		chunks:     make(map[int64]*chunk),
 		eof:        -1,
 	}, nil
@@ -80,10 +92,15 @@ type reader struct {
 	underlying io.ReadSeekCloser
 	readerAt   io.ReaderAt
 	chunkSize  int64
-	// window is how many chunks are held warm, the one being read included
-	window int
+	// window is the most chunks held warm, the one being read included, warmMin
+	// the fewest and rampSpeed what warm moves by between them
+	window    int
+	warmMin   int
+	rampSpeed float64
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// warm is how many of the window the reader has earned
+	warm     int
 	fetches  sync.WaitGroup
 	chunks   map[int64]*chunk
 	anchor   int64
@@ -148,9 +165,11 @@ func (r *reader) ReadAt(p []byte, off int64) (int, error) {
 	return read, nil
 }
 
-// chunkAt returns the chunk holding base and warms the window ahead of it. The
-// anchor only ever advances: fuse delivers readahead out of order and a read
-// landing behind the head says nothing about what follows.
+// chunkAt returns the chunk holding base and warms what the reader has earned
+// of the window ahead of it, which reaches the whole of it after log2(window).
+// A read inside the window says nothing about where the reader went, since fuse
+// delivers readahead out of order; one a whole window away moves the anchor and
+// costs what it earned.
 func (r *reader) chunkAt(base int64) (*chunk, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -158,17 +177,29 @@ func (r *reader) chunkAt(base int64) (*chunk, error) {
 	if r.closed {
 		return nil, os.ErrClosed
 	}
-	if base > r.anchor {
+	switch {
+	case base > r.anchor+int64(r.window)*r.chunkSize:
 		r.anchor = base
+		r.warm = r.cooled()
+	case base > r.anchor:
+		r.anchor = base
+		r.warm = r.warmed()
+	case base < r.anchor-int64(r.window)*r.chunkSize:
+		// A whole window behind the head is a seek, not the out-of-order readahead
+		// fuse delivers: that is bounded by the kernel's own window, which is
+		// smaller. lseek never reaches a filesystem, so this is all a player
+		// scrubbing backwards gives us
+		r.anchor = base
+		r.warm = r.cooled()
 	}
 
 	c := r.fetchLocked(base)
 	c.refs.Add(1) // held by the caller until it has copied out of it
-	for i := 1; i < r.window; i++ {
+	for i := 1; i < r.warm; i++ {
 		r.fetchLocked(r.anchor + int64(i)*r.chunkSize)
 	}
 	for offset, evicted := range r.chunks {
-		if offset < r.anchor-r.chunkSize {
+		if offset < r.anchor-r.chunkSize || offset > r.anchor+int64(r.window)*r.chunkSize {
 			delete(r.chunks, offset)
 			r.release(evicted)
 		}
@@ -176,6 +207,18 @@ func (r *reader) chunkAt(base int64) (*chunk, error) {
 
 	return c, nil
 }
+
+// warmed and cooled are the window after the reader ran on and after it jumped:
+// what it earns and what that costs. A rampSpeed of 1 or less earns nothing, so
+// the window stays the one it opened on. Both require mu.
+func (r *reader) warmed() int {
+	if r.rampSpeed <= 1 {
+		return r.warm
+	}
+	return min(r.window, max(r.warm+1, int(float64(r.warm)*r.rampSpeed)))
+}
+
+func (r *reader) cooled() int { return max(r.warmMin, int(float64(r.warm)/r.rampSpeed)) }
 
 // Requires mu.
 func (r *reader) fetchLocked(offset int64) *chunk {
@@ -187,12 +230,14 @@ func (r *reader) fetchLocked(offset int64) *chunk {
 	}
 
 	c := &chunk{done: make(chan struct{}), buf: r.buffer()}
-	c.refs.Store(1) // the window slot it now sits in
+	c.refs.Store(2) // the window slot it now sits in, and the fetch writing into it
 	r.chunks[offset] = c
 	r.fetches.Add(1)
 
 	go func() {
 		defer r.fetches.Done()
+		// Held until the write is over
+		defer r.release(c)
 
 		buf := c.buf
 		n, err := r.readerAt.ReadAt(buf, offset)
@@ -263,6 +308,15 @@ func (r *reader) Seek(offset int64, whence int) (int64, error) {
 	}
 	if position < 0 {
 		return 0, resource.ErrInvalidSeek
+	}
+
+	// A seek says where the stream goes next, which is the one thing that lets the
+	// anchor move back: fuse never seeks, it only issues positional reads, and
+	// those carry no such promise. It costs the window what a jump costs it, since
+	// the reader leaves behind everything it warmed
+	if base := position - position%r.chunkSize; base < r.anchor {
+		r.anchor = base
+		r.warm = r.cooled()
 	}
 
 	r.position = position
