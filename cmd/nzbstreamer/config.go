@@ -44,9 +44,11 @@ type HTTPConfig struct {
 }
 
 type WebdavConfig struct {
-	Username      string `env:"WEBDAV_USERNAME"`                      // Username for WebDAV basic auth; Authentication disabled when unset
-	Password      string `env:"WEBDAV_PASSWORD"`                      // Password for WebDAV basic auth
-	LazyExactSize bool   `env:"WEBDAV_LAZY_EXACT_SIZE, default=true"` // Measure the exact size of a file on the GET that needs it, where doing so is cheap, so Content-Length is right for one NZB_EAGER_EXACT_SIZE_CLASSES left out; disabling it answers every GET from the size hint, which for an estimated size means a truncated response
+	Username       string        `env:"WEBDAV_USERNAME"`                      // Username for WebDAV basic auth; Authentication disabled when unset
+	Password       string        `env:"WEBDAV_PASSWORD"`                      // Password for WebDAV basic auth
+	LazyExactSize  bool          `env:"WEBDAV_LAZY_EXACT_SIZE, default=true"` // Measure the exact size of a file on the GET that needs it, where doing so is cheap, so Content-Length is right for one NZB_EAGER_EXACT_SIZE_CLASSES left out; disabling it answers every GET from the size hint, which for an estimated size means a truncated response
+	IdleTimeout    time.Duration `env:"WEBDAV_IDLE_TIMEOUT, default=5s"`      // How long a finished reader is kept for the next request of the same file; 0 closes it with the request that opened it
+	MaxIdleReaders int           `env:"WEBDAV_MAX_IDLE_READERS, default=4"`   // Kept readers across every file, since each one holds up to READAHEAD_MAX_SIZE; the oldest goes when a new one does not fit
 }
 
 type SabnzbdConfig struct {

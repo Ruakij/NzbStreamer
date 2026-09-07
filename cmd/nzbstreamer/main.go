@@ -162,7 +162,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	// Setup Presenters
 	var presenters []presentation.Presenter
 	// Webdav
-	webdavFS := webdav.NewFS(httpserver.WebdavPrefix, c.Webdav.LazyExactSize)
+	webdavFS := webdav.NewFS(httpserver.WebdavPrefix, c.Webdav.LazyExactSize, c.Webdav.IdleTimeout, c.Webdav.MaxIdleReaders)
 	presenters = append(presenters, webdavFS)
 	// Mount
 	var mount *fusemount.FileSystem

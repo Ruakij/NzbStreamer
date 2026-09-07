@@ -42,6 +42,7 @@ type FS struct {
 	// lazyExactSize lets the seek ServeContent sizes a GET with reach the reader
 	// where that is cheap, rather than answering every one from the hint.
 	lazyExactSize bool
+	handles       *handleCache
 	mu            sync.RWMutex
 }
 
@@ -55,14 +56,23 @@ type simpleFile struct {
 	isDir    bool
 }
 
-func NewFS(prefix string, lazyExactSize bool) *FS {
+// NewFS builds the tree. idleTimeout is how long a finished reader is kept for
+// the next Range request of the same file and maxIdleReaders how many are kept
+// at once, since each one holds its readahead window; either at zero closes
+// every reader with the request that opened it.
+func NewFS(prefix string, lazyExactSize bool, idleTimeout time.Duration, maxIdleReaders int) *FS {
 	root := &Node{
 		File:     &simpleFile{name: "", isDir: true},
 		Children: make(map[string]*Node),
 	}
 	root.File.node = root
 
-	fs := &FS{Root: root, prefix: prefix, lazyExactSize: lazyExactSize}
+	fs := &FS{
+		Root:          root,
+		prefix:        prefix,
+		lazyExactSize: lazyExactSize,
+		handles:       newHandleCache(idleTimeout, maxIdleReaders),
+	}
 	root.File.fs = fs
 	return fs
 }
@@ -113,6 +123,10 @@ func (fs *FS) RemoveFile(path string) error {
 
 	delete(node.Parent.Children, node.File.name)
 	fs.cleanupEmptyDirs(node.Parent)
+
+	if node.File.openable != nil {
+		return fs.handles.discard(node.File.openable)
+	}
 	return nil
 }
 
@@ -199,23 +213,10 @@ func (fs *FS) Open(ctx context.Context, name string) (io.ReadCloser, error) {
 		return nil, webdav.NewHTTPError(http.StatusNotFound, err)
 	}
 
-	fileReader := &simpleFileReader{
-		simpleFile: node.File,
-		node:       node,
-		fs:         fs,
-	}
+	// The reader itself is taken on the first read or seek as reusing needs position.
+	slog.Debug("Open", "name", name)
 
-	if !node.File.isDir {
-		reader, err := node.File.openable.Open()
-		if err != nil {
-			return nil, err
-		}
-		fileReader.reader = reader
-	}
-
-	slog.Debug("Open", "reader", fmt.Sprintf("%p", fileReader.reader), "name", name)
-
-	return fileReader, nil
+	return &simpleFileReader{simpleFile: node.File, node: node, fs: fs}, nil
 }
 
 // Implement Stat from the interface
@@ -305,58 +306,113 @@ func (fs *FS) Move(ctx context.Context, name, dest string, options *webdav.MoveO
 // AddFile and RemoveFile remain unchanged
 // pathWalker, relativePathWalker, ensurePath remain unchanged
 
-// Implement simpleFileReader to accommodate new functionality
+// simpleFileReader is one request's view of a file. It holds no reader until a
+// read or a seek needs one, and hands it back to the cache on Close; position is
+// what it wants next, which is both what picks a reader and what it is seeked to.
 type simpleFileReader struct {
 	simpleFile *simpleFile
-	reader     io.ReadSeekCloser
+	handle     *handle
 	node       *Node
 	fs         *FS
+	position   int64
 }
 
-func (sf *simpleFileReader) Close() (err error) {
-	slog.Debug("Close", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name)
-	if sf.reader != nil {
-		err = sf.reader.Close()
-		sf.reader = nil
+// reader takes a reader placed for position and seeks it there.
+func (sf *simpleFileReader) reader() (io.ReadSeekCloser, error) {
+	if sf.simpleFile.isDir {
+		return nil, ErrReadOnlyFilesystem
 	}
-	return err
-}
 
-func (sf *simpleFileReader) Read(p []byte) (n int, err error) {
-	if sf.reader != nil {
-		n, err = sf.reader.Read(p)
-		if err != nil && !errors.Is(err, io.EOF) {
-			slog.Error("Read error", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name, "len(p)", len(p), "err", err)
+	if sf.handle == nil {
+		h, err := sf.fs.handles.acquire(sf.simpleFile.openable, sf.position)
+		if err != nil {
+			return nil, err
 		}
-		return n, err
+		sf.handle = h
 	}
-	return 0, ErrReadOnlyFilesystem
+	if sf.handle.position != sf.position {
+		if _, err := sf.handle.reader.Seek(sf.position, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("seek to %d: %w", sf.position, err)
+		}
+		sf.handle.position = sf.position
+	}
+	return sf.handle.reader, nil
+}
+
+func (sf *simpleFileReader) Close() error {
+	slog.Debug("Close", "name", sf.simpleFile.name, "position", sf.position)
+	if sf.handle == nil {
+		return nil
+	}
+
+	h := sf.handle
+	sf.handle = nil
+	return sf.fs.handles.release(h)
+}
+
+func (sf *simpleFileReader) Read(p []byte) (int, error) {
+	reader, err := sf.reader()
+	if err != nil {
+		return 0, err
+	}
+
+	n, err := reader.Read(p)
+	sf.position += int64(n)
+	sf.handle.position = sf.position
+	if err != nil && !errors.Is(err, io.EOF) {
+		slog.Error("Read error", "name", sf.simpleFile.name, "len(p)", len(p), "err", err)
+	}
+	return n, err
 }
 
 func (sf *simpleFileReader) Seek(offset int64, whence int) (int64, error) {
-	// ServeContent sizes every GET with this seek and Content-Length comes from
-	// it, so an addressable reader measures it for real. A decoder stream would
-	// decode the whole member to get there, so it answers from the hint.
-	if offset == 0 && whence == io.SeekEnd {
-		_, addressable := sf.reader.(io.ReaderAt)
-		if !addressable || !sf.fs.lazyExactSize {
-			info, err := sf.Stat()
-			if err != nil {
-				return 0, err
-			}
-			return info.Size(), nil
+	slog.Debug("Seek", "name", sf.simpleFile.name, "offset", offset, "whence", whence)
+
+	switch whence {
+	case io.SeekStart:
+		sf.position = offset
+	case io.SeekCurrent:
+		sf.position += offset
+	case io.SeekEnd:
+		size, err := sf.end()
+		if err != nil {
+			return 0, err
 		}
+		sf.position = size + offset
+	default:
+		return 0, os.ErrInvalid
 	}
 
-	slog.Debug("Seek", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name, "offset", offset, "whence", whence)
-	if sf.reader != nil {
-		n, err := sf.reader.Seek(offset, whence)
-		if err != nil {
-			slog.Error("Seek error", "reader", fmt.Sprintf("%p", sf.reader), "name", sf.simpleFile.name, "offset", offset, "whence", whence, "err", err)
-		}
-		return n, err
+	if sf.position < 0 {
+		return 0, os.ErrInvalid
 	}
-	return 0, ErrReadOnlyFilesystem
+	return sf.position, nil
+}
+
+// end is where the file ends. ServeContent sizes every GET with a seek to it and
+// Content-Length comes from that, so an addressable reader measures it for real.
+// A decoder stream would decode the whole member to get there, so it answers
+// from the hint.
+func (sf *simpleFileReader) end() (int64, error) {
+	if !sf.fs.lazyExactSize || sf.simpleFile.isDir {
+		return sf.simpleFile.Size(), nil
+	}
+
+	reader, err := sf.reader()
+	if err != nil {
+		return 0, err
+	}
+	if _, addressable := reader.(io.ReaderAt); !addressable {
+		return sf.simpleFile.Size(), nil
+	}
+
+	size, err := reader.Seek(0, io.SeekEnd)
+	if err != nil {
+		slog.Error("Seek error", "name", sf.simpleFile.name, "whence", io.SeekEnd, "err", err)
+		return 0, err
+	}
+	sf.handle.position = size
+	return size, nil
 }
 
 func (sf *simpleFileReader) Write(p []byte) (n int, err error) {
