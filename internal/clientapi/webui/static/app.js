@@ -209,6 +209,8 @@ for (const th of document.querySelectorAll("th[data-key]")) {
 }
 
 async function remove(id, action, button) {
+  // Archiving is undone with Restore; deleting takes the files off the mount
+  if (action === "delete" && !confirm("Delete " + id + "?\nThe files will stop being presented.")) return;
   button.disabled = true;
   try {
     const body = new URLSearchParams({ id, action });
