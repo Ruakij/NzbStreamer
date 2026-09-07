@@ -35,6 +35,7 @@ type Handler struct {
 func NewHandler(service Service, components ...Component) *Handler {
 	h := &Handler{service: service, components: components, mux: http.NewServeMux()}
 	h.mux.HandleFunc("GET /{$}", page)
+	h.mux.Handle("GET /static/", staticFiles())
 	h.mux.HandleFunc("GET /api/items", h.items)
 	h.mux.HandleFunc("POST /api/add", h.add)
 	h.mux.HandleFunc("POST /api/remove", h.remove)

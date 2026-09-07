@@ -1,0 +1,98 @@
+:root {
+  color-scheme: light dark;
+  --fg: light-dark(#1b1d20, #e6e8ea);
+  --muted: light-dark(#5d6470, #9aa3af);
+  --line: light-dark(#0002, #fff2);
+  --panel: light-dark(#fff, #17191c);
+  --hover: light-dark(#0000000a, #ffffff0a);
+  --accent: light-dark(#0b6bcb, #6bb6ff);
+  --bad: light-dark(#c0392b, #ff7a6b);
+  --good: light-dark(#1f7a3d, #57c780);
+  --radius: 8px;
+}
+
+body {
+  font: 14px/1.5 system-ui, sans-serif;
+  color: var(--fg);
+  background: light-dark(#f5f6f8, #0f1113);
+  margin: 2rem auto;
+  max-width: 64rem;
+  padding: 0 1rem 3rem;
+}
+
+header { display: flex; align-items: baseline; gap: .75rem; margin-bottom: 1.5rem; }
+h1 { font-size: 1.35rem; margin: 0; letter-spacing: -.01em; }
+h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 2rem 0 .5rem; }
+
+#offline { color: var(--bad); font-size: .85rem; display: none; }
+#offline.on { display: inline; }
+
+form {
+  display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: .75rem;
+}
+input, button { font: inherit; color: inherit; }
+input[type=text] {
+  background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: .3rem .5rem;
+}
+button {
+  background: transparent; border: 1px solid var(--line); border-radius: 6px;
+  padding: .3rem .7rem; cursor: pointer;
+}
+button:hover:not(:disabled) { background: var(--hover); }
+button:disabled { opacity: .5; cursor: default; }
+
+table {
+  border-collapse: collapse; width: 100%;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  overflow: hidden;
+}
+th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--hover); }
+th { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+th[data-key] { cursor: pointer; user-select: none; white-space: nowrap; }
+th[data-key]:hover { color: var(--fg); }
+th[data-sorted]:not([data-sorted=""]) { color: var(--fg); }
+th[data-sorted]:not([data-sorted=""])::after {
+  content: ""; display: inline-block; margin-left: .35rem;
+  border: .3rem solid transparent;
+}
+th[data-sorted="asc"]::after { border-bottom-color: currentColor; transform: translateY(-.15rem); }
+th[data-sorted="desc"]::after { border-top-color: currentColor; transform: translateY(.15rem); }
+
+td.name { overflow-wrap: anywhere; }
+td.name .title { font-weight: 500; }
+td:nth-child(4), td:nth-child(5) { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
+td:last-child { text-align: right; }
+
+.err { color: var(--bad); font-size: .85rem; margin-top: .2rem; }
+.empty { color: var(--muted); }
+
+.stage {
+  font-size: .75rem; padding: .1rem .5rem; border-radius: 999px;
+  border: 1px solid currentColor; color: var(--muted); white-space: nowrap;
+}
+.stage.completed { color: var(--good); }
+.stage.failed, .stage.cancelled { color: var(--bad); }
+.stage.checking, .stage.building, .stage.rebuilding { color: var(--accent); }
+
+.file-list { margin-top: .4rem; font-size: .85rem; }
+.file-list > summary { color: var(--muted); cursor: pointer; width: fit-content; }
+.file-list > summary:hover { color: var(--fg); }
+
+.file-tree, .file-tree ul { list-style: none; margin: 0; padding: 0; }
+.file-tree { margin-top: .3rem; }
+.file-tree ul { margin-left: .45rem; padding-left: .8rem; border-left: 1px solid var(--line); }
+.file-tree li { padding: .05rem 0; }
+.file-tree summary { cursor: pointer; list-style: none; }
+.file-tree summary::-webkit-details-marker { display: none; }
+.file-tree summary::before {
+  content: ""; display: inline-block; width: 0; height: 0; margin-right: .4rem;
+  border: .3rem solid transparent; border-left-color: var(--muted);
+  transform: translateY(-1px); transition: transform .1s;
+}
+.file-tree details[open] > summary::before { transform: rotate(90deg) translateX(-1px); }
+.file-tree .dir { font-weight: 500; }
+.file-tree .file { display: inline-block; margin-left: 1rem; color: var(--muted); font-family: ui-monospace, monospace; }

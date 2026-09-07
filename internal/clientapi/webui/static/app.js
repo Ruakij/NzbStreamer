@@ -1,55 +1,3 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NzbStreamer</title>
-<style>
-  :root { color-scheme: light dark; }
-  body { font: 14px/1.4 system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; padding: 0 1rem; }
-  h1 { font-size: 1.4rem; margin: 0; }
-  header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1.5rem; }
-  h2 { font-size: 1.1rem; margin: 1.5rem 0 .5rem; }
-  summary { cursor: pointer; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #8884; }
-  th { font-weight: 600; opacity: .7; }
-  td.name { word-break: break-all; }
-  .err { color: #c33; font-size: .85rem; }
-  .stage { font-size: .8rem; padding: .1rem .45rem; border-radius: .7rem; background: #8883; }
-  .stage.completed { background: #2a02; color: #2a0; }
-  .stage.failed, .stage.cancelled { background: #c332; color: #c33; }
-  .stage.checking, .stage.building, .stage.rebuilding { background: #06c2; color: #06c; }
-  .empty { opacity: .5; padding: .5rem .6rem; }
-  .file-list { font-size: .85rem; margin-top: .25rem; }
-  .file-list summary { opacity: .7; }
-  .file-tree, .file-tree ul { list-style: none; margin: .2rem 0; padding-left: 1rem; }
-  .file-tree { padding-left: 0; }
-  #offline { color: #c33; display: none; }
-  #offline.on { display: inline; }
-  form { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
-  button { font: inherit; }
-</style>
-</head>
-<body>
-<header>
-  <h1>NzbStreamer</h1>
-  <span id="offline">disconnected</span>
-</header>
-
-<form id="add">
-  <input type="file" name="file" accept=".nzb" multiple required>
-  <input type="text" name="category" placeholder="category" size="10">
-  <button type="submit">Add</button>
-</form>
-
-<h2>Queue</h2>
-<table><thead><tr><th>Name<th>Category<th>Stage<th>Size<th>Age<th></tr></thead><tbody id="queue"></tbody></table>
-
-<h2>History</h2>
-<table><thead><tr><th>Name<th>Category<th>Stage<th>Size<th>Age<th></tr></thead><tbody id="history"></tbody></table>
-
-<script>
 const cols = 6;
 
 function size(bytes) {
@@ -84,12 +32,20 @@ function fileTree(paths, id) {
   return root;
 }
 
+// Directories first, then names naturally ordered, so part2 follows part1.
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+function sortedEntries(tree) {
+  return [...tree.entries()].sort(([aName, a], [bName, b]) =>
+    (b.size > 0) - (a.size > 0) || collator.compare(aName, bName));
+}
+
 function reconcileTree(list, tree, prefix = "") {
   const existing = new Map([...list.children].map((item) => [item.dataset.key, item]));
   let position = list.firstElementChild;
-  for (const name of [...tree.keys()].sort()) {
+  for (const [name, child] of sortedEntries(tree)) {
     const key = prefix ? prefix + "/" + name : name;
-    const branch = tree.get(name).size > 0;
+    const branch = child.size > 0;
     let item = existing.get(key);
     if (!item || (item.dataset.branch === "true") !== branch) {
       item?.remove();
@@ -98,18 +54,22 @@ function reconcileTree(list, tree, prefix = "") {
       item.dataset.branch = branch;
       if (branch) {
         const details = document.createElement("details");
+        details.open = true;
         const summary = document.createElement("summary");
+        summary.className = "dir";
         const children = document.createElement("ul");
         details.append(summary, children);
         item.append(details);
       } else {
-        item.append(document.createElement("span"));
+        const span = document.createElement("span");
+        span.className = "file";
+        item.append(span);
       }
     }
     existing.delete(key);
     if (branch) {
       setText(item.querySelector("summary"), name);
-      reconcileTree(item.querySelector("ul"), tree.get(name), key);
+      reconcileTree(item.querySelector("ul"), child, key);
     } else {
       setText(item.firstElementChild, name);
     }
@@ -143,7 +103,7 @@ function createRow(id, action) {
   row.dataset.id = id;
   for (let i = 0; i < cols; i++) row.insertCell();
   row.cells[0].className = "name";
-  const title = document.createElement("span");
+  const title = document.createElement("div");
   title.className = "title";
   row.cells[0].append(title);
   const stage = document.createElement("span");
@@ -157,6 +117,8 @@ function createRow(id, action) {
 
 function render(tbody, items, action, files = {}) {
   const existing = new Map([...tbody.querySelectorAll(":scope > tr[data-id]")].map((row) => [row.dataset.id, row]));
+  const sort = sorts[tbody.id];
+  markSorted(tbody, sort);
   tbody.querySelector(":scope > tr.empty")?.remove();
   if (!items.length) {
     const tr = tbody.insertRow();
@@ -168,7 +130,7 @@ function render(tbody, items, action, files = {}) {
     return;
   }
   let position = tbody.firstElementChild;
-  for (const item of items) {
+  for (const item of sortItems(items, sort)) {
     const tr = existing.get(item.id) || createRow(item.id, action);
     existing.delete(item.id);
     const name = tr.cells[0];
@@ -195,6 +157,44 @@ function render(tbody, items, action, files = {}) {
     position = tr.nextElementSibling;
   }
   for (const row of existing.values()) row.remove();
+}
+
+// Age ascending is added descending, so the sort value is a negated timestamp
+// and every column compares the same way.
+function sortValue(item, key) {
+  switch (key) {
+    case "name": return item.id;
+    case "category": return item.category || "";
+    case "stage": return item.stage;
+    case "bytes": return item.bytes;
+    default: return -Date.parse(item.added);
+  }
+}
+
+const sorts = { queue: { key: "age", dir: 1 }, history: { key: "age", dir: 1 } };
+
+function sortItems(items, sort) {
+  return items.slice().sort((a, b) => {
+    const x = sortValue(a, sort.key), y = sortValue(b, sort.key);
+    const order = typeof x === "string" ? collator.compare(x, y) : x - y;
+    return sort.dir * (order || collator.compare(a.id, b.id));
+  });
+}
+
+function markSorted(tbody, sort) {
+  for (const th of tbody.closest("table").querySelectorAll("th[data-key]")) {
+    th.dataset.sorted = th.dataset.key === sort.key ? (sort.dir > 0 ? "asc" : "desc") : "";
+  }
+}
+
+for (const th of document.querySelectorAll("th[data-key]")) {
+  th.onclick = () => {
+    const tbody = th.closest("table").querySelector("tbody");
+    const sort = sorts[tbody.id];
+    sort.dir = sort.key === th.dataset.key ? -sort.dir : 1;
+    sort.key = th.dataset.key;
+    poll();
+  };
 }
 
 async function remove(id, action, button) {
@@ -224,7 +224,7 @@ async function poll() {
     if (!response.ok) throw new Error(response.status);
     const data = await response.json();
     render(document.getElementById("queue"), data.queue, "cancel");
-    render(document.getElementById("history"), data.history.slice().reverse(), "delete", data.files || {});
+    render(document.getElementById("history"), data.history, "delete", data.files || {});
     document.getElementById("offline").classList.remove("on");
   } catch {
     // leave the last render up; an empty table would read as "nothing added"
@@ -251,6 +251,3 @@ document.getElementById("add").onsubmit = async (event) => {
 setInterval(() => { if (!document.hidden) poll(); }, 2000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
 poll();
-</script>
-</body>
-</html>

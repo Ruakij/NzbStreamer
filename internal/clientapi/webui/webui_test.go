@@ -73,6 +73,27 @@ func TestItems(t *testing.T) {
 	}
 }
 
+func TestPageRevalidates(t *testing.T) {
+	handler := webui.NewHandler(&fakeService{})
+
+	for _, path := range []string{"/", "/static/app.js"} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		etag := recorder.Header().Get("ETag")
+		if recorder.Code != http.StatusOK || etag == "" {
+			t.Fatalf("%s answered %d with etag %q", path, recorder.Code, etag)
+		}
+
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("If-None-Match", etag)
+		recorder = httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusNotModified {
+			t.Errorf("%s answered %d to its own etag, want 304", path, recorder.Code)
+		}
+	}
+}
+
 func TestRemoveRoutesAction(t *testing.T) {
 	service := &fakeService{}
 	handler := webui.NewHandler(service)
