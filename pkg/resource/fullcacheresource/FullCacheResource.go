@@ -331,12 +331,14 @@ func (r *FullCacheResourceReader) fetch() ([]byte, error) {
 		r.underlyingReader = reader
 	}
 
-	// Sized from the hint, so the content is not copied through a growing buffer
+	// Sized from the hint, so the content is not copied through a growing buffer.
+	// ReadFrom needs spare room to read its last, empty read into, so a buffer of
+	// exactly the hint grows and copies the whole segment once more.
 	hint, err := r.resource.UnderlyingResource.SizeHint()
 	if err != nil {
 		return nil, fmt.Errorf("failed getting size-hint from underlying resource: %w", err)
 	}
-	buffer := bytes.NewBuffer(make([]byte, 0, min(max(hint, 0), maxPrealloc)))
+	buffer := bytes.NewBuffer(make([]byte, 0, min(max(hint, 0), maxPrealloc)+bytes.MinRead))
 	if _, err := buffer.ReadFrom(r.underlyingReader); err != nil {
 		return nil, fmt.Errorf("failed reading underlying resource: %w", err)
 	}

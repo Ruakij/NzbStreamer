@@ -3,14 +3,14 @@
 package diskcache
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -136,27 +136,85 @@ var (
 	ErrItemNotFound            = errors.New("item not found")
 )
 
+// maxSizeEvict frees requiredSpace. One new item usually displaces one old one,
+// which a scan for the oldest answers; anything wanting more than that orders
+// the whole map once rather than scanning it again per victim.
 func (c *Cache) maxSizeEvict(requiredSpace int64) error {
-	for c.options.MaxSize-c.currentSize < requiredSpace {
-		key := c.options.EvictPolicyHook(c.items)
-		if key == "" {
-			return ErrCouldNotMakeEnoughSpace
-		}
+	if c.options.MaxSize-c.currentSize >= requiredSpace {
+		return nil
+	}
 
-		if _, exists := c.items[key]; !exists {
-			return ErrItemNotFound
-		}
+	key := c.options.EvictPolicyHook(c.items)
+	if key == "" {
+		return ErrCouldNotMakeEnoughSpace
+	}
+	if err := c.removeFile(key); err != nil {
+		return err
+	}
 
+	if c.options.MaxSize-c.currentSize >= requiredSpace {
+		return nil
+	}
+
+	keys := slices.SortedFunc(maps.Keys(c.items), func(a, b string) int {
+		return c.items[a].ModTime.Compare(c.items[b].ModTime)
+	})
+	for _, key := range keys {
 		if err := c.removeFile(key); err != nil {
 			return err
 		}
+		if c.options.MaxSize-c.currentSize >= requiredSpace {
+			return nil
+		}
 	}
-	return nil
+
+	return ErrCouldNotMakeEnoughSpace
 }
 
-const ReadBufferSize = 1024 * 1024 // 1MB buffer for reading, adjust size as needed
+// evictFor makes room for size bytes, blocking or in the background as
+// configured. A cache without a limit evicts nothing.
+func (c *Cache) evictFor(size int64) error {
+	if c.options.MaxSize <= 0 {
+		return nil
+	}
+	if !defaultCacheOptions.MaxSizeEvictBlocking {
+		go func() {
+			c.mu.Lock()
+			err := c.maxSizeEvict(size)
+			c.mu.Unlock()
+			if err != nil {
+				slog.Error("Couldnt evict for item", "wanted space", size, "error", err)
+			}
+		}()
 
-func (c *Cache) SetWithReader(key Key, reader io.Reader) (int64, error) {
+		return nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.maxSizeEvict(size)
+}
+
+// Set stores data as it is, so a caller that already holds the whole item does
+// not copy it through a read buffer first.
+func (c *Cache) Set(key Key, data []byte) (int64, error) {
+	return c.store(key, func(file *os.File) (int64, error) {
+		if err := c.evictFor(int64(len(data))); err != nil {
+			return 0, err
+		}
+		n, err := file.Write(data)
+		if err != nil {
+			return int64(n), fmt.Errorf("failed writing item: %w", err)
+		}
+
+		return int64(n), nil
+	})
+}
+
+// store writes an item through a temp file and renames it into place, so a
+// reader never sees a partial one.
+func (c *Cache) store(key Key, write func(*os.File) (int64, error)) (int64, error) {
 	finalFilePath, err := key.path(c.options.CacheDir)
 	if err != nil {
 		return 0, err
@@ -177,52 +235,9 @@ func (c *Cache) SetWithReader(key Key, reader io.Reader) (int64, error) {
 		}
 	}()
 
-	var totalWritten int64
-	buf := make([]byte, ReadBufferSize)
-
-	var totalN int64 = 0
-	for {
-		// Read a chunk
-		n, readErr := reader.Read(buf)
-		totalN += int64(n)
-		if n > 0 {
-			if c.options.MaxSize > 0 {
-				if defaultCacheOptions.MaxSizeEvictBlocking {
-					// Ensure there is enough space, evict if necessary
-					c.mu.Lock()
-					err = c.maxSizeEvict(totalN)
-					c.mu.Unlock()
-					if err != nil {
-						return totalWritten, err
-					}
-				} else {
-					go func(totalN int64) {
-						// Ensure there is enough space, evict if necessary
-						c.mu.Lock()
-						err = c.maxSizeEvict(totalN)
-						c.mu.Unlock()
-						if err != nil {
-							slog.Error("Couldnt evict for item", "wanted space", totalN, "error", err)
-						}
-					}(totalN)
-				}
-			}
-
-			// Write the chunk
-			nw, writeErr := file.Write(buf[:n])
-			if writeErr != nil {
-				return totalWritten, fmt.Errorf("failed writing chunk: %w", writeErr)
-			}
-			totalWritten += int64(nw)
-		}
-
-		// End of reader, or error
-		if readErr != nil {
-			if readErr == io.EOF {
-				break
-			}
-			return totalWritten, fmt.Errorf("failed reading chunk: %w", readErr)
-		}
+	totalWritten, err := write(file)
+	if err != nil {
+		return totalWritten, err
 	}
 
 	if err := file.Sync(); err != nil {
@@ -253,10 +268,6 @@ func (c *Cache) SetWithReader(key Key, reader io.Reader) (int64, error) {
 	c.mu.Unlock()
 
 	return totalWritten, nil
-}
-
-func (c *Cache) Set(key Key, data []byte) (int64, error) {
-	return c.SetWithReader(key, bytes.NewReader(data))
 }
 
 func (c *Cache) Remove(key Key) error {

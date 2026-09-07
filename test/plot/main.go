@@ -140,7 +140,7 @@ func newChart(rows []map[string]string, header []string, opt options) (*chart, e
 	if opt.err != "" && !slices.Contains(header, opt.err) {
 		opt.err = ""
 	}
-	if lo, hi := opt.bandCols(); lo != "" && !(slices.Contains(header, lo) && slices.Contains(header, hi)) {
+	if lo, hi := opt.bandCols(); lo != "" && (!slices.Contains(header, lo) || !slices.Contains(header, hi)) {
 		return nil, fmt.Errorf("no columns %q and %q in the CSV", lo, hi)
 	}
 	if opt.y2 != "" && !slices.Contains(header, opt.y2) {

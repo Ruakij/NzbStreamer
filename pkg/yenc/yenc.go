@@ -103,17 +103,41 @@ func alloc(size int64) []byte {
 	return make([]byte, 0, max(min(size, maxPrealloc), 0))
 }
 
+// decodeLine appends the decoded line to dst. escaped carries an escape the
+// previous line ended on. Escapes are rare, so the line is decoded as the runs
+// between them: IndexByte finds one in assembly and a run is a copy and a
+// subtraction rather than a branch per byte.
 func decodeLine(dst, line []byte, escaped *bool) []byte {
-	for _, c := range line {
-		switch {
-		case *escaped:
-			dst = append(dst, c-42-64)
-			*escaped = false
-		case c == '=':
-			*escaped = true
-		default:
-			dst = append(dst, c-42)
+	if *escaped && len(line) > 0 {
+		dst = append(dst, line[0]-42-64)
+		line = line[1:]
+		*escaped = false
+	}
+
+	for {
+		i := bytes.IndexByte(line, '=')
+		if i < 0 {
+			return appendShifted(dst, line)
 		}
+		dst = appendShifted(dst, line[:i])
+		if i+1 == len(line) {
+			*escaped = true
+
+			return dst
+		}
+		dst = append(dst, line[i+1]-42-64)
+		line = line[i+2:]
+	}
+}
+
+// appendShifted appends src with 42 taken off every byte, which is what a run
+// between escapes decodes to.
+func appendShifted(dst, src []byte) []byte {
+	n := len(dst)
+	dst = append(dst, src...)
+	out := dst[n:]
+	for i := range out {
+		out[i] -= 42
 	}
 
 	return dst
@@ -136,7 +160,11 @@ func readLine(br *bufio.Reader) (line []byte, end bool, err error) {
 		return nil, false, fmt.Errorf("failed reading line: %w", err)
 	}
 
-	line = bytes.TrimRight(line, "\r\n")
+	// Trimmed by hand: TrimRight builds an ascii set for its cutset on every call
+	line = line[:len(line)-1]
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
 	if len(line) > 0 && line[0] == '.' {
 		return line[1:], len(line) == 1, nil
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 )
@@ -62,10 +63,17 @@ func (r *Resource) Open() (io.ReadSeekCloser, error) {
 
 // chunk is one aligned read of the underlying resource, shared by every request
 // that lands in it. data shorter than the chunk size is the end of the file.
+//
+// buf is the whole allocation data is cut from, returned to the reader's pool
+// once nothing holds the chunk any more: refs counts the window slot it sits in
+// plus every read copying out of it, since a read copies without the lock and
+// eviction must not hand its bytes to the next fetch underneath it.
 type chunk struct {
 	done chan struct{}
 	data []byte
 	err  error
+	buf  []byte
+	refs atomic.Int32
 }
 
 type reader struct {
@@ -124,14 +132,17 @@ func (r *reader) ReadAt(p []byte, off int64) (int, error) {
 		}
 		<-c.done
 		if c.err != nil {
+			r.release(c)
 			return read, c.err
 		}
 
 		inner := offset - base
 		if inner >= int64(len(c.data)) {
+			r.release(c)
 			return read, io.EOF
 		}
 		read += copy(p[read:], c.data[inner:])
+		r.release(c)
 	}
 
 	return read, nil
@@ -152,12 +163,14 @@ func (r *reader) chunkAt(base int64) (*chunk, error) {
 	}
 
 	c := r.fetchLocked(base)
+	c.refs.Add(1) // held by the caller until it has copied out of it
 	for i := 1; i < r.window; i++ {
 		r.fetchLocked(r.anchor + int64(i)*r.chunkSize)
 	}
-	for offset := range r.chunks {
+	for offset, evicted := range r.chunks {
 		if offset < r.anchor-r.chunkSize {
 			delete(r.chunks, offset)
+			r.release(evicted)
 		}
 	}
 
@@ -173,14 +186,15 @@ func (r *reader) fetchLocked(offset int64) *chunk {
 		return &chunk{done: closed}
 	}
 
-	c := &chunk{done: make(chan struct{})}
+	c := &chunk{done: make(chan struct{}), buf: r.buffer()}
+	c.refs.Store(1) // the window slot it now sits in
 	r.chunks[offset] = c
 	r.fetches.Add(1)
 
 	go func() {
 		defer r.fetches.Done()
 
-		buf := make([]byte, r.chunkSize)
+		buf := c.buf
 		n, err := r.readerAt.ReadAt(buf, offset)
 		if errors.Is(err, io.EOF) {
 			err = nil
@@ -196,6 +210,31 @@ func (r *reader) fetchLocked(offset int64) *chunk {
 	}()
 
 	return c
+}
+
+// bufs holds chunk-sized buffers a fetch takes instead of allocating: the
+// runtime zeroes every large allocation and a chunk is overwritten whole, which
+// measured as a sixth of the cpu of a fast read. It is shared by every open
+// file, since the chunk size is one setting and a file that closes hands its
+// window to the next one that opens.
+var bufs sync.Pool
+
+// release drops one hold on a chunk and pools its buffer once the last one goes.
+func (r *reader) release(c *chunk) {
+	if c.buf == nil {
+		return
+	}
+	if c.refs.Add(-1) == 0 {
+		bufs.Put(&c.buf)
+	}
+}
+
+func (r *reader) buffer() []byte {
+	if b, ok := bufs.Get().(*[]byte); ok && int64(cap(*b)) >= r.chunkSize {
+		return (*b)[:r.chunkSize]
+	}
+
+	return make([]byte, r.chunkSize)
 }
 
 var closed = func() chan struct{} {
@@ -241,6 +280,15 @@ func (r *reader) Close() error {
 
 	// A fetch reads the underlying reader, so nothing may close it underneath one
 	r.fetches.Wait()
+
+	// The window goes back to the pool rather than to the garbage collector; a
+	// read still copying out of a chunk holds its own reference
+	r.mu.Lock()
+	for offset, c := range r.chunks {
+		delete(r.chunks, offset)
+		r.release(c)
+	}
+	r.mu.Unlock()
 
 	return r.underlying.Close()
 }

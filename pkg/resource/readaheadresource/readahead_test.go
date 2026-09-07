@@ -3,6 +3,7 @@ package readaheadresource_test
 import (
 	"errors"
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,6 +39,9 @@ type slowReader struct {
 	active atomic.Int64
 	peak   atomic.Int64
 	calls  atomic.Int64
+
+	mu   sync.Mutex
+	each map[int64]int // reads per offset
 }
 
 func (r *slowReader) Open() (io.ReadSeekCloser, error) { return &slowHandle{resource: r}, nil }
@@ -55,6 +59,12 @@ func (r *slowHandle) Read(p []byte) (int, error) {
 }
 func (r *slowHandle) ReadAt(p []byte, off int64) (int, error) {
 	r.resource.calls.Add(1)
+	r.resource.mu.Lock()
+	if r.resource.each == nil {
+		r.resource.each = map[int64]int{}
+	}
+	r.resource.each[off]++
+	r.resource.mu.Unlock()
 	active := r.resource.active.Add(1)
 	defer r.resource.active.Add(-1)
 	for {
@@ -124,14 +134,29 @@ func TestReadAtIsServedFromTheWindow(t *testing.T) {
 		t.Fatalf("peak reads = %d, want the whole window", underlying.peak.Load())
 	}
 
-	// The three chunks ahead are warm, and one behind the head does not drop them
-	calls := underlying.calls.Load()
+	// The three chunks ahead are warm, and one behind the head does not drop
+	// them. Counting every read would race the warming the advancing anchor
+	// starts, so what is asserted is that no chunk was fetched twice; Close
+	// waits for the fetches still in flight.
 	for _, off := range []int64{12, 20, 24, 28} {
 		if _, err := reader.ReadAt(buf, off); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if got := underlying.calls.Load() - calls; got != 1 {
-		t.Fatalf("%d further reads; want only the one behind the head", got)
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	underlying.mu.Lock()
+	defer underlying.mu.Unlock()
+	for off, n := range underlying.each {
+		if n != 1 {
+			t.Fatalf("offset %d read %d times; want every chunk fetched once", off, n)
+		}
+	}
+	for _, off := range []int64{16, 20, 24, 28} {
+		if underlying.each[off] != 1 {
+			t.Fatalf("chunk %d was not held warm", off)
+		}
 	}
 }
