@@ -1,0 +1,18 @@
+# Disk storage flavor: everything on named Docker volumes (disk-backed). This is
+# the default, merged after compose.yaml by test/run unless -ram selects
+# compose.ram.yaml instead. Neither flavor override carries a mount the other
+# does not, so there is nothing to reconcile: the base file defines no storage.
+name: nzbstreamer-e2e
+
+services:
+  news:
+    volumes:
+      - work:/work:ro
+      - ./build/nzb:/nzb
+      - spool:/var/spool/news
+      - db:/var/lib/news
+
+  streamer:
+    volumes:
+      - cache:/app/.cache
+      - metadata:/app/.metadata

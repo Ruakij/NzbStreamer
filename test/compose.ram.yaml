@@ -1,0 +1,24 @@
+# RAM storage flavor: the news spool and the streamer segment cache live in
+# tmpfs, so the ceiling measured is INN + RAM rather than INN + disk. Selected
+# with -ram instead of compose.disk.yaml; because the base compose defines no
+# storage mounts, this override simply adds its own — no merge conflicts by
+# construction.
+name: nzbstreamer-e2e
+
+services:
+  news:
+    volumes:
+      - work:/work:ro
+      - ./build/nzb:/nzb
+      - db:/var/lib/news
+    tmpfs:
+      - /var/spool/news
+
+  streamer:
+    volumes:
+      - metadata:/app/.metadata
+    tmpfs:
+      # tmpfs mounts (unlike named volumes) get no copy-up of the image's
+      # ownership, and the image runs as uid 1000 — without the uid/gid/mode
+      # here the streamer cannot create .cache/.tmp.
+      - /app/.cache:uid=1000,gid=1000,mode=0755

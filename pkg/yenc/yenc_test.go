@@ -116,3 +116,18 @@ func TestDecodeRejectsABadCRC(t *testing.T) {
 		t.Errorf("error is %v, want a crc failure", err)
 	}
 }
+
+func BenchmarkDecode(b *testing.B) {
+	data := bytes.Repeat([]byte{7}, 500_000)
+	article := encode(data, 128)
+	input := strings.NewReader(article)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	for b.Loop() {
+		input.Reset(article)
+		if _, err := yenc.Decode(bufio.NewReader(input)); err != nil {
+			b.Fatalf("decode: %v", err)
+		}
+	}
+}

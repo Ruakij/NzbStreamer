@@ -1,0 +1,76 @@
+# What runs against what: an INN2 news server filled with fixture sets, and the
+# streamer under test pointed at it. This base file deliberately carries no
+# storage mounts: one of the flavor overrides (compose.disk.yaml by default,
+# compose.ram.yaml with -ram) decides where the news spool, the streamer cache,
+# and the db live, and the harness always merges exactly one of them. Driven by
+# harness/run/main.go, which imposes the resolution of the sweep axes through
+# an env file (--env-file).
+name: nzbstreamer-e2e
+
+services:
+  # One shot: turns the generated payloads into the archive shapes, then exits.
+  # amd64, because RARLAB ships no linux/arm64 rar.
+  archives:
+    build: ./archives
+    volumes:
+      - ./build/payload:/payload:ro
+      - work:/work
+
+  news:
+    build: ./inn
+    depends_on:
+      archives:
+        condition: service_completed_successfully
+    ports:
+      - "${NNTP_PORT:-1119}:119"
+    environment:
+      NNTP_USER: mock
+      NNTP_PASS: mock
+      NNTP_GROUP: mock.test
+      # Which fixture sets to post; empty posts all of /work. The sequential
+      # lifecycle sets it to one set at a time with a fresh spool and db.
+      FIXTURE_SETS: "${FIXTURE_SETS:-}"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/var/lib/news/.posted"]
+      interval: 5s
+      timeout: 2s
+      retries: 120
+
+  # The thing under test. The harness posts the nzbs to /api/add. Every
+  # setting the sweep controls arrives through env_file, which the harness
+  # rewrites per cell: --env-file only feeds compose's own interpolation, so a
+  # var named by -app-env would otherwise never reach the container. Anything
+  # listed under environment: wins over the file, so only what the rig fixes
+  # belongs there and the sweepable defaults live in harness.RigDefaults.
+  streamer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      news:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-8090}:8080"
+    env_file:
+      - ./build/run.env
+    environment:
+      USENET_HOST: news
+      USENET_PORT: "119"
+      USENET_TLS: "false"
+      USENET_USER: mock
+      USENET_PASS: mock
+      HTTP_ADDRESS: ":8080"
+      HTTP_DEBUG: "true"
+      FILESYSTEM_FLATTEN_MAX_DEPTH: "0"
+    # FUSE needs the device and the capability. Webdav on :8080 needs neither,
+    # which is why the mount is off unless it is what is being tested.
+    # devices: ["/dev/fuse"]
+    # cap_add: ["SYS_ADMIN"]
+    # security_opt: ["apparmor:unconfined"]
+
+volumes:
+  work:
+  spool:
+  db:
+  cache:
+  metadata:

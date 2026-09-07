@@ -2,6 +2,8 @@ package nzbparser_test
 
 import (
 	"bytes"
+	"strconv"
+	"strings"
 	"testing"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
@@ -40,4 +42,34 @@ func TestParseSubjectKeepsNonAsciiFilename(t *testing.T) {
 	if file.Displayname != "Release" || file.Encoding != "yEnc" || file.SegmentCountHint != 2 {
 		t.Fatalf("subject parsed as name %q, encoding %q, %d segments", file.Displayname, file.Encoding, file.SegmentCountHint)
 	}
+}
+
+func BenchmarkParse(b *testing.B) {
+	doc := benchNzb()
+	input := bytes.NewReader(doc)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(doc)))
+	for b.Loop() {
+		input.Reset(doc)
+		if _, err := nzbparser.ParseNzb(input, ""); err != nil {
+			b.Fatalf("ParseNzb: %v", err)
+		}
+	}
+}
+
+func benchNzb() []byte {
+	var sb strings.Builder
+	sb.WriteString("<?xml version=\"1.0\" encoding=\"utf-8\" ?>\n<nzb>\n<head><meta type=\"name\">release</meta></head>\n")
+	for range 5 {
+		sb.WriteString("<file poster=\"p@example.com\" date=\"1700000000\" subject=\"Release.part01.rar yEnc (1/1)\">\n<groups><group>alt.binaries.test</group></groups>\n<segments>\n")
+		for s := range 10 {
+			sb.WriteString("<segment bytes=\"716800\" number=\"")
+			sb.WriteString(strconv.Itoa(s + 1))
+			sb.WriteString("\">seg@example.com</segment>\n")
+		}
+		sb.WriteString("</segments>\n</file>\n")
+	}
+	sb.WriteString("</nzb>")
+	return []byte(sb.String())
 }

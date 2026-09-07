@@ -1,0 +1,18 @@
+# FUSE flavor: gives the streamer the device and privileges to mount, points it
+# at /app/mnt, and creates that mountpoint owned by uid 1000 (the image runs as
+# uid 1000, and fusermount refuses a mountpoint the user does not own). Merged
+# after the storage flavor only when -fuse is passed; without it the streamer
+# never sets MOUNT_PATH so the mount simply does not happen.
+name: nzbstreamer-e2e
+
+services:
+  streamer:
+    devices:
+      - /dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    environment:
+      MOUNT_PATH: /app/mnt
+    entrypoint: ["/bin/sh", "-c", "mkdir -p \"$$MOUNT_PATH\" && exec /app/nzbstreamer"]
