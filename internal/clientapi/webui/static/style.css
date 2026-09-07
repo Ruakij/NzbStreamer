@@ -32,7 +32,8 @@ form {
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   padding: .75rem;
 }
-input, button { font: inherit; color: inherit; }
+input, button, select { font: inherit; color: inherit; }
+select { background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: .15rem .3rem; }
 input[type=text] {
   background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: .3rem .5rem;
 }
@@ -43,6 +44,12 @@ button {
 button:hover:not(:disabled) { background: var(--hover); }
 button:disabled { opacity: .5; cursor: default; }
 td button + button { margin-left: .35rem; }
+
+#per-page-label { margin-left: auto; font-size: .8rem; color: var(--muted); }
+
+.pager { display: flex; align-items: center; justify-content: flex-end; gap: .5rem; margin-top: .5rem; }
+.pager > span { font-size: .8rem; color: var(--muted); }
+.pager[hidden] { display: none; }
 
 #show-archived { margin-left: .6rem; cursor: pointer; user-select: none; }
 #show-archived input { vertical-align: middle; margin-right: .2rem; }

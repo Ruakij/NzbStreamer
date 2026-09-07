@@ -10,6 +10,12 @@
 <header>
   <h1>NzbStreamer</h1>
   <span id="offline">disconnected</span>
+  <label id="per-page-label">rows
+    <select id="per-page">
+      <option>10</option><option>25</option><option>50</option><option>100</option>
+      <option value="0">all</option>
+    </select>
+  </label>
 </header>
 
 <form id="add">
@@ -23,12 +29,18 @@
   <th data-key="name">Name<th data-key="category">Category<th data-key="stage">Stage
   <th data-key="bytes">Size<th data-key="age">Age<th>
 </tr></thead><tbody id="queue"></tbody></table>
+<div class="pager" data-for="queue" hidden>
+  <span></span><button data-step="-1">Prev</button><button data-step="1">Next</button>
+</div>
 
 <h2>History <label id="show-archived"><input type="checkbox"> archived</label></h2>
 <table><thead><tr>
   <th data-key="name">Name<th data-key="category">Category<th data-key="stage">Stage
   <th data-key="bytes">Size<th data-key="age">Age<th>
 </tr></thead><tbody id="history"></tbody></table>
+<div class="pager" data-for="history" hidden>
+  <span></span><button data-step="-1">Prev</button><button data-step="1">Next</button>
+</div>
 
 <script src="/static/app.js"></script>
 </body>

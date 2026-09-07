@@ -124,8 +124,9 @@ function render(tbody, items, action, files = {}) {
   const existing = new Map([...tbody.querySelectorAll(":scope > tr[data-id]")].map((row) => [row.dataset.id, row]));
   const sort = sorts[tbody.id];
   markSorted(tbody, sort);
+  const page = paginate(tbody.id, sortItems(items, sort));
   tbody.querySelector(":scope > tr.empty")?.remove();
-  if (!items.length) {
+  if (!page.length) {
     const tr = tbody.insertRow();
     tr.className = "empty";
     const td = tr.insertCell();
@@ -135,7 +136,7 @@ function render(tbody, items, action, files = {}) {
     return;
   }
   let position = tbody.firstElementChild;
-  for (const item of sortItems(items, sort)) {
+  for (const item of page) {
     const tr = existing.get(item.id) || createRow(item.id, action);
     existing.delete(item.id);
     const name = tr.cells[0];
@@ -168,6 +169,44 @@ function render(tbody, items, action, files = {}) {
     position = tr.nextElementSibling;
   }
   for (const row of existing.values()) row.remove();
+}
+
+// One poll carries every item, so a page is a slice of what is already here.
+// The size is the one thing worth keeping between visits.
+const perPage = document.getElementById("per-page");
+perPage.value = localStorage.getItem("perPage") ?? "25";
+
+const pages = { queue: 0, history: 0 };
+
+function paginate(id, items) {
+  const size = Number(perPage.value) || items.length;
+  const last = Math.max(0, Math.ceil(items.length / size) - 1);
+  // A page can fall off the end when items leave, and the sort or the filter
+  // changing makes the one being looked at a different set anyway
+  const page = pages[id] = Math.min(Math.max(pages[id], 0), last);
+  const start = page * size;
+  const shown = items.slice(start, start + size);
+
+  const pager = document.querySelector(`.pager[data-for="${id}"]`);
+  setText(pager.firstElementChild, `${start + 1}-${start + shown.length} of ${items.length}`);
+  pager.querySelector("[data-step='-1']").disabled = page === 0;
+  pager.querySelector("[data-step='1']").disabled = page === last;
+  pager.hidden = last === 0;
+
+  return shown;
+}
+
+perPage.onchange = () => {
+  localStorage.setItem("perPage", perPage.value);
+  pages.queue = pages.history = 0;
+  poll();
+};
+
+for (const button of document.querySelectorAll(".pager button")) {
+  button.onclick = () => {
+    pages[button.closest(".pager").dataset.for] += Number(button.dataset.step);
+    poll();
+  };
 }
 
 // Age ascending is added descending, so the sort value is a negated timestamp
@@ -204,6 +243,7 @@ for (const th of document.querySelectorAll("th[data-key]")) {
     const sort = sorts[tbody.id];
     sort.dir = sort.key === th.dataset.key ? -sort.dir : 1;
     sort.key = th.dataset.key;
+    pages[tbody.id] = 0;
     poll();
   };
 }
@@ -230,7 +270,10 @@ async function remove(id, action, button) {
 // An archived add is still presented; the flag only says which half of the
 // history it belongs to.
 const showArchived = document.querySelector("#show-archived input");
-showArchived.onchange = () => poll();
+showArchived.onchange = () => {
+  pages.history = 0;
+  poll();
+};
 
 let polling = false;
 
