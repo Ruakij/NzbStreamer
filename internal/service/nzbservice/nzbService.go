@@ -225,9 +225,14 @@ func (s *Service) Init() error {
 				return nil
 			})
 
-		// It ended without a tree, and a client that has not read the answer yet
-		// still gets it
-		case StageFailed, StageCancelled:
+		case StageFailed:
+			s.restore(record)
+			if s.restoreTree(record) {
+				restored++
+			}
+
+		// A cancel took back whatever it had presented
+		case StageCancelled:
 			s.restore(record)
 
 		// The process died mid-add. Nothing of it was kept beyond the nzb, so
@@ -301,9 +306,13 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 
 	// The entry reserves the name for this add, so an add that fails has to give
 	// it back along with whatever it already presented; keeping either would make
-	// the nzb un-re-addable
+	// the nzb un-re-addable.
+	//
+	// An archive left packed is the exception: the volumes it presented are the
+	// point of reporting it that way, so it keeps them and the name, and is
+	// removed like a completed one
 	defer func() {
-		if err != nil {
+		if err != nil && !errors.Is(err, nzbrecordfactory.ErrArchiveLeftPacked) {
 			s.mutex.Lock()
 			s.unregister(nzbData.MetaName)
 			s.mutex.Unlock()
@@ -338,13 +347,13 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 		return err
 	}
 
-	tree, err := s.buildTree(nzbData)
-	if err != nil {
-		return err
+	tree, packed := s.buildTree(nzbData)
+	if packed != nil && !errors.Is(packed, nzbrecordfactory.ErrArchiveLeftPacked) {
+		return packed
 	}
 	if len(tree) == 0 {
 		slog.Warn("After blacklist, no files left", "MetaName", nzbData.MetaName)
-		return nil
+		return packed
 	}
 
 	s.register(nzbData, tree)
@@ -353,6 +362,14 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 
 	// The record already holds it: enqueue wrote it there when the add was
 	// accepted, and finish records how this ends
+
+	// An archive that stayed packed is a release nothing can play, so the add
+	// ends failed and a client moves on to the next one. The volumes are
+	// presented all the same, for whoever wants to look at what was posted
+	if packed != nil {
+		slog.Warn("Added nzb without unpacking it", "MetaName", nzbData.MetaName, "error", packed)
+		return packed
+	}
 
 	slog.Info("Added nzb", "MetaName", nzbData.MetaName)
 
@@ -375,12 +392,15 @@ func (s *Service) filterNzbFiles(nzbData *nzbparser.NzbData) {
 // presented under. It is the whole naming decision - the blacklists,
 // deobfuscation and flattening - and the stored tree is a cache of its answer,
 // which is why a restore that goes on to build runs exactly this.
+//
+// A returned ErrArchiveLeftPacked comes with a usable tree, in which an archive
+// nothing could open is presented as the volumes it is; any other error does not.
 func (s *Service) buildTree(nzbData *nzbparser.NzbData) (map[string]presentation.Openable, error) {
 	s.filterNzbFiles(nzbData)
 
-	files, err := s.factory.BuildSegmentStackFromNzbData(nzbData)
-	if err != nil {
-		return nil, fmt.Errorf("failed building segment-stack for %s: %w", nzbData.MetaName, err)
+	files, packed := s.factory.BuildSegmentStackFromNzbData(nzbData)
+	if packed != nil && !errors.Is(packed, nzbrecordfactory.ErrArchiveLeftPacked) {
+		return nil, fmt.Errorf("failed building segment-stack for %s: %w", nzbData.MetaName, packed)
 	}
 
 	for name := range files {
@@ -401,7 +421,7 @@ func (s *Service) buildTree(nzbData *nzbparser.NzbData) (map[string]presentation
 		tree[path.Join(nzbData.MetaName, filepath)] = file
 	}
 
-	return tree, nil
+	return tree, packed
 }
 
 // register presents a tree and records what it presents.

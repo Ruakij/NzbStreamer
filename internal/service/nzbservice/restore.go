@@ -1,6 +1,7 @@
 package nzbservice
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"sync"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
@@ -117,8 +119,9 @@ func (t *lazyTree) open(fullPath string) (presentation.Openable, error) {
 	defer t.mutex.Unlock()
 
 	if t.files == nil {
+		// An archive left packed still built the volumes this is asked for
 		files, err := t.service.buildTree(t.data)
-		if err != nil {
+		if err != nil && !errors.Is(err, nzbrecordfactory.ErrArchiveLeftPacked) {
 			return nil, err
 		}
 		t.files = files

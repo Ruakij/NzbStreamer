@@ -2,6 +2,7 @@ package nzbservice_test
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/service/nzbservice"
@@ -21,7 +23,9 @@ var (
 )
 
 type fakeFactory struct {
-	err       error
+	err error
+	// Reported alongside a usable tree, the way an archive left packed is
+	packedErr error
 	discarded []string
 	// How often a tree was built, which is what a restore from the store is
 	// supposed not to do
@@ -45,7 +49,7 @@ func (f *fakeFactory) BuildSegmentStackFromNzbData(_ *nzbparser.NzbData) (map[st
 		return nil, f.err
 	}
 	f.builds.Add(1)
-	return map[string]presentation.Openable{"file.mkv": fakeFile{}}, nil
+	return map[string]presentation.Openable{"file.mkv": fakeFile{}}, f.packedErr
 }
 
 // fakeFile is a file with nothing behind it: a tree is what these tests look at,
@@ -312,6 +316,38 @@ func TestAFailedAddIsHistoryWithItsError(t *testing.T) {
 	}
 	if !strings.Contains(history[0].Err, errBuildFailed.Error()) {
 		t.Errorf("failed add reported %q as its error", history[0].Err)
+	}
+}
+
+// A release nothing could unpack is not one a client can import, so the add
+// ends failed - with what it did build presented, for whoever wants to look at
+// what was posted.
+func TestAnArchiveLeftPackedFailsTheAddAndStillPresentsIt(t *testing.T) {
+	presenter := &fakePresenter{files: map[string]presentation.Openable{}}
+	packed := fmt.Errorf("%w: some.release.part.rar", nzbrecordfactory.ErrArchiveLeftPacked)
+	service := nzbservice.NewService(newFakeStore(),
+		&fakeFactory{packedErr: packed},
+		[]presentation.Presenter{presenter}, nil, healthyChecker{})
+
+	nzbData := &nzbparser.NzbData{
+		MetaName: "Some.Release",
+		Files:    []nzbparser.File{{Filename: "some.release.part01.rar"}},
+	}
+
+	if err := service.AddNzb(nzbData); !errors.Is(err, nzbrecordfactory.ErrArchiveLeftPacked) {
+		t.Fatalf("AddNzb returned %v", err)
+	}
+
+	history := service.History()
+	if len(history) != 1 || history[0].Stage != nzbservice.StageFailed {
+		t.Fatalf("the add was recorded as %+v", history)
+	}
+	if !strings.Contains(history[0].Err, packed.Error()) {
+		t.Errorf("the add reported %q as its error", history[0].Err)
+	}
+
+	if _, presented := presenter.files["Some.Release/file.mkv"]; !presented {
+		t.Errorf("what the add did build is not presented, got %v", presenter.files)
 	}
 }
 

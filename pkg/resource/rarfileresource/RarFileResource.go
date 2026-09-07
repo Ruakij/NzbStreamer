@@ -38,10 +38,22 @@ type RarFileResource struct {
 func NewRarFileResource(volumes []resource.ReadSeekCloseableResource, password, filename string, size int64) *RarFileResource {
 	return &RarFileResource{
 		volumes:  newVolumeFS(volumes),
-		password: password,
+		password: truncatePassword(password),
 		filename: filename,
 		size:     size,
 	}
+}
+
+// max length of Rar passwords is 127 characters
+const maxPasswordLen = 127
+
+func truncatePassword(password string) string {
+	chars := []rune(password)
+	if len(chars) <= maxPasswordLen {
+		return password
+	}
+
+	return string(chars[:maxPasswordLen])
 }
 
 // volumeBufferSize is how much rardecode reads from a volume at a time. Its

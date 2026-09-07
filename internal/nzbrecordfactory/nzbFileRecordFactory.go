@@ -3,6 +3,7 @@
 package nzbrecordfactory
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
@@ -80,6 +81,11 @@ func NewNzbFileFactory(cache *diskcache.Cache, getSegment nzbpostresource.GetSeg
 	return f
 }
 
+// Marks an archive that could not be opened
+var ErrArchiveLeftPacked = errors.New("archive left packed")
+
+// BuildSegmentStackFromNzbData returns the files an nzb presents. A returned
+// ErrArchiveLeftPacked comes with a usable tree; any other error does not.
 func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData) (map[string]presentation.Openable, error) {
 	known := f.knownSizes(nzbData)
 	sizer := f.sizer(nzbData, known)
@@ -87,9 +93,7 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData
 	rawFiles := f.buildRawFiles(nzbData, sizer, known, cachePrefix(nzbData))
 
 	files := make(map[string]presentation.Openable, len(rawFiles))
-	if err := f.expand(rawFiles, "", 0, nzbData.Meta["Password"], files); err != nil {
-		return files, err
-	}
+	packed := f.expand(rawFiles, "", 0, nzbData.Meta["Password"], files)
 	for name, file := range files {
 		if _, windowed := file.(*readaheadresource.Resource); windowed {
 			continue // A raw file presented as it is carries its window already
@@ -99,7 +103,7 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData
 		}
 	}
 
-	return files, nil
+	return files, packed
 }
 
 // withReadahead puts a window in front of a resource, or hands it back where
@@ -256,6 +260,7 @@ func (f *NzbFileFactory) expand(entries map[string]resource.ReadSeekCloseableRes
 	grouped := filenameops.GroupPartFilenames(filenames)
 	filenameops.SortGroupedFilenames(grouped)
 
+	var packed []error
 	for groupFilename, groupFilenames := range grouped {
 		volumes := make([]resource.ReadSeekCloseableResource, len(groupFilenames))
 		for i, filename := range groupFilenames {
@@ -263,11 +268,15 @@ func (f *NzbFileFactory) expand(entries map[string]resource.ReadSeekCloseableRes
 		}
 
 		archivePath := path.Join(prefix, groupFilename)
-		if members, err := f.unpack(groupFilename, archivePath, volumes, depth, password); err != nil {
-			return err
-		} else if len(members) > 0 {
+		members, err := f.unpack(groupFilename, archivePath, volumes, depth, password)
+		switch {
+		case err != nil:
+			slog.Warn("Archive could not be opened, leaving it packed",
+				"archive", archivePath, "error", err)
+			packed = append(packed, err)
+		case len(members) > 0:
 			if err := f.expand(members, archivePath, depth+1, password, files); err != nil {
-				return err
+				packed = append(packed, err)
 			}
 			continue
 		}
@@ -276,7 +285,7 @@ func (f *NzbFileFactory) expand(entries map[string]resource.ReadSeekCloseableRes
 			files[path.Join(prefix, filename)] = volumes[i]
 		}
 	}
-	return nil
+	return errors.Join(packed...)
 }
 
 // unpack lists what an archive holds, or nothing where the group is not an
@@ -295,7 +304,7 @@ func (f *NzbFileFactory) unpack(groupFilename, archivePath string, volumes []res
 
 	members, err := open(volumes, password)
 	if err != nil {
-		return nil, fmt.Errorf("build special-file %s failed: %w", archivePath, err)
+		return nil, fmt.Errorf("%w: %s: %w", ErrArchiveLeftPacked, archivePath, err)
 	}
 	return members, nil
 }

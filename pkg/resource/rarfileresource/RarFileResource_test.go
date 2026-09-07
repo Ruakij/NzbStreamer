@@ -3,6 +3,7 @@ package rarfileresource
 import (
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
@@ -29,5 +30,20 @@ func TestSizeFromHeaderTouchesNoVolume(t *testing.T) {
 	}
 	if size != 4242 {
 		t.Errorf("Size() = %d, want 4242", size)
+	}
+}
+
+// A password longer than what WinRAR keys with is only correct cut to that
+// length, which is how the archive was encrypted.
+func TestPasswordIsCutToWhatWinrarKeysWith(t *testing.T) {
+	long := strings.Repeat("a", maxPasswordLen) + "bcd"
+	if got := truncatePassword(long); len(got) != maxPasswordLen {
+		t.Errorf("want %d characters, got %d", maxPasswordLen, len(got))
+	}
+
+	// Multi-byte characters count as one each, the way WinRAR counts them
+	short := strings.Repeat("ü", maxPasswordLen)
+	if got := truncatePassword(short); got != short {
+		t.Errorf("a password of %d characters was cut", maxPasswordLen)
 	}
 }
