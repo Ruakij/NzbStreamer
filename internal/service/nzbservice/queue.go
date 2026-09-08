@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbfileanalyzer"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
@@ -42,6 +43,8 @@ type QueueItem struct {
 	Category string `json:"category"`
 	Stage    Stage  `json:"stage"`
 	Bytes    int64  `json:"bytes"`
+	// BytesExact says whether Bytes is the size or a lower bound on it
+	BytesExact bool `json:"bytes_exact"`
 	// Archived is a finished add a client removed from its history. It is a
 	// property of the record only: the nzb stays presented and its files stay
 	// readable, which is what makes it different from Delete
@@ -207,13 +210,15 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 		s.remove(nzbData.MetaName)
 	}
 
+	bytes, bytesExact := totalBytes(nzbData)
 	s.queue = append(s.queue, &QueueItem{
-		ID:       nzbData.MetaName,
-		Category: category,
-		Stage:    StageQueued,
-		Bytes:    totalBytes(nzbData),
-		Added:    time.Now(),
-		done:     make(chan struct{}),
+		ID:         nzbData.MetaName,
+		Category:   category,
+		Stage:      StageQueued,
+		Bytes:      bytes,
+		BytesExact: bytesExact,
+		Added:      time.Now(),
+		done:       make(chan struct{}),
 	})
 	s.queueMutex.Unlock()
 
@@ -235,16 +240,18 @@ func (s *Service) restore(record nzbstore.Record) {
 	done := make(chan struct{})
 	close(done)
 
+	bytes, bytesExact := totalBytes(record.Data)
 	s.queue = append(s.queue, &QueueItem{
-		ID:       record.Data.MetaName,
-		Category: record.Category,
-		Stage:    Stage(record.Stage),
-		Bytes:    totalBytes(record.Data),
-		Archived: record.Archived,
-		Added:    record.AddedAt,
-		Finished: record.FinishedAt,
-		Err:      record.Err,
-		done:     done,
+		ID:         record.Data.MetaName,
+		Category:   record.Category,
+		Stage:      Stage(record.Stage),
+		Bytes:      bytes,
+		BytesExact: bytesExact,
+		Archived:   record.Archived,
+		Added:      record.AddedAt,
+		Finished:   record.FinishedAt,
+		Err:        record.Err,
+		done:       done,
 	})
 }
 
@@ -358,12 +365,19 @@ func (s *Service) remove(id string) {
 	}
 }
 
-func totalBytes(nzbData *nzbparser.NzbData) int64 {
-	var bytes int64
+// totalBytes is what the nzb presents decoded, which is not what its bytes-hints
+// add up to wherever the producer counted wire bytes. exact is false where a
+// segment of it could only be estimated, which is the last one of every file.
+func totalBytes(nzbData *nzbparser.NzbData) (bytes int64, exact bool) {
+	sizer := nzbfileanalyzer.NewSegmentSizer(nzbData)
+
+	exact = true
 	for i := range nzbData.Files {
 		for _, segment := range nzbData.Files[i].Segments {
-			bytes += int64(segment.BytesHint)
+			size, segmentExact := sizer.Size(segment.BytesHint)
+			bytes += int64(size)
+			exact = exact && segmentExact
 		}
 	}
-	return bytes
+	return bytes, exact
 }

@@ -187,7 +187,7 @@ func TestAnAddIsVisibleWhileItRunsAndAfterItFinishes(t *testing.T) {
 
 	nzbData := &nzbparser.NzbData{
 		MetaName: "Some.Release",
-		Files:    []nzbparser.File{{Filename: "some.release.rar", Segments: []nzbparser.Segment{{ID: "a", BytesHint: 700000}}}},
+		Files:    []nzbparser.File{{Filename: "some.release.rar", Segments: []nzbparser.Segment{{ID: "a", BytesHint: 716800}}}},
 	}
 
 	id, err := service.Add(nzbData, "tv")
@@ -200,8 +200,10 @@ func TestAnAddIsVisibleWhileItRunsAndAfterItFinishes(t *testing.T) {
 	if len(queue) != 1 || queue[0].ID != id || queue[0].Stage != nzbservice.StageChecking {
 		t.Fatalf("queue during the health check was %+v", queue)
 	}
-	if queue[0].Bytes != 700000 {
-		t.Errorf("queued item reported %d bytes", queue[0].Bytes)
+	// The hint is a known segment size, so it counts decoded bytes and the size
+	// owes nothing to an estimate
+	if queue[0].Bytes != 716800 || !queue[0].BytesExact {
+		t.Errorf("queued item reported %d bytes, exact %v", queue[0].Bytes, queue[0].BytesExact)
 	}
 	if len(service.History()) != 0 {
 		t.Errorf("an unfinished add is already in the history")
