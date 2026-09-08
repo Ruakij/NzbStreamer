@@ -60,6 +60,23 @@ func TestWireConventionResolvesEveryFullSegment(t *testing.T) {
 	}
 }
 
+// Hints from a real nzb of 655360-byte segments, which without that size known
+// would have cost an add a probe.
+func TestWireConventionResolves640KiBSegments(t *testing.T) {
+	hints := []int{676284, 676267, 676270, 676233, 676281, 676673}
+	sizer := NewSegmentSizer(nzbWith(hints...))
+
+	if sizer.Convention() != ConventionWire {
+		t.Fatalf("convention = %v, want ConventionWire", sizer.Convention())
+	}
+	for _, hint := range hints {
+		size, exact := sizer.Size(hint)
+		if size != 655360 || !exact {
+			t.Errorf("Size(%d) = %d, %v; want 655360, true", hint, size, exact)
+		}
+	}
+}
+
 // A short tail segment carries a hint of its own, which no convention can turn
 // into an exact size.
 func TestTailSegmentIsEstimated(t *testing.T) {
