@@ -34,8 +34,8 @@ type UsenetServerConfig struct {
 type UsenetConfig struct {
 	MaxAttempts  int           `env:"USENET_MAX_ATTEMPTS, default=3"`   // Attempts a request gets before its error is reported
 	RetryBackoff time.Duration `env:"USENET_RETRY_BACKOFF, default=1s"` // Wait after the first failed attempt, doubled after each further one
-	Timeout      time.Duration `env:"USENET_TIMEOUT, default=30s"`      // Timeout for connecting and for completing a single request
-	IdleTimeout  time.Duration `env:"USENET_IDLE_TIMEOUT, default=2m"`  // Time after which an unused connection is closed; 0 or less falls back to the default
+	Timeout      time.Duration `env:"USENET_TIMEOUT, default=5s"`       // Timeout for connecting and for completing a single request
+	IdleTimeout  time.Duration `env:"USENET_IDLE_TIMEOUT, default=30s"` // Time after which an unused connection is closed; 0 or less falls back to the default
 
 	ConnectionPipeliningSize int `env:"NNTP_PIPELINE_SIZE, default=4"`  // How many requests a connection may use at once; minimim 1; this optimizes the use of the connections
 	MinFreeConns             int `env:"NNTP_MIN_FREE_CONNS, default=1"` // Connections kept warm ahead of demand, so a request finds a warm connection; 0 only dials on demand
@@ -72,7 +72,7 @@ type MountConfig struct {
 	// sequential read rather than the connections do
 	MaxBackground  int           `env:"MOUNT_MAX_BACKGROUND, default=64"`   // Reads the kernel may have in flight per mount
 	MaxReadAhead   Bytes         `env:"MOUNT_MAX_READAHEAD, default=8M"`    // Bytes the kernel reads ahead of a sequential reader; a request is capped at 1 MiB, so this is how many it issues
-	BatchDelay     time.Duration `env:"MOUNT_BATCH_DELAY, default=5ms"`     // How long an out-of-order read waits for the batch that delivers its stream positionally sorted
+	BatchDelay     time.Duration `env:"MOUNT_BATCH_DELAY, default=10ms"`    // How long an out-of-order read waits for the batch that delivers its stream positionally sorted
 	NarrowMissSize Bytes         `env:"MOUNT_NARROW_MISS_SIZE, default=8M"` // Largest backward seek warned about as a missed reorder
 }
 
