@@ -200,6 +200,7 @@ Defaults to the index, e.g. `USENET_1_PRIORITY` defaults to 1, `USENET_2_PRIORIT
 | `FILESYSTEM_FIX_FILENAME_THRESHOLD` | 0.2                   | Threshold for applying filename-fixing when filename doesnt match nzb meta name                                                                                                                                                                                                                                                                                          |
 | **Misc**                            |
 | `LOGLEVEL`                          | INFO                  | Logging level, one of {DEBUG, INFO, WARN, ERROR}                                                                                                                                                                                                                                                                                                                         |
+| `SHUTDOWN_TIMEOUT`                  | 25s                   | Everything a shutdown gets, the mount waiting for open files included; keep it below whatever kills the process afterwards, since a container runtime sends SIGKILL 30s after SIGTERM unless told otherwise                                                                                                                                                              |  |
 
 *\* Required*
 

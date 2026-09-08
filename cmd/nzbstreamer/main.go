@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/clientapi/sabnzbd"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/clientapi/webui"
@@ -32,8 +31,6 @@ import (
 	gowebdav "github.com/emersion/go-webdav"
 	"github.com/sethvargo/go-envconfig"
 )
-
-const ShutdownTimeout time.Duration = 3 * time.Second
 
 // completeDir is the path a download client api reports as the folder finished
 // downloads land in, which is the mount unless it is told otherwise. A client
@@ -58,9 +55,18 @@ func completeDir(c Config) string {
 }
 
 func main() {
-	sm, ctx := shutdownmanager.NewShutdownManager(ShutdownTimeout, timeoutaction.Exit1)
+	// The config is read before anything can be shut down, so the shutdown
+	// budget is the configured one from the first signal on
+	var c Config
+	if err := envconfig.Process(context.Background(), &c); err != nil {
+		slog.Error("Failed reading Env-variables for config", "error", err)
+		os.Exit(1)
+	}
+	logging.Setup(c.Logging.Level)
 
-	start(ctx, sm)
+	sm, ctx := shutdownmanager.NewShutdownManager(c.Shutdown.Timeout, timeoutaction.Exit1)
+
+	start(ctx, sm, c)
 	signalHandler(ctx, sm)
 }
 
@@ -78,16 +84,8 @@ func signalHandler(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	}
 }
 
-func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
+func start(ctx context.Context, sm *shutdownmanager.ShutdownManager, c Config) {
 	var err error
-
-	var c Config
-	if err := envconfig.Process(ctx, &c); err != nil {
-		slog.Error("Failed reading Env-variables for config", "error", err)
-		os.Exit(1)
-	}
-
-	logging.Setup(c.Logging.Level)
 
 	servers, err := usenetServers(ctx)
 	if err != nil {
@@ -221,7 +219,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		sm.AddService()
 		go func() {
 			defer sm.ServiceDone()
-			if err := mount.Serve(ctx); err != nil {
+			if err := mount.Serve(ctx, c.Shutdown.Timeout); err != nil {
 				slog.Error("Error in mount", "error", err)
 				os.Exit(1)
 			}

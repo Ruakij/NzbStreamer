@@ -290,6 +290,7 @@ func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 type FileSystem struct {
 	root           *dirNode
 	server         *fuse.Server
+	path           string
 	mounted        atomic.Bool
 	batchDelay     time.Duration
 	narrowMissSize int64

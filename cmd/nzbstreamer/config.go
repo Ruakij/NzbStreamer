@@ -76,6 +76,13 @@ type MountConfig struct {
 	NarrowMissSize Bytes         `env:"MOUNT_NARROW_MISS_SIZE, default=8M"` // Largest backward seek warned about as a missed reorder
 }
 
+type ShutdownConfig struct {
+	// Everything a shutdown gets, the mount waiting for open files included.
+	// It belongs below whatever kills the process afterwards: a container
+	// runtime sends SIGKILL 30s after SIGTERM unless it is told otherwise
+	Timeout time.Duration `env:"SHUTDOWN_TIMEOUT, default=25s"`
+}
+
 type CacheConfig struct {
 	Path    string `env:"CACHE_PATH, default=.cache"` // Path for segment-cache
 	MaxSize Bytes  `env:"CACHE_MAX_SIZE, default=0"`  // Maximum cache size, if unset allows unlimited size (not recommended)
@@ -142,4 +149,5 @@ type Config struct {
 	Filesystem    FilesystemConfig
 	FolderWatcher FolderWatcherConfig
 	Logging       LoggingConfig
+	Shutdown      ShutdownConfig
 }
