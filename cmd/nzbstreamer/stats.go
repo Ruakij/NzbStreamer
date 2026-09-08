@@ -5,6 +5,8 @@ import (
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/fusemount"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/webdav"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/service/nzbservice"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
 )
@@ -17,13 +19,18 @@ func pageStats(cache *diskcache.Cache, pool *nntpclient.Pool, service *nzbservic
 		stats := cache.Stats()
 		lib := library.read()
 
-		up := 0
-		servers := pool.Health()
-		for _, server := range servers {
+		conns, maxConns := 0, 0
+		for _, server := range pool.Health() {
 			if server.Up {
-				up++
+				conns += server.Open
+				maxConns += server.Conns
 			}
 		}
+
+		// Both presenters may be serving, so the numbers are the process's rather
+		// than one presenter's
+		mountOpen, mountServed := fusemount.Stats()
+		davOpen, davServed := webdav.Stats()
 
 		// One pass over the cache index answers every row, rather than a lookup
 		// per segment of every nzb on every poll
@@ -59,8 +66,15 @@ func pageStats(cache *diskcache.Cache, pool *nntpclient.Pool, service *nzbservic
 				"active":    lib.WorkingSet,
 				"window":    int(lib.Window.Seconds()),
 			},
-			"servers": map[string]any{"up": up, "total": len(servers)},
-			"cached":  cached,
+			"servers": map[string]any{
+				"conns": conns, "max_conns": maxConns,
+				"fetched": pool.Fetched(),
+			},
+			"io": map[string]any{
+				"open":   mountOpen + davOpen,
+				"served": mountServed + davServed,
+			},
+			"cached": cached,
 		}
 	}
 }

@@ -12,6 +12,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/fusemount"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/webdav"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
 )
 
@@ -31,6 +33,9 @@ func setupMetrics(cache *diskcache.Cache, library *libraryMeter) (http.Handler, 
 		return nil, err
 	}
 	if err := observeLibrary(library); err != nil {
+		return nil, err
+	}
+	if err := observePresenters(); err != nil {
 		return nil, err
 	}
 
@@ -80,6 +85,54 @@ func observeLibrary(library *libraryMeter) error {
 	}, nzbs, bytes, maxBytes, activeBytes, refetchedBytes)
 	if err != nil {
 		return fmt.Errorf("failed registering the library metrics callback: %w", err)
+	}
+
+	return nil
+}
+
+// observePresenters reports what the mount and the webdav tree are serving. The
+// bytes are counters rather than the rate they are usually looked at as, which
+// is the scrapers to derive.
+func observePresenters() error {
+	meter := otel.Meter("cmd/nzbstreamer")
+
+	var errs []error
+	gauge := func(name string, opts ...metric.Int64ObservableGaugeOption) metric.Int64ObservableGauge {
+		instrument, err := meter.Int64ObservableGauge(name, opts...)
+		errs = append(errs, err)
+		return instrument
+	}
+	counter := func(name string, opts ...metric.Int64ObservableCounterOption) metric.Int64ObservableCounter {
+		instrument, err := meter.Int64ObservableCounter(name, opts...)
+		errs = append(errs, err)
+		return instrument
+	}
+
+	mountOpen := gauge("mount.open_files", metric.WithDescription("Files a client holds open on the mount"))
+	mountServed := counter("mount.served_bytes",
+		metric.WithDescription("Bytes handed to readers of the mount"),
+		metric.WithUnit("By"))
+	davOpen := gauge("webdav.open_readers", metric.WithDescription("Readers the webdav tree holds open"))
+	davServed := counter("webdav.served_bytes",
+		metric.WithDescription("Bytes handed to readers of the webdav tree"),
+		metric.WithUnit("By"))
+
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("failed creating the presenter instruments: %w", err)
+	}
+
+	_, err := meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
+		open, served := fusemount.Stats()
+		observer.ObserveInt64(mountOpen, open)
+		observer.ObserveInt64(mountServed, served)
+
+		open, served = webdav.Stats()
+		observer.ObserveInt64(davOpen, open)
+		observer.ObserveInt64(davServed, served)
+		return nil
+	}, mountOpen, mountServed, davOpen, davServed)
+	if err != nil {
+		return fmt.Errorf("failed registering the presenter metrics callback: %w", err)
 	}
 
 	return nil

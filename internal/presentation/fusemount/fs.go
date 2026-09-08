@@ -217,6 +217,8 @@ func (n *fileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint3
 
 	slog.Debug("Open done", "handle", id, "name", name, "elapsed", time.Since(start))
 
+	openFiles.Add(1)
+
 	return fh, 0, syscall.F_OK
 }
 
@@ -253,6 +255,7 @@ var _ = fs.FileReleaser((*file)(nil))
 // Release closes the reader the handle was opened with, which is what returns
 // its descriptors and pooled readers.
 func (f *file) Release(ctx context.Context) syscall.Errno {
+	defer openFiles.Add(-1)
 	slog.Debug("Close start", "handle", f.id, "name", f.name)
 	start := time.Now()
 
@@ -278,6 +281,7 @@ func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 	}
 
 	slog.Debug("Read done", "handle", f.id, "name", f.name, "offset", off, "bytes", n, "elapsed", time.Since(start))
+	servedBytes.Add(int64(n))
 
 	return &readResult{
 		buf: dest[:n],

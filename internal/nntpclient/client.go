@@ -126,6 +126,13 @@ func (c *Client) Conns() int {
 	return c.config.MaxConns
 }
 
+// OpenConns reports how many are open now: the pipelined ones, the idle ones and
+// the ones a command holds. A slot taken by a dial that has not finished counts
+// as the connection it is about to be.
+func (c *Client) OpenConns() int {
+	return c.pipesOpen() + len(c.idle) + c.config.MaxConns - len(c.slots)
+}
+
 func New(config Config) *Client {
 	if config.MaxConns < 1 {
 		config.MaxConns = 1

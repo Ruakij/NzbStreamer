@@ -146,23 +146,34 @@ function strip(stats) {
   const cache = stats.cache;
   const reads = cache.hits + cache.misses;
   const library = stats.library || {};
-  const activeWindow = duration(library.window || 0);
+  const io = stats.io || {};
+  const window_ = duration(library.window || 0);
   const groups = [
     // Nominal is everything added, active what of it was read within the window:
     // the cache has to hold the second, not the first
     ["library", [
       ["nominal", (library.exact ? "" : "~") + size(library.bytes) + (library.max_bytes ? ` / ${size(library.max_bytes)}` : "")],
-      [`active ${activeWindow}`, size(library.active)],
+      ["active", size(library.active), `distinct bytes read in the last ${window_}`],
     ]],
     ["cache", [
       ["used", cache.max_bytes ? `${size(cache.bytes)} / ${size(cache.max_bytes)}` : size(cache.bytes)],
       ["segments", cache.items],
-      ["hit rate", reads ? percent(cache.hits, reads) : "-"],
+      ["hit rate", reads ? percent(cache.hits, reads) : "-", "reads served from the cache since start"],
       // What the cache being smaller than the active library cost, which the
       // lifetime hit rate above cannot show once it has averaged out
-      [`refetched ${activeWindow}`, size(cache.refetched)],
+      ["refetched", size(cache.refetched), `active bytes downloaded again in the last ${window_}`],
     ]],
-    ["usenet", [["servers up", `${stats.servers.up} / ${stats.servers.total}`]]],
+    ["usenet", [
+      ["connections", `${stats.servers.conns} / ${stats.servers.max_conns}`, "connections open to the servers in rotation"],
+      ["in", rate("fetched", stats.servers.fetched), "bytes being downloaded from the servers"],
+      ["downloaded", `${size(stats.servers.fetched)} - ${cache.misses} segments`,
+        "downloaded since start, over the reads the cache did not hold"],
+    ]],
+    ["i/o", [
+      ["open files", io.open, "files clients are holding open right now"],
+      ["out", rate("served", io.served), "bytes being handed to clients"],
+      ["served", size(io.served), "bytes handed to clients since start"],
+    ]],
   ];
 
   target.replaceChildren(...groups.map(([title, values]) => {
@@ -171,8 +182,9 @@ function strip(stats) {
     const name = document.createElement("b");
     name.textContent = title;
     bubble.append(name);
-    for (const [label, value] of values) {
+    for (const [label, value, hint] of values) {
       const entry = document.createElement("span");
+      if (hint) entry.title = hint;
       entry.append(label);
       const number = document.createElement("strong");
       number.textContent = value;
@@ -204,6 +216,18 @@ function renderProgress(cell, item) {
 // A size covering a segment nothing has decoded yet is a lower bound on it
 function estimated(bytes, exact) {
   return (exact ? "" : "~") + size(bytes);
+}
+
+// rate turns a counter into what it grew by per second, from the poll before
+// this one. The server sends counters, so how fast they move is ours to work
+// out; the first poll of a counter has nothing to compare against.
+const counters = {};
+function rate(name, total) {
+  const now = Date.now();
+  const last = counters[name];
+  counters[name] = { total, at: now };
+  if (!last || now === last.at) return "-";
+  return `${size(Math.max(total - last.total, 0) * 1000 / (now - last.at))}/s`;
 }
 
 function percent(part, whole) {

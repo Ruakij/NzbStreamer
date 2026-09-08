@@ -21,6 +21,7 @@ type Server interface {
 	GetSegment(group, id string) ([]byte, error)
 	SegmentExists(id string) (bool, error)
 	Conns() int
+	OpenConns() int
 }
 
 // QuotaStore persists what a metered server has spent. A count that does not
@@ -89,6 +90,14 @@ type Pool struct {
 	// rate was last worked out
 	ops      atomic.Int64
 	rateData rate
+	// fetched is what the servers have sent, for a caller that cannot read the
+	// metrics exporter
+	fetched atomic.Int64
+}
+
+// Fetched reports the bytes the servers have sent since the process started.
+func (p *Pool) Fetched() int64 {
+	return p.fetched.Load()
 }
 
 // rate is how fast the pool serves segment operations, measured over the
@@ -307,7 +316,9 @@ type ServerHealth struct {
 	Name     string
 	Priority int
 	Conns    int
-	Up       bool
+	// Open is how many of them are open right now
+	Open int
+	Up   bool
 	// Reason is why it is not, empty while it is up
 	Reason string
 }
@@ -322,6 +333,7 @@ func (p *Pool) Health() []ServerHealth {
 				Name:     server.Name,
 				Priority: server.Priority,
 				Conns:    server.Server.Conns(),
+				Open:     server.Server.OpenConns(),
 				Up:       reason == "",
 				Reason:   reason,
 			})
@@ -482,6 +494,7 @@ func (p *Pool) measure(s *poolServer, outcome string, started time.Time, bytes i
 	fetchDuration.Record(context.Background(), time.Since(started).Seconds(), attributes)
 	fetchedArticles.Add(context.Background(), 1, attributes)
 	if bytes > 0 {
+		p.fetched.Add(bytes)
 		fetchedBytes.Add(context.Background(), bytes, metric.WithAttributes(serverKey.String(s.Name)))
 	}
 }

@@ -358,6 +358,7 @@ func (sf *simpleFileReader) Read(p []byte) (int, error) {
 
 	n, err := reader.Read(p)
 	sf.position += int64(n)
+	servedBytes.Add(int64(n))
 	sf.handle.position = sf.position
 	if err != nil && !errors.Is(err, io.EOF) {
 		slog.Error("Read error", "name", sf.simpleFile.name, "len(p)", len(p), "err", err)

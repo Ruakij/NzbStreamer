@@ -142,7 +142,9 @@ tr.file-list td { padding-top: 0; font-size: .85rem; }
 #stats { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
 #stats[hidden] { display: none; }
 .bubble {
-  display: flex; flex: 1 1 0; gap: .9rem; align-items: baseline; flex-wrap: wrap;
+  /* auto rather than 0, so a bubble is as wide as what it holds plus a share of
+     the leftover, and the row breaks where the content runs out */
+  display: flex; flex: 1 1 auto; gap: .9rem; align-items: baseline; flex-wrap: wrap;
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   padding: .4rem .8rem; font-size: .85rem; color: var(--muted);
   font-variant-numeric: tabular-nums;

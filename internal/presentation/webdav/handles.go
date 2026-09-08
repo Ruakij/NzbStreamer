@@ -65,6 +65,7 @@ func (c *handleCache) acquire(openable presentation.Openable, off int64) (*handl
 	if err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
 	}
+	openReaders.Add(1)
 	return &handle{reader: reader, openable: openable}, nil
 }
 
@@ -125,6 +126,7 @@ func (r rank) beats(other rank) bool {
 // room. It is never the caller's to close afterwards.
 func (c *handleCache) release(h *handle) error {
 	if c == nil {
+		openReaders.Add(-1)
 		return h.reader.Close()
 	}
 
@@ -240,6 +242,7 @@ func (c *handleCache) Close() error {
 func closeAll(handles []*handle) error {
 	var err error
 	for _, h := range handles {
+		openReaders.Add(-1)
 		if e := h.reader.Close(); e != nil && err == nil {
 			err = e
 		}
