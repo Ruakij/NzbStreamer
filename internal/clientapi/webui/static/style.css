@@ -153,6 +153,7 @@ tr.file-list td { padding-top: 0; font-size: .85rem; }
   font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
 }
 .bubble strong { font-weight: 500; color: var(--fg); margin-left: .25rem; }
+.bubble strong.rate { display: inline-block; min-width: 10ch; }
 
 tr:has(+ tr.info:not([hidden])) td { border-bottom: 0; }
 tr:has(+ tr.info:not([hidden])):hover + tr.info, tr:has(+ tr.info:hover) { background: var(--hover); }

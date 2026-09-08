@@ -157,7 +157,6 @@ function strip(stats) {
     ]],
     ["cache", [
       ["used", cache.max_bytes ? `${size(cache.bytes)} / ${size(cache.max_bytes)}` : size(cache.bytes)],
-      ["segments", cache.items],
       ["hit rate", reads ? percent(cache.hits, reads) : "-", "reads served from the cache since start"],
       // What the cache being smaller than the active library cost, which the
       // lifetime hit rate above cannot show once it has averaged out
@@ -166,8 +165,7 @@ function strip(stats) {
     ["usenet", [
       ["connections", `${stats.servers.conns} / ${stats.servers.max_conns}`, "connections open to the servers in rotation"],
       ["in", rate("fetched", stats.servers.fetched), "bytes being downloaded from the servers"],
-      ["downloaded", `${size(stats.servers.fetched)} - ${cache.misses} segments`,
-        "downloaded since start, over the reads the cache did not hold"],
+      ["downloaded", size(stats.servers.fetched), "downloaded since start"],
     ]],
     ["i/o", [
       ["open files", io.open, "files clients are holding open right now"],
@@ -187,6 +185,7 @@ function strip(stats) {
       if (hint) entry.title = hint;
       entry.append(label);
       const number = document.createElement("strong");
+      if (String(value).endsWith("/s")) number.className = "rate";
       number.textContent = value;
       entry.append(number);
       bubble.append(entry);
