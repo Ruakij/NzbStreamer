@@ -108,13 +108,18 @@ func resolveName(nzb *NzbData, filename string) string {
 const (
 	nameChars      = `\p{L}\p{N}_.\-+\[\]()`
 	nameCharsSpace = nameChars + ` `
+	filename       = `[` + nameCharsSpace + `]+\.[` + nameChars + `]+`
+	filenameSpace  = `[` + nameCharsSpace + `]+\.[` + nameCharsSpace + `]+`
 )
 
 var subjectRegexPatterns = []*regexp.Regexp{
+	// Prefixed; a file counter is the only reliable marker between release name and
+	// filename when both carry spaces, a bare dash is not
+	regexp.MustCompile(`^((?P<Name>.+?) +)?[\[(]\d+\/\d+[\])] *(- +)?(?P<Filename>` + filename + `) *((?P<Encoding>[` + nameChars + `]+) +)?((?P<TotalSizeHint>[0-9]+) +)?(\((?P<SegmentIndexHint>\d+)\/(?P<SegmentCountHint>\d+)\))?$`),
 	// Detailed
-	regexp.MustCompile(`^((?P<Name>.+?) +)?("(?P<Filename>[` + nameCharsSpace + `]+)"|(?P<Filename>[` + nameChars + `]+)) *((?P<Encoding>[` + nameChars + `]+) +)?((?P<TotalSizeHint>[0-9]+) +)?(\((?P<SegmentIndexHint>\d+)\/(?P<SegmentCountHint>\d+)\))?$`),
+	regexp.MustCompile(`^((?P<Name>.+?) +)??(?P<Filename>` + filename + `) *((?P<Encoding>[` + nameChars + `]+) +)?((?P<TotalSizeHint>[0-9]+) +)?(\((?P<SegmentIndexHint>\d+)\/(?P<SegmentCountHint>\d+)\))?$`),
 	// Normal
-	regexp.MustCompile(`^((?P<Name>.+?) +)?("(?P<Filename>[` + nameCharsSpace + `]+)") *((?P<Encoding>[` + nameChars + `]+) +)?((?P<TotalSizeHint>[0-9]+) +)?(\((?P<SegmentIndexHint>\d+)\/(?P<SegmentCountHint>\d+)\))?$`),
+	regexp.MustCompile(`^((?P<Name>.+?) +)?("(?P<Filename>` + filenameSpace + `)") *((?P<Encoding>[` + nameChars + `]+) +)?((?P<TotalSizeHint>[0-9]+) +)?(\((?P<SegmentIndexHint>\d+)\/(?P<SegmentCountHint>\d+)\))?$`),
 	// Simple
 	regexp.MustCompile(`^.*?"(?P<Filename>[` + nameChars + `]{6,})".*?$`),
 	regexp.MustCompile(`^.*?(?P<Filename>[` + nameChars + `]{6,}).*?$`),
@@ -130,7 +135,7 @@ type ParseResult struct {
 	SegmentCountHint int
 }
 
-// Static error message
+// ErrCouldNotParseSubject reports a subject no pattern matched a filename in.
 var ErrCouldNotParseSubject = fmt.Errorf("could not parse subject")
 
 func parseSubject(subject string) (ParseResult, error) {

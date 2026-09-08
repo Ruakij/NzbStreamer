@@ -44,6 +44,40 @@ func TestParseSubjectKeepsNonAsciiFilename(t *testing.T) {
 	}
 }
 
+func TestParseSubjectUnquotedFilename(t *testing.T) {
+	tests := []struct {
+		subject      string
+		wantName     string
+		wantFilename string
+	}{
+		{"Popeye the Sailor (1936) AVC AC3.mkv.par2 (1/0)", "", "Popeye the Sailor (1936) AVC AC3.mkv.par2"},
+		{"Popeye the Sailor [02/10] - AC3 track.mkv.par2 yEnc (1/0)", "Popeye the Sailor", "AC3 track.mkv.par2"},
+		{"Popeye the Sailor (02/10) AC3.mkv yEnc (1/0)", "Popeye the Sailor", "AC3.mkv"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.subject, func(t *testing.T) {
+			doc := []byte("<nzb><file poster=\"p@example.com\" date=\"1700000000\" subject=\"" + test.subject + "\">\n" +
+				"<groups><group>alt.binaries.test</group></groups>\n" +
+				"<segments><segment bytes=\"100\" number=\"1\">a@example.com</segment></segments>\n" +
+				"</file></nzb>")
+
+			nzb, err := nzbparser.ParseNzb(bytes.NewReader(doc), "")
+			if err != nil {
+				t.Fatalf("ParseNzb: %v", err)
+			}
+
+			file := nzb.Files[0]
+			if file.Filename != test.wantFilename || file.Displayname != test.wantName {
+				t.Fatalf("parsed as name %q file %q, want name %q file %q", file.Displayname, file.Filename, test.wantName, test.wantFilename)
+			}
+			if file.SegmentIndexHint != 1 {
+				t.Fatalf("subject parsed with index %d", file.SegmentIndexHint)
+			}
+		})
+	}
+}
+
 func BenchmarkParse(b *testing.B) {
 	doc := benchNzb()
 	input := bytes.NewReader(doc)

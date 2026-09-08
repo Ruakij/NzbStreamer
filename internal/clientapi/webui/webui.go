@@ -174,6 +174,7 @@ func writeJSON(w http.ResponseWriter, body any) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
+	slog.Warn("Request failed", "status", status, "error", message)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	encode(w, map[string]string{"error": message})
