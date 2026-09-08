@@ -60,10 +60,13 @@ type Service struct {
 	// so a stored one is only restored while they are unchanged. Empty stores
 	// and restores nothing.
 	treeKey string
-	// addLimit bounds the trees being built at once, whether by an add or by a
-	// restore; the ones it holds back sit in the queue as what they are. nil is
-	// no limit.
-	addLimit chan struct{}
+	// slots bounds the trees being built at once, whether by an add or by a
+	// restore; the ones it holds back sit in the queue as what they are
+	slots addSlots
+
+	// How fast the news servers are answering, which is what the work an item
+	// has left is turned into a time with. nil until a pool is wired to it
+	rate func() float64
 
 	// What the startup restore is still doing. Until it is done the library is
 	// incomplete, which is what a client acting on what it reads has to wait for
@@ -134,27 +137,15 @@ func (s *Service) SetFilenameReplacementBelowLevensteinRatio(ratio float32) {
 // mostly waiting on the news server, over connections every read shares, so
 // more is not faster past a point. 0 or less is no limit.
 func (s *Service) SetConcurrency(builds int) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	s.addLimit = nil
-	if builds > 0 {
-		s.addLimit = make(chan struct{}, builds)
-	}
+	s.slots.setLimit(builds)
 }
 
-// acquireAdd waits for a free slot and returns what gives it back.
-func (s *Service) acquireAdd() func() {
-	s.mutex.RLock()
-	limit := s.addLimit
-	s.mutex.RUnlock()
-
-	if limit == nil {
-		return func() {} // unbounded, nothing to give back
-	}
-
-	limit <- struct{}{}
-	return func() { <-limit }
+// SetRate wires how fast the news servers are answering, in segment operations
+// per second, which is what an items remaining work is turned into a time with.
+func (s *Service) SetRate(rate func() float64) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.rate = rate
 }
 
 // SetTreeKey names the settings a stored tree was built under. A restored tree
@@ -298,7 +289,7 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	started := time.Now()
 
-	release := s.acquireAdd()
+	release := s.slots.acquire()
 	defer release()
 
 	slog.Debug("Adding nzb", "MetaName", nzbData.MetaName)
@@ -344,7 +335,8 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 			return err
 		}
 
-		if healthErrors := s.healthChecker.CheckFiles(nzbData); len(healthErrors) > 0 {
+		progress := func(done, total int) { s.progress(nzbData.MetaName, done, total) }
+		if healthErrors := s.healthChecker.CheckFiles(nzbData, progress); len(healthErrors) > 0 {
 			for _, err := range healthErrors {
 				slog.Warn("Unhealthy file detected",
 					"nzb", nzbData.MetaName,

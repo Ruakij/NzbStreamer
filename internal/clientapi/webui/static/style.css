@@ -97,7 +97,7 @@ td.name .title { font-weight: 500; }
 tr[data-id] td:nth-child(n+4):not(:last-child) {
   font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted);
 }
-.share { font-size: .8rem; }
+.share { font-size: .8rem; opacity: .8; }
 /* The pair stacks, so it is aligned and kept slim rather than made to fit
    side by side in a cell the name column has already taken the width from. */
 tr[data-id] td:last-child { text-align: right; }
@@ -116,6 +116,11 @@ tr[data-id] td:last-child button + button { margin-top: .1rem; }
 .stage.completed { color: var(--good); }
 .stage.failed, .stage.cancelled { color: var(--bad); }
 .stage.checking, .stage.building, .stage.rebuilding { color: var(--accent); }
+
+td.stage-cell { min-width: 6rem; }
+td.stage-cell small { font-size: .7rem; color: var(--muted); }
+.bar { height: .3rem; border-radius: 999px; background: var(--hover); margin: .3rem 0 .1rem; }
+.bar > div { height: 100%; border-radius: inherit; background: var(--accent); }
 
 /* The list is a row of its own so it gets the table width, and the item row
    above it keeps the pair reading as one. */

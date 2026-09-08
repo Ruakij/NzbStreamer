@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbfileanalyzer"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
@@ -45,6 +46,12 @@ type QueueItem struct {
 	Bytes    int64  `json:"bytes"`
 	// BytesExact says whether Bytes is the size or a lower bound on it
 	BytesExact bool `json:"bytes_exact"`
+	// Progress is how far the whole add has got, from 0 to 1, and Eta what is
+	// left of it in seconds, the wait for a slot included. Both are worked out
+	// when the item is handed out rather than kept, since neither is true for
+	// longer than the moment it is read; an Eta of 0 is one nothing can estimate
+	Progress float64 `json:"progress"`
+	Eta      float64 `json:"eta"`
 	// Archived is a finished add a client removed from its history. It is a
 	// property of the record only: the nzb stays presented and its files stay
 	// readable, which is what makes it different from Delete
@@ -58,6 +65,19 @@ type QueueItem struct {
 	// boundaries; closed by finish, which is what Cancel waits on
 	cancelled bool
 	done      chan struct{}
+
+	// When the running stage began, which is what a build is counted down from:
+	// an add that waited for a slot spent that wait queued, not building
+	stageStarted time.Time
+	// Segments the check has probed against the ones it means to probe. The
+	// second grows when a file it cannot decide is escalated
+	checkDone  int
+	checkTotal int
+	// What the add costs the news servers, worked out from the nzb before any of
+	// it runs: the segments the check plans to probe, and the archive headers the
+	// build walks
+	probeOps int
+	buildOps int
 }
 
 // Done reports whether the item belongs in the history rather than the queue.
@@ -122,14 +142,49 @@ func (s *Service) Archive(id string, archived bool) error {
 	return nil
 }
 
+// items lists one side of the queue and works out what each of them has left.
+// An add that has not started waits for the ones ahead of it to clear the slots
+// they are queueing for, so what is ahead is accumulated over the whole queue
+// while the wanted side of it is collected.
 func (s *Service) items(done bool) []QueueItem {
+	s.mutex.RLock()
+	rate := s.rate
+	s.mutex.RUnlock()
+
+	perSec := 0.0
+	if rate != nil {
+		perSec = rate()
+	}
+
 	s.queueMutex.Lock()
 	defer s.queueMutex.Unlock()
 
+	slots := s.slots.count()
+	ahead := 0.0
+
 	items := make([]QueueItem, 0, len(s.queue))
 	for _, item := range s.queue {
+		left, total := remainingOps(item, perSec)
+
 		if item.Done() == done {
-			items = append(items, *item)
+			copied := *item
+			copied.Progress = progressOf(item, left, total)
+
+			// What is ahead only delays an add that has not been handed a slot;
+			// unbounded slots mean nothing is waiting for one
+			ops := left
+			if item.Stage == StageQueued && slots > 0 {
+				ops += ahead / float64(slots)
+			}
+			if perSec > 0 {
+				copied.Eta = ops / perSec
+			}
+
+			items = append(items, copied)
+		}
+
+		if !item.Done() {
+			ahead += left
 		}
 	}
 	return items
@@ -211,6 +266,7 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 	}
 
 	bytes, bytesExact := totalBytes(nzbData)
+	probeOps, buildOps := s.plannedOps(nzbData)
 	s.queue = append(s.queue, &QueueItem{
 		ID:         nzbData.MetaName,
 		Category:   category,
@@ -219,6 +275,8 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 		BytesExact: bytesExact,
 		Added:      time.Now(),
 		done:       make(chan struct{}),
+		probeOps:   probeOps,
+		buildOps:   buildOps,
 	})
 	s.queueMutex.Unlock()
 
@@ -231,6 +289,18 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 	return nil
 }
 
+// plannedOps is what the add will ask the news servers for: the segments the
+// check plans to probe, and the reads walking the header of every archive in it
+// costs. Both are read off the nzb, without asking the servers anything.
+func (s *Service) plannedOps(nzbData *nzbparser.NzbData) (probe, build int) {
+	filenames := make([]string, len(nzbData.Files))
+	for i := range nzbData.Files {
+		filenames[i] = nzbData.Files[i].Filename
+	}
+	return s.healthChecker.PlannedProbes(nzbData),
+		nzbrecordfactory.ArchiveGroups(filenames) * headerWalkOps
+}
+
 // restore rebuilds a queue item from what the store kept of an add that ended
 // before this process started.
 func (s *Service) restore(record nzbstore.Record) {
@@ -241,8 +311,11 @@ func (s *Service) restore(record nzbstore.Record) {
 	close(done)
 
 	bytes, bytesExact := totalBytes(record.Data)
+	probeOps, buildOps := s.plannedOps(record.Data)
 	s.queue = append(s.queue, &QueueItem{
 		ID:         record.Data.MetaName,
+		probeOps:   probeOps,
+		buildOps:   buildOps,
 		Category:   record.Category,
 		Stage:      Stage(record.Stage),
 		Bytes:      bytes,
@@ -312,7 +385,21 @@ func (s *Service) stage(id string, stage Stage) error {
 	}
 
 	item.Stage = stage
+	item.stageStarted = time.Now()
 	return nil
+}
+
+// progress records how far the check of an add has got. It is called once per
+// probed segment, so it is kept to what a lock and two writes cost; nothing
+// about it is written to the store, since an add a restart interrupts starts
+// its stage again.
+func (s *Service) progress(id string, done, total int) {
+	s.queueMutex.Lock()
+	defer s.queueMutex.Unlock()
+
+	if item := s.find(id); item != nil {
+		item.checkDone, item.checkTotal = done, total
+	}
 }
 
 // finish records how an add ended, in the store as well, and releases whoever is

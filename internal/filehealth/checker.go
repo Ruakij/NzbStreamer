@@ -76,6 +76,39 @@ func (e *FileHealthError) Unwrap() error {
 	return e.Err
 }
 
+// progressReporter counts the probes of every pass of one check against the
+// probes those passes planned, and hands both to whoever asked. A nil report is
+// the caller that does not want to know.
+type progressReporter struct {
+	report ProgressFunc
+
+	mu    sync.Mutex
+	done  int
+	total int
+}
+
+func (p *progressReporter) plan(segments int) {
+	p.update(0, segments)
+}
+
+func (p *progressReporter) step() {
+	p.update(1, 0)
+}
+
+func (p *progressReporter) update(done, total int) {
+	if p.report == nil {
+		return
+	}
+
+	// Reported under the lock, so what the caller sees only ever moves forward
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.done += done
+	p.total += total
+	p.report(p.done, p.total)
+}
+
 type fileResult struct {
 	checked int
 	missing int
@@ -88,7 +121,7 @@ type fileResult struct {
 // A cheap pass covers every content file, which settles a dead post on its first
 // probe and a healthy one for the price of that pass. Only a file whose sample
 // leaves the answer genuinely open is probed again, harder.
-func (c *DefaultChecker) CheckFiles(nzbData *nzbparser.NzbData) []error {
+func (c *DefaultChecker) CheckFiles(nzbData *nzbparser.NzbData, progress ProgressFunc) []error {
 	if c.config.InitialFilePercent <= 0 {
 		return nil
 	}
@@ -100,19 +133,15 @@ func (c *DefaultChecker) CheckFiles(nzbData *nzbparser.NzbData) []error {
 
 	started := time.Now()
 	limit := c.limit(nzbData)
-	counts := make([]int, len(content))
+	counts := c.sampleCounts(content)
 	segments := 0
-	for i, file := range content {
+	for _, file := range content {
 		segments += len(file.Segments)
-		counts[i] = clamp(
-			int(math.Round(float64(len(file.Segments))*c.config.InitialFilePercent/100)),
-			c.config.InitialFileMinSegments,
-			min(c.config.InitialFileMaxSegments, len(file.Segments)),
-		)
 	}
 
-	results := c.probe(content, counts)
-	c.escalate(content, results, limit)
+	reporter := &progressReporter{report: progress}
+	results := c.probe(content, counts, reporter)
+	c.escalate(content, results, limit, reporter)
 	recordCheck(started, segments)
 
 	var errs []error
@@ -139,11 +168,43 @@ func (c *DefaultChecker) CheckFiles(nzbData *nzbparser.NzbData) []error {
 	return errs
 }
 
+// sampleCounts is how many segments of each file the first pass probes: the
+// configured share of it, never below the floor and never above the cap or the
+// file itself.
+func (c *DefaultChecker) sampleCounts(content []*nzbparser.File) []int {
+	counts := make([]int, len(content))
+	for i, file := range content {
+		counts[i] = clamp(
+			int(math.Round(float64(len(file.Segments))*c.config.InitialFilePercent/100)),
+			c.config.InitialFileMinSegments,
+			min(c.config.InitialFileMaxSegments, len(file.Segments)),
+		)
+	}
+	return counts
+}
+
+// PlannedProbes is how many segments a check of this nzb would ask the server
+// about, worked out without asking about any of them. It is a floor: a file the
+// first pass cannot decide is probed again, and how many of those there are is
+// what the first pass is for.
+func (c *DefaultChecker) PlannedProbes(nzbData *nzbparser.NzbData) int {
+	if c.config.InitialFilePercent <= 0 {
+		return 0
+	}
+
+	content := contentFiles(nzbData)
+	planned := 0
+	for i, count := range c.sampleCounts(content) {
+		planned += len(sampleIndices(len(content[i].Segments), count))
+	}
+	return planned
+}
+
 // escalate re-probes, with a sample wide enough to resolve it, every file the
 // first pass could not decide, and replaces its result. A widened sample is read
 // on its own rather than added to the first: what it measures is the same
 // fraction, only more precisely.
-func (c *DefaultChecker) escalate(content []*nzbparser.File, results []fileResult, limit float64) {
+func (c *DefaultChecker) escalate(content []*nzbparser.File, results []fileResult, limit float64, reporter *progressReporter) {
 	if c.config.ExtensiveFilePercent <= 0 {
 		return
 	}
@@ -176,7 +237,7 @@ func (c *DefaultChecker) escalate(content []*nzbparser.File, results []fileResul
 		return
 	}
 
-	for i, result := range c.probe(files, counts) {
+	for i, result := range c.probe(files, counts, reporter) {
 		if !c.config.UndecidedAccept && decide(result.missing, result.checked, limit, c.config.Confidence) == verdictUndecided {
 			result.err = fmt.Errorf("%w: %d of %d checked, still undecided", ErrSegmentsMissing, result.missing, result.checked)
 		}
@@ -185,7 +246,7 @@ func (c *DefaultChecker) escalate(content []*nzbparser.File, results []fileResul
 }
 
 // probe checks counts[i] segments of files[i], spread evenly.
-func (c *DefaultChecker) probe(files []*nzbparser.File, counts []int) []fileResult {
+func (c *DefaultChecker) probe(files []*nzbparser.File, counts []int, reporter *progressReporter) []fileResult {
 	results := make([]fileResult, len(files))
 
 	var (
@@ -194,8 +255,18 @@ func (c *DefaultChecker) probe(files []*nzbparser.File, counts []int) []fileResu
 		sem = make(chan struct{}, c.config.MaxParallel)
 	)
 
+	// The whole pass is planned before any of it runs, so the fraction reported
+	// does not fall back while the pass is still being spread out
+	indices := make([][]int, len(files))
+	planned := 0
+	for i, file := range files {
+		indices[i] = sampleIndices(len(file.Segments), counts[i])
+		planned += len(indices[i])
+	}
+	reporter.plan(planned)
+
 	for fileIndex, file := range files {
-		for _, segmentIndex := range sampleIndices(len(file.Segments), counts[fileIndex]) {
+		for _, segmentIndex := range indices[fileIndex] {
 			id := file.Segments[segmentIndex].ID
 
 			wg.Add(1)
@@ -205,6 +276,8 @@ func (c *DefaultChecker) probe(files []*nzbparser.File, counts []int) []fileResu
 				defer func() { <-sem }()
 
 				exists, err := c.exists(id)
+
+				reporter.step()
 
 				mu.Lock()
 				defer mu.Unlock()

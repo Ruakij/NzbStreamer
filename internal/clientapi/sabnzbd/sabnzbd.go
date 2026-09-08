@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/service/nzbservice"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
@@ -242,15 +243,12 @@ func (h *Handler) queue(w http.ResponseWriter, query map[string][]string) {
 	slots := make([]map[string]any, 0, len(items))
 	for i, item := range items {
 		slots = append(slots, map[string]any{
-			"status": queueStatus(item.Stage),
-			"index":  i,
-			// Nothing here knows how long an add will take: the probe is a sample
-			// whose size depends on what it finds, and the archive walk is a
-			// handful of segments
-			"timeleft":   "0:00:00",
-			"percentage": 0,
+			"status":     queueStatus(item.Stage),
+			"index":      i,
+			"timeleft":   timeleft(item),
+			"percentage": int(item.Progress * 100),
 			"mb":         megabytes(item.Bytes),
-			"mbleft":     megabytes(item.Bytes),
+			"mbleft":     megabytes(int64(float64(item.Bytes) * (1 - item.Progress))),
 			"filename":   item.ID,
 			"priority":   "Normal",
 			"cat":        item.Category,
@@ -395,6 +393,14 @@ func filter(items []nzbservice.QueueItem, query map[string][]string) []nzbservic
 	}
 
 	return items
+}
+
+// timeleft formats what the service estimates is left of the add, the wait for
+// a slot included. An item it cannot estimate says 0:00:00, which is what
+// SABnzbd reports for an unknown.
+func timeleft(item nzbservice.QueueItem) string {
+	left := time.Duration(item.Eta * float64(time.Second))
+	return fmt.Sprintf("%d:%02d:%02d", int(left.Hours()), int(left.Minutes())%60, int(left.Seconds())%60)
 }
 
 func megabytes(bytes int64) string {

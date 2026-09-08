@@ -70,7 +70,7 @@ func TestChecksOnlyFirstAndLastSegmentOfContent(t *testing.T) {
 		fileWith("a.rar", "s1", "s2", "s3", "s4"),
 		fileWith("a.vol00+01.par2", "p1", "p2"),
 		fileWith("a.nfo", "n1"),
-	))
+	), nil)
 	if len(errs) != 0 {
 		t.Fatalf("got errors %v, want none", errs)
 	}
@@ -88,7 +88,7 @@ func TestMissingSegmentWithoutPar2ReportsFile(t *testing.T) {
 	errs := checker.CheckFiles(nzbWith(
 		fileWith("a.rar", "a1", "a2"),
 		fileWith("b.rar", "b1", "b2"),
-	))
+	), nil)
 	if len(errs) != 1 {
 		t.Fatalf("got %d errors, want 1: %v", len(errs), errs)
 	}
@@ -118,7 +118,7 @@ func TestDamageWithinPar2CapacityIsAccepted(t *testing.T) {
 	errs := checker.CheckFiles(nzbWith(
 		fileOf("a.rar", "a", 40),
 		fileOf("a.vol00+39.par2", "p", 40),
-	))
+	), nil)
 	if len(errs) != 0 {
 		t.Fatalf("got errors %v, want none", errs)
 	}
@@ -143,7 +143,7 @@ func TestUndecidedFileIsProbedAgain(t *testing.T) {
 	errs := checker.CheckFiles(nzbWith(
 		fileOf("a.rar", "a", 100),
 		fileOf("a.vol00+99.par2", "p", 100),
-	))
+	), nil)
 	if len(errs) != 0 {
 		t.Fatalf("got errors %v, want none", errs)
 	}
@@ -163,7 +163,7 @@ func TestUndecidedFileIsReportedWhenNotAccepted(t *testing.T) {
 	errs := checker.CheckFiles(nzbWith(
 		fileOf("a.rar", "a", 100),
 		fileOf("a.vol00+99.par2", "p", 100),
-	))
+	), nil)
 	if len(errs) != 1 {
 		t.Fatalf("got %d errors, want 1: %v", len(errs), errs)
 	}
@@ -173,10 +173,50 @@ func TestDisabledCheckDoesNothing(t *testing.T) {
 	exists, checked := recorder("s1")
 	checker := filehealth.NewDefaultChecker(config(0, 0), exists)
 
-	if errs := checker.CheckFiles(nzbWith(fileWith("a.rar", "s1"))); errs != nil {
+	if errs := checker.CheckFiles(nzbWith(fileWith("a.rar", "s1")), nil); errs != nil {
 		t.Fatalf("got errors %v, want none", errs)
 	}
 	if len(*checked) != 0 {
 		t.Errorf("checked %v, want nothing", *checked)
+	}
+}
+
+// The escalation of an undecided file is what makes this worth checking: it
+// widens the total after the reports have already started
+func TestProgressEndsAtEverythingItProbed(t *testing.T) {
+	exists, checked := recorder(halfGone()...)
+	checker := filehealth.NewDefaultChecker(config(0.5, 100), exists)
+
+	var (
+		mu           sync.Mutex
+		last         [2]int
+		reports      int
+		wentBackward bool
+	)
+	progress := func(done, total int) {
+		mu.Lock()
+		defer mu.Unlock()
+		if done < last[0] || total < last[1] {
+			wentBackward = true
+		}
+		last = [2]int{done, total}
+		reports++
+	}
+
+	if errs := checker.CheckFiles(nzbWith(
+		fileOf("a.rar", "a", 100),
+		fileOf("a.vol00+99.par2", "p", 100),
+	), progress); len(errs) != 0 {
+		t.Fatalf("got errors %v, want none", errs)
+	}
+
+	if wentBackward {
+		t.Error("progress went backward")
+	}
+	if last[0] != last[1] || last[0] != len(*checked) {
+		t.Errorf("ended at %d of %d, want %d of the same", last[0], last[1], len(*checked))
+	}
+	if reports <= 2 {
+		t.Errorf("got %d reports, want one per probe plus the planning of each pass", reports)
 	}
 }

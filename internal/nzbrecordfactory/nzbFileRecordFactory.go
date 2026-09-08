@@ -310,16 +310,41 @@ func (f *NzbFileFactory) unpack(groupFilename, archivePath string, volumes []res
 	return members, nil
 }
 
+// ArchiveGroups counts the archives these filenames hold, a set of volumes
+// being one of them. It is what a build costs before it has run: every archive
+// is a header walk over the news server, and everything else is presented as it
+// is. Archives nested in these are not in it, since nothing knows they are
+// there until their parent is open.
+func ArchiveGroups(filenames []string) int {
+	groups := 0
+	for groupFilename := range filenameops.GroupPartFilenames(filenames) {
+		if isArchive(path.Ext(groupFilename)) {
+			groups++
+		}
+	}
+	return groups
+}
+
 // archiveOpener is what unpacks a group of volumes, or nil where the group is
 // not an archive.
 func (f *NzbFileFactory) archiveOpener(extension string) func([]resource.ReadSeekCloseableResource, string) (map[string]resource.ReadSeekCloseableResource, error) {
-	switch extension {
-	case ".rar":
+	switch {
+	case extension == ".rar":
 		return f.BuildRarFileFromFileResource
-	case ".7z", ".z":
+	case isArchive(extension):
 		return f.Build7zFileFromFileResource
 	}
 	return nil
+}
+
+// isArchive says whether a group of files under this extension is unpacked
+// rather than presented as it is.
+func isArchive(extension string) bool {
+	switch extension {
+	case ".rar", ".7z", ".z":
+		return true
+	}
+	return false
 }
 
 func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, sizer nzbfileanalyzer.SegmentSizer, known map[string]int64, cachePrefix string) *adaptiveparallelmergerresource.AdaptiveParallelMergerResource {

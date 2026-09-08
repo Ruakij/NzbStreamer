@@ -208,6 +208,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	}
 	service.SetExactSizeClasses(exactSizeClasses)
 	service.SetConcurrency(c.NzbConfig.Concurrency)
+	service.SetRate(nntpPool.Rate)
 	service.SetTreeKey(treeKey(c))
 
 	// Mount before the service restores its tree: an inode only takes children

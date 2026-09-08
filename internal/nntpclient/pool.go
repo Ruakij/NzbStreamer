@@ -84,6 +84,46 @@ type Pool struct {
 	// ponytail: one lock for every servers quota counter and breaker state;
 	// per-server locks if a pool ever grows past a handful
 	quotaMutex sync.Mutex
+
+	// Segment operations served, and what they were being served at when the
+	// rate was last worked out
+	ops      atomic.Int64
+	rateData rate
+}
+
+// rate is how fast the pool serves segment operations, measured over the
+// operations themselves rather than over the clock: a pool nothing is asking
+// anything of keeps the last rate it managed, because a rate of zero is not
+// what an idle pool would serve at.
+type rate struct {
+	mu      sync.Mutex
+	perSec  float64
+	started time.Time
+	at      int64
+}
+
+// rateWindow is how long a measurement covers. Long enough that a handful of
+// slow articles do not decide it, short enough to follow a server going bad.
+const rateWindow = 15 * time.Second
+
+// Rate reports segment operations per second, and 0 until the pool has served
+// enough of them for long enough to say. Reading it is what rolls the window,
+// so a caller polling it every few seconds keeps it current and one that never
+// asks costs nothing.
+func (p *Pool) Rate() float64 {
+	p.rateData.mu.Lock()
+	defer p.rateData.mu.Unlock()
+
+	ops := p.ops.Load()
+	elapsed := time.Since(p.rateData.started)
+	switch {
+	case p.rateData.started.IsZero():
+		p.rateData.started, p.rateData.at = time.Now(), ops
+	case elapsed >= rateWindow && ops > p.rateData.at:
+		p.rateData.perSec = float64(ops-p.rateData.at) / elapsed.Seconds()
+		p.rateData.started, p.rateData.at = time.Now(), ops
+	}
+	return p.rateData.perSec
 }
 
 // NewPool groups servers by priority and restores their quota counters.
@@ -166,6 +206,10 @@ func (p *Pool) Probe() {
 // articles fault and stop the descent, since the alternative is quietly spending
 // a metered account on a typo.
 func (p *Pool) GetSegment(group, id string) ([]byte, error) {
+	// One operation whatever the descent costs, since it is one segment asked
+	// for and one answer given back
+	defer p.ops.Add(1)
+
 	var lastErr error
 	missed := false
 
@@ -217,6 +261,8 @@ func (p *Pool) GetSegment(group, id string) ([]byte, error) {
 // keeps a release that is gone from the primary but whole on a secondary from
 // failing its health check.
 func (p *Pool) SegmentExists(id string) (bool, error) {
+	defer p.ops.Add(1)
+
 	var lastErr error
 	answered := false
 

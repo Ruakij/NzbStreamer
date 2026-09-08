@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/filehealth"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
@@ -62,7 +63,9 @@ func (fakeFile) Open() (io.ReadSeekCloser, error) { return nil, errNoBytes }
 
 type healthyChecker struct{}
 
-func (healthyChecker) CheckFiles(_ *nzbparser.NzbData) []error { return nil }
+func (healthyChecker) CheckFiles(_ *nzbparser.NzbData, _ filehealth.ProgressFunc) []error { return nil }
+
+func (healthyChecker) PlannedProbes(_ *nzbparser.NzbData) int { return 0 }
 
 // fakeStore keeps what the real one keeps, in a map. Locked because an add runs
 // in the background and the test reads the store while it does.
@@ -174,16 +177,20 @@ type blockingChecker struct {
 	release chan struct{}
 }
 
-func (c blockingChecker) CheckFiles(_ *nzbparser.NzbData) []error {
+func (c blockingChecker) CheckFiles(_ *nzbparser.NzbData, progress filehealth.ProgressFunc) []error {
+	progress(1, 2)
 	close(c.entered)
 	<-c.release
 	return nil
 }
 
+func (blockingChecker) PlannedProbes(_ *nzbparser.NzbData) int { return 2 }
+
 func TestAnAddIsVisibleWhileItRunsAndAfterItFinishes(t *testing.T) {
 	checker := blockingChecker{entered: make(chan struct{}), release: make(chan struct{})}
 	store := newFakeStore()
 	service := nzbservice.NewService(store, &fakeFactory{}, nil, nil, checker)
+	service.SetRate(func() float64 { return 10 })
 
 	nzbData := &nzbparser.NzbData{
 		MetaName: "Some.Release",
@@ -204,6 +211,11 @@ func TestAnAddIsVisibleWhileItRunsAndAfterItFinishes(t *testing.T) {
 	// owes nothing to an estimate
 	if queue[0].Bytes != 716800 || !queue[0].BytesExact {
 		t.Errorf("queued item reported %d bytes, exact %v", queue[0].Bytes, queue[0].BytesExact)
+	}
+	// The check has reported one of its probes, and the build it has not reached
+	// is still ahead of it, so the add is started but nowhere near done
+	if queue[0].Progress <= 0 || queue[0].Progress >= 1 || queue[0].Eta <= 0 {
+		t.Errorf("queued item reported progress %v, eta %v", queue[0].Progress, queue[0].Eta)
 	}
 	if len(service.History()) != 0 {
 		t.Errorf("an unfinished add is already in the history")

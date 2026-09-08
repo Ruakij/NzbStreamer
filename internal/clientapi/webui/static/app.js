@@ -7,13 +7,16 @@ function size(bytes) {
   return bytes.toFixed(i ? 1 : 0) + " " + units[i];
 }
 
-function age(iso) {
-  // A clock a second ahead of ours would otherwise read as a negative age
-  let s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+function duration(s) {
   if (s < 60) return Math.floor(s) + "s";
   if (s < 3600) return Math.floor(s / 60) + "m";
   if (s < 86400) return Math.floor(s / 3600) + "h";
   return Math.floor(s / 86400) + "d";
+}
+
+function age(iso) {
+  // A clock a second ahead of ours would otherwise read as a negative age
+  return duration(Math.max(0, (Date.now() - new Date(iso)) / 1000));
 }
 
 function setText(node, value) {
@@ -174,6 +177,20 @@ function strip(stats) {
 // of the long ones.
 const stageLabels = { completed: "done", cancelled: "stop", rebuilding: "rebuild" };
 
+// An add still running carries how far it has got and what the api estimates is
+// left of it, the wait for a slot included, so a queued one reads as a wait
+// rather than as a stall. An eta of 0 is one nothing can estimate yet, which is
+// what an add says while the servers have answered nothing to measure them by.
+function renderProgress(cell, item) {
+  const done = item.progress || 0;
+  const running = !["completed", "failed", "cancelled"].includes(item.stage);
+  const bar = cell.querySelector(".bar");
+  bar.firstElementChild.style.width = `${Math.round(done * 100)}%`;
+  bar.hidden = !running;
+  const left = item.eta ? ` - ${duration(item.eta)}` : "";
+  setText(cell.lastElementChild, running ? `${Math.round(done * 100)}%${left}` : "");
+}
+
 // A size covering a segment nothing has decoded yet is a lower bound on it
 function estimated(bytes, exact) {
   return (exact ? "" : "~") + size(bytes);
@@ -280,8 +297,13 @@ function createRow(id, action) {
   inner.className = "name-cell";
   inner.append(title, toggles);
   row.cells[0].append(inner);
-  const stage = document.createElement("span");
-  row.cells[2].append(stage);
+  // What an add is doing and how far it has got read as one thing, so they
+  // share a column: the stage, and under it what is left of it while it runs.
+  row.cells[2].className = "stage-cell";
+  const bar = document.createElement("div");
+  bar.className = "bar";
+  bar.append(document.createElement("div"));
+  row.cells[2].append(document.createElement("span"), bar, document.createElement("small"));
   const cachedShare = document.createElement("div");
   cachedShare.className = "share";
   row.cells[4].append(document.createElement("div"), cachedShare);
@@ -342,10 +364,11 @@ function render(tbody, items, action, files = {}) {
     const stage = tr.cells[2].firstElementChild;
     stage.className = "stage " + item.stage;
     setText(stage, stageLabels[item.stage] || item.stage);
+    renderProgress(tr.cells[2], item);
     setText(tr.cells[3], estimated(item.bytes, item.bytes_exact));
     setText(tr.cells[4].firstElementChild, item.cached ? size(item.cached) : "-");
     setText(tr.cells[4].lastElementChild,
-      item.cached && item.bytes ? percent(item.cached, item.bytes) : "");
+      item.cached && item.bytes ? `(${percent(item.cached, item.bytes)})` : "");
     setText(tr.cells[5], age(item.added));
     setText(tr.cells[6], item.read ? age(item.read) : "-");
     if (tr !== position) tbody.insertBefore(tr, position);
