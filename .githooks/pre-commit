@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+unformatted=$(gofmt -l cmd internal pkg test)
+if [ -n "$unformatted" ]; then
+	echo "gofmt: $unformatted" >&2
+	exit 1
+fi
+
+go vet ./...
+go test -race ./...
+
+if command -v golangci-lint >/dev/null; then
+	golangci-lint run
+fi
