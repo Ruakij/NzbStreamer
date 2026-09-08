@@ -18,25 +18,29 @@
   </label>
 </header>
 
+<div id="stats" hidden></div>
+
 <form id="add">
   <input type="file" name="file" accept=".nzb" aria-label="nzb files" multiple required>
   <input type="text" name="category" placeholder="category" aria-label="category" size="10">
   <button type="submit">Add</button>
 </form>
 
-<h2>Queue</h2>
+<h2>Queue <span class="count" data-for="queue"></span></h2>
 <table><thead><tr>
   <th data-key="name">Name<th data-key="category">Category<th data-key="stage">Stage
-  <th data-key="bytes">Size<th data-key="age">Age<th>
+  <th data-key="bytes">Size<th data-key="cached">Cached
+  <th data-key="age">Age<th data-key="read">Read<th>
 </tr></thead><tbody id="queue"></tbody></table>
 <div class="pager" data-for="queue" hidden>
   <span></span><button data-step="-1">Prev</button><button data-step="1">Next</button>
 </div>
 
-<h2>History <label id="show-archived"><input type="checkbox"> archived</label></h2>
+<h2>History <span class="count" data-for="history"></span> <label id="show-archived"><input type="checkbox"> archived</label></h2>
 <table><thead><tr>
   <th data-key="name">Name<th data-key="category">Category<th data-key="stage">Stage
-  <th data-key="bytes">Size<th data-key="age">Age<th>
+  <th data-key="bytes">Size<th data-key="cached">Cached
+  <th data-key="age">Age<th data-key="read">Read<th>
 </tr></thead><tbody id="history"></tbody></table>
 <div class="pager" data-for="history" hidden>
   <span></span><button data-step="-1">Prev</button><button data-step="1">Next</button>

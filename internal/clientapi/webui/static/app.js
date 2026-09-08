@@ -1,4 +1,4 @@
-const cols = 6;
+const cols = 8;
 
 function size(bytes) {
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -8,7 +8,8 @@ function size(bytes) {
 }
 
 function age(iso) {
-  let s = (Date.now() - new Date(iso)) / 1000;
+  // A clock a second ahead of ours would otherwise read as a negative age
+  let s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
   if (s < 60) return Math.floor(s) + "s";
   if (s < 3600) return Math.floor(s / 60) + "m";
   if (s < 86400) return Math.floor(s / 3600) + "h";
@@ -17,6 +18,16 @@ function age(iso) {
 
 function setText(node, value) {
   if (node.textContent !== String(value)) node.textContent = value;
+}
+
+// A release name is separator soup, so a line may break after any run of them
+// rather than only at a space or a dash. A token still too long for the column
+// falls back to the css, which breaks it anywhere.
+function setBreakable(node, value) {
+  const text = String(value);
+  if (node.textContent === text) return;
+  const parts = text.split(/(?<=[^\p{L}\p{N}])(?=[\p{L}\p{N}])/u);
+  node.replaceChildren(...parts.flatMap((part) => [part, document.createElement("wbr")]).slice(0, -1));
 }
 
 function fileTree(paths, id) {
@@ -68,10 +79,10 @@ function reconcileTree(list, tree, prefix = "") {
     }
     existing.delete(key);
     if (branch) {
-      setText(item.querySelector("summary"), name);
+      setBreakable(item.querySelector("summary"), name);
       reconcileTree(item.querySelector("ul"), child, key);
     } else {
-      setText(item.firstElementChild, name);
+      setBreakable(item.firstElementChild, name);
     }
     if (item !== position) list.insertBefore(item, position);
     position = item.nextElementSibling;
@@ -83,7 +94,7 @@ function reconcileTree(list, tree, prefix = "") {
 // under the name where it belongs - which a <details> spanning both cannot do.
 function updateFiles(row, paths, id) {
   const name = row.cells[0];
-  let toggle = name.querySelector(".files-toggle");
+  let toggle = name.querySelector(".tree-toggle");
   if (!paths.length) {
     toggle?.remove();
     row.filesRow?.remove();
@@ -104,13 +115,13 @@ function updateFiles(row, paths, id) {
   }
   if (!toggle) {
     toggle = document.createElement("button");
-    toggle.className = "files-toggle";
+    toggle.className = "files-toggle tree-toggle";
     toggle.onclick = () => {
       filesRow.hidden = !filesRow.hidden;
       toggle.dataset.open = !filesRow.hidden;
     };
     toggle.dataset.open = !filesRow.hidden;
-    name.append(toggle);
+    name.querySelector(".toggles").append(toggle);
   }
   row.after(filesRow);
   setText(toggle, paths.length + (paths.length === 1 ? " file" : " files"));
@@ -118,7 +129,140 @@ function updateFiles(row, paths, id) {
   return filesRow;
 }
 
+// The strip is what the whole process is doing; a row says what one nzb of it
+// holds. One bubble per thing being reported, since the numbers inside it only
+// mean something together.
+function strip(stats) {
+  const target = document.getElementById("stats");
+  if (!stats.cache) {
+    target.hidden = true;
+    return;
+  }
+  target.hidden = false;
+
+  const cache = stats.cache;
+  const reads = cache.hits + cache.misses;
+  const groups = [
+    ["cache", [
+      ["used", cache.max_bytes ? `${size(cache.bytes)} / ${size(cache.max_bytes)}` : size(cache.bytes)],
+      ["segments", cache.items],
+      ["hit rate", reads ? percent(cache.hits, reads) : "-"],
+      ["evictions", cache.evictions],
+    ]],
+    ["usenet", [["servers up", `${stats.servers.up} / ${stats.servers.total}`]]],
+  ];
+
+  target.replaceChildren(...groups.map(([title, values]) => {
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    const name = document.createElement("b");
+    name.textContent = title;
+    bubble.append(name);
+    for (const [label, value] of values) {
+      const entry = document.createElement("span");
+      entry.append(label);
+      const number = document.createElement("strong");
+      number.textContent = value;
+      entry.append(number);
+      bubble.append(entry);
+    }
+    return bubble;
+  }));
+}
+
+// The stage values are the api's; the column only has room for the short form
+// of the long ones.
+const stageLabels = { completed: "done", cancelled: "stop", rebuilding: "rebuild" };
+
+// A size covering a segment nothing has decoded yet is a lower bound on it
+function estimated(bytes, exact) {
+  return (exact ? "" : "~") + size(bytes);
+}
+
+function percent(part, whole) {
+  return whole ? Math.round(100 * part / whole) + "%" : "0%";
+}
+
+function cell(row, text, tag = "td") {
+  const cell = document.createElement(tag);
+  cell.textContent = text;
+  row.append(cell);
+}
+
+function renderInfo(target, data) {
+  const total = document.createElement("div");
+  total.className = "info-total";
+  total.textContent = `${size(data.cached_bytes)} of ${estimated(data.bytes, data.exact)} cached`
+    + ` (${percent(data.cached_bytes, data.bytes)}),`
+    + ` ${data.cached_segments} of ${data.segments} segments`;
+
+  // A value and what it is out of are a column each, so they line up down the
+  // table rather than each row setting its own width.
+  const table = document.createElement("table");
+  table.className = "info-files";
+  const head = table.createTHead().insertRow();
+  for (const [label, span] of [["Posted file", 1], ["Size", 1], ["Cached", 2], ["Segments", 2], ["Read", 1]]) {
+    cell(head, label, "th");
+    head.lastElementChild.colSpan = span;
+  }
+  // The order an nzb lists its files in is the posters, so vol03 lands before
+  // vol01. The tree reads in name order and so does this.
+  const body = table.createTBody();
+  for (const file of data.files.slice().sort((a, b) => collator.compare(a.name, b.name))) {
+    const row = body.insertRow();
+    setBreakable(row.insertCell(), file.name);
+    cell(row, estimated(file.bytes, file.exact));
+    cell(row, size(file.cached_bytes));
+    cell(row, `(${percent(file.cached_bytes, file.bytes)})`);
+    cell(row, file.cached_segments + " /");
+    cell(row, file.segments);
+    cell(row, file.cached_segments ? age(file.last_read) : "-");
+  }
+
+  target.replaceChildren(total, table);
+}
+
+// The detail is per segment of every posted file, which is why it is fetched
+// for an open panel only rather than carried by the poll.
+async function loadInfo(id, infoRow) {
+  try {
+    const response = await fetch("/api/nzb?id=" + encodeURIComponent(id));
+    if (!response.ok) throw new Error(response.status);
+    renderInfo(infoRow.cells[0], await response.json());
+  } catch {
+    setText(infoRow.cells[0], "no detail for this one yet");
+  }
+}
+
+// The panel costs a lookup per segment of one nzb, so it follows the poll while
+// it is open and nothing at all while it is not.
+function updateInfo(row, item) {
+  let infoRow = row.infoRow;
+  if (!infoRow) {
+    infoRow = document.createElement("tr");
+    infoRow.className = "info";
+    infoRow.hidden = true;
+    infoRow.insertCell().colSpan = cols;
+    row.infoRow = infoRow;
+
+    const toggle = document.createElement("button");
+    toggle.className = "files-toggle stats-toggle";
+    toggle.textContent = "stats";
+    toggle.dataset.open = "false";
+    toggle.onclick = () => {
+      infoRow.hidden = !infoRow.hidden;
+      toggle.dataset.open = !infoRow.hidden;
+      if (!infoRow.hidden) loadInfo(row.dataset.id, infoRow);
+    };
+    row.cells[0].querySelector(".toggles").append(toggle);
+  }
+  (row.filesRow || row).after(infoRow);
+  if (!infoRow.hidden) loadInfo(item.id, infoRow);
+  return infoRow;
+}
+
 function removeRow(row) {
+  row.infoRow?.remove();
   row.filesRow?.remove();
   row.remove();
 }
@@ -130,18 +274,24 @@ function createRow(id, action) {
   row.cells[0].className = "name";
   const title = document.createElement("div");
   title.className = "title";
-  row.cells[0].append(title);
+  const toggles = document.createElement("div");
+  toggles.className = "toggles";
+  const inner = document.createElement("div");
+  inner.className = "name-cell";
+  inner.append(title, toggles);
+  row.cells[0].append(inner);
   const stage = document.createElement("span");
   row.cells[2].append(stage);
   if (action === "delete") {
     const archive = document.createElement("button");
     archive.className = "archive";
-    row.cells[5].append(archive);
+    row.cells[7].append(archive);
   }
   const button = document.createElement("button");
+  button.className = action === "cancel" ? "" : "danger";
   button.textContent = action === "cancel" ? "Cancel" : "Delete";
   button.onclick = () => remove(id, action, button);
-  row.cells[5].append(button);
+  row.cells[7].append(button);
   return row;
 }
 
@@ -150,6 +300,8 @@ function render(tbody, items, action, files = {}) {
   const sort = sorts[tbody.id];
   markSorted(tbody, sort);
   const page = paginate(tbody.id, sortItems(items, sort));
+  setText(document.querySelector(`.count[data-for="${tbody.id}"]`),
+    items.length ? `(${items.length} ${items.length === 1 ? "item" : "items"})` : "");
   tbody.querySelector(":scope > tr.empty")?.remove();
   if (!page.length) {
     const tr = tbody.insertRow();
@@ -165,7 +317,7 @@ function render(tbody, items, action, files = {}) {
     const tr = existing.get(item.id) || createRow(item.id, action);
     existing.delete(item.id);
     const name = tr.cells[0];
-    setText(name.querySelector(".title"), item.id);
+    setBreakable(name.querySelector(".title"), item.id);
     let err = name.querySelector(".err");
     if (item.error) {
       if (!err) {
@@ -177,7 +329,7 @@ function render(tbody, items, action, files = {}) {
     } else {
       err?.remove();
     }
-    const archive = tr.cells[5].querySelector(".archive");
+    const archive = tr.cells[7].querySelector(".archive");
     if (archive) {
       const next = item.archived ? "restore" : "archive";
       setText(archive, item.archived ? "Restore" : "Archive");
@@ -186,12 +338,14 @@ function render(tbody, items, action, files = {}) {
     setText(tr.cells[1], item.category || "");
     const stage = tr.cells[2].firstElementChild;
     stage.className = "stage " + item.stage;
-    setText(stage, item.stage);
-    setText(tr.cells[3], size(item.bytes));
-    setText(tr.cells[4], age(item.added));
+    setText(stage, stageLabels[item.stage] || item.stage);
+    setText(tr.cells[3], estimated(item.bytes, item.bytes_exact));
+    setText(tr.cells[4], item.cached ? size(item.cached) : "-");
+    setText(tr.cells[5], age(item.added));
+    setText(tr.cells[6], item.read ? age(item.read) : "-");
     if (tr !== position) tbody.insertBefore(tr, position);
-    const filesRow = action === "delete" ? updateFiles(tr, files[item.id] || [], item.id) : null;
-    position = (filesRow || tr).nextElementSibling;
+    if (action === "delete") updateFiles(tr, files[item.id] || [], item.id);
+    position = updateInfo(tr, item).nextElementSibling;
   }
   for (const row of existing.values()) removeRow(row);
 }
@@ -242,6 +396,8 @@ function sortValue(item, key) {
     case "category": return item.category || "";
     case "stage": return item.stage;
     case "bytes": return item.bytes;
+    case "cached": return item.cached;
+    case "read": return item.read ? -Date.parse(item.read) : Infinity;
     default: return -Date.parse(item.added);
   }
 }
@@ -309,6 +465,13 @@ async function poll() {
     const response = await fetch("/api/items");
     if (!response.ok) throw new Error(response.status);
     const data = await response.json();
+    const cached = (data.stats || {}).cached || {};
+    // Sorting on the column reads it off the item, like every other column
+    for (const item of [...(data.queue || []), ...(data.history || [])]) {
+      item.cached = (cached[item.id] || {}).bytes || 0;
+      item.read = item.cached ? cached[item.id].last_read : "";
+    }
+    strip(data.stats || {});
     render(document.getElementById("queue"), data.queue, "cancel");
     const history = (data.history || []).filter((item) => !!item.archived === showArchived.checked);
     render(document.getElementById("history"), history, "delete", data.files || {});

@@ -1,3 +1,10 @@
+html {
+  /* The gutter is always there, so a page that grows past the fold does not
+     shift sideways under the pointer */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
 :root {
   color-scheme: light dark;
   --fg: light-dark(#1b1d20, #e6e8ea);
@@ -43,7 +50,9 @@ button {
 }
 button:hover:not(:disabled) { background: var(--hover); }
 button:disabled { opacity: .5; cursor: default; }
-td button + button { margin-left: .35rem; }
+.danger:hover:not(:disabled) { color: var(--bad); border-color: currentColor; }
+
+.count { font-weight: 400; text-transform: none; letter-spacing: 0; }
 
 #per-page-label { margin-left: auto; font-size: .8rem; color: var(--muted); }
 
@@ -55,11 +64,11 @@ td button + button { margin-left: .35rem; }
 #show-archived input { vertical-align: middle; margin-right: .2rem; }
 
 table {
-  border-collapse: collapse; width: 100%;
+  border-collapse: collapse; width: 100%; table-layout: auto;
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   overflow: hidden;
 }
-th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th, td { text-align: left; padding: .4rem .55rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: var(--hover); }
 th { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
@@ -73,10 +82,28 @@ th[data-sorted]:not([data-sorted=""])::after {
 th[data-sorted="asc"]::after { border-bottom-color: currentColor; transform: translateY(-.15rem); }
 th[data-sorted="desc"]::after { border-top-color: currentColor; transform: translateY(.15rem); }
 
-td.name { overflow-wrap: anywhere; }
+/* The name takes whatever the fixed columns leave, rather than every column
+   growing with the window. */
+th:first-child, td.name { width: 100%; }
+tr[data-id] td:not(.name) { white-space: nowrap; }
+/* The toggles sit at the bottom of the cell, so a row with them is balanced
+   rather than top-heavy. The cell keeps its table-cell box - a flex one draws
+   its border at the content, not at the row - and an inner box does the layout,
+   which the 1px height lets fill the row. */
+td.name { overflow-wrap: anywhere; height: 1px; }
+.name-cell { display: flex; flex-direction: column; height: 100%; }
+.toggles { display: flex; gap: .5rem; margin-top: auto; padding-top: .3rem; }
 td.name .title { font-weight: 500; }
-td:nth-child(4), td:nth-child(5) { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
+tr[data-id] td:nth-child(n+4):not(:last-child) {
+  font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted);
+}
+/* The pair stacks, so it is aligned and kept slim rather than made to fit
+   side by side in a cell the name column has already taken the width from. */
 tr[data-id] td:last-child { text-align: right; }
+tr[data-id] td:last-child button {
+  display: block; margin-left: auto; min-width: 5rem; padding: .15rem .05rem;
+}
+tr[data-id] td:last-child button + button { margin-top: .1rem; }
 
 .err { color: var(--bad); font-size: .85rem; margin-top: .2rem; }
 .empty { color: var(--muted); }
@@ -96,16 +123,40 @@ tr:has(+ tr.file-list:not([hidden])):hover + tr.file-list, tr:has(+ tr.file-list
 tr.file-list td { padding-top: 0; font-size: .85rem; }
 
 .files-toggle {
-  display: block; margin-top: .2rem; padding: 0; border: 0;
+  display: inline-block; margin: 0; padding: .05rem .45rem;
   font-size: .85rem; color: var(--muted);
 }
-.files-toggle:hover:not(:disabled) { background: none; color: var(--fg); }
-.files-toggle::before {
-  content: ""; display: inline-block; width: 0; height: 0; margin-right: .4rem;
-  border: .3rem solid transparent; border-left-color: currentColor;
-  transform: translateY(-1px); transition: transform .1s;
+.files-toggle:hover:not(:disabled) { color: var(--fg); }
+.files-toggle::before { content: "+"; margin-right: .35rem; }
+.files-toggle[data-open="true"]::before { content: "-"; }
+
+#stats { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
+#stats[hidden] { display: none; }
+.bubble {
+  display: flex; gap: .9rem; align-items: baseline; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: .4rem .8rem; font-size: .85rem; color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
-.files-toggle[data-open="true"]::before { transform: rotate(90deg) translateX(-1px); }
+.bubble > b {
+  font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+}
+.bubble strong { font-weight: 500; color: var(--fg); margin-left: .25rem; }
+
+tr:has(+ tr.info:not([hidden])) td { border-bottom: 0; }
+tr:has(+ tr.info:not([hidden])):hover + tr.info, tr:has(+ tr.info:hover) { background: var(--hover); }
+tr.info td { padding-top: 0; font-size: .85rem; }
+.info-total { color: var(--muted); margin: .3rem 0 .5rem; }
+.info-files { font-size: .85rem; }
+.info-files td, .info-files th { padding: .25rem .5rem; }
+.info-files td:first-child { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+.info-files td:not(:first-child) { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+.info-files th:not(:first-child), .info-files td:not(:first-child) { text-align: right; }
+/* Both halves of a pair are right aligned, so each column lines up down the
+   table, and the header of the pair sits over where they meet */
+.info-files th[colspan="2"] { text-align: center; }
+.info-files td:nth-child(3), .info-files td:nth-child(5) { padding-right: .15rem; }
+.info-files td:nth-child(4), .info-files td:nth-child(6) { padding-left: .15rem; opacity: .8; }
 
 .file-tree, .file-tree ul { list-style: none; margin: 0; padding: 0; }
 .file-tree { margin-top: .3rem; }
