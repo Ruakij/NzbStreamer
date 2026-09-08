@@ -199,12 +199,18 @@ tr.info td { padding-top: 0; font-size: .85rem; }
 .file-tree details[open] > summary::before { transform: rotate(90deg) translateX(-1px); }
 .file-tree .dir { font-weight: 500; }
 .file-tree .file { display: inline-block; margin-left: 1rem; color: var(--muted); font-family: ui-monospace, monospace; }
-.file-tree .download {
+.download {
+  display: inline-flex; align-items: center; gap: .25rem;
   margin-left: .5rem; color: var(--muted); font-size: .75rem; text-decoration: none;
   background: transparent; border: 1px solid var(--line); border-radius: 6px;
   padding: 0 .4rem;
 }
-.file-tree .download:hover { color: var(--fg); background: var(--hover); }
+.download:hover { color: var(--fg); background: var(--hover); }
+/* The toggles are built as the row learns what it has; the nzb is the one thing
+   every row carries, so it is placed rather than ordered by that. */
+.toggles .download { margin-left: 0; order: 1; }
+
+.icon { width: 1em; height: 1em; flex: none; }
 
 /* The close sits in a row of its own, so the body below it scrolls across the
    whole width rather than around the button. */

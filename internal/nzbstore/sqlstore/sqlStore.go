@@ -149,6 +149,22 @@ func (s *Store) List() ([]nzbstore.Record, error) {
 	return list, rows.Err()
 }
 
+// Raw answers the nzb of one record as it was submitted. It is the document
+// itself rather than a re-encoding of it, which is what a caller downloading it
+// is asking for: the file that was added, not what the parser makes of it today.
+func (s *Store) Raw(name string) ([]byte, error) {
+	var raw []byte
+	err := s.db.QueryRow("SELECT raw FROM nzb WHERE name = ?", name).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", nzbstore.ErrNotFound, name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed reading nzb %s: %w", name, err)
+	}
+
+	return raw, nil
+}
+
 // ErrNoRaw reports an nzb that was not parsed from bytes, which is the only thing
 // worth storing - a re-encoding would preserve what the parser understood today
 // rather than the nzb itself.

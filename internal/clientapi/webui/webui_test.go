@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +23,7 @@ type fakeService struct {
 	history []nzbservice.QueueItem
 	files   map[string][]string
 	addErr  error
+	raw     map[string][]byte
 
 	cancelErr  error
 	deleteErr  error
@@ -37,6 +40,14 @@ func (s *fakeService) Add(nzbData *nzbparser.NzbData, _ string) (string, error) 
 	}
 	s.added = append(s.added, nzbData.MetaName)
 	return nzbData.MetaName, nil
+}
+
+func (s *fakeService) NzbRaw(id string) ([]byte, error) {
+	raw, ok := s.raw[id]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", nzbservice.ErrNzbNotFound, id)
+	}
+	return raw, nil
 }
 
 func (s *fakeService) Queue() []nzbservice.QueueItem   { return s.queue }
@@ -98,6 +109,40 @@ func TestAddAlreadyExistsIsBadRequest(t *testing.T) {
 func TestAddLibraryFullIsInsufficientStorage(t *testing.T) {
 	if recorder := postAdd(t, &fakeService{addErr: fmt.Errorf("%w: Some.Release", nzbservice.ErrLibraryFull)}); recorder.Code != http.StatusInsufficientStorage {
 		t.Fatalf("full library answered %d, want 507", recorder.Code)
+	}
+}
+
+// The download is the submitted document, offered under a name a browser saves
+// it as, and an unknown id is a 404 rather than an empty file.
+func TestTheNzbOfARecordIsDownloadable(t *testing.T) {
+	service := &fakeService{raw: map[string][]byte{`Some "Release"`: []byte(nzbXML)}}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/nzb/file?id="+url.QueryEscape(`Some "Release"`), nil)
+	recorder := httptest.NewRecorder()
+	webui.NewHandler(service).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("download answered %d, want 200", recorder.Code)
+	}
+	if recorder.Body.String() != nzbXML {
+		t.Errorf("body: got %q, want %q", recorder.Body.String(), nzbXML)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/x-nzb" {
+		t.Errorf("content-type: got %q", got)
+	}
+
+	disposition, params, err := mime.ParseMediaType(recorder.Header().Get("Content-Disposition"))
+	if err != nil {
+		t.Fatalf("Content-Disposition %q: %v", recorder.Header().Get("Content-Disposition"), err)
+	}
+	if disposition != "attachment" || params["filename"] != `Some "Release".nzb` {
+		t.Errorf("disposition: got %q %v", disposition, params)
+	}
+
+	recorder = httptest.NewRecorder()
+	webui.NewHandler(service).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/nzb/file?id=nothing", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Errorf("unknown id answered %d, want 404", recorder.Code)
 	}
 }
 

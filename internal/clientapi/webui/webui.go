@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbfileanalyzer"
@@ -21,6 +22,7 @@ const maxUploadBytes = 32 << 20
 // Service is the part of nzbservice this api projects.
 type Service interface {
 	Add(nzbData *nzbparser.NzbData, category string) (string, error)
+	NzbRaw(id string) ([]byte, error)
 	Queue() []nzbservice.QueueItem
 	History() []nzbservice.QueueItem
 	Files() map[string][]string
@@ -51,6 +53,7 @@ func NewHandler(service Service, components ...Component) *Handler {
 	h.mux.Handle("GET /static/", staticFiles())
 	h.mux.HandleFunc("GET /api/items", h.items)
 	h.mux.HandleFunc("GET /api/nzb", h.nzb)
+	h.mux.HandleFunc("GET /api/nzb/file", h.nzbFile)
 	h.mux.HandleFunc("POST /api/add", h.add)
 	h.mux.HandleFunc("POST /api/inspect", h.inspect)
 	h.mux.HandleFunc("POST /api/remove", h.remove)
@@ -97,6 +100,40 @@ func (h *Handler) nzb(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, detail)
+}
+
+// nzbFile hands back the nzb an add was made from, as it was submitted. The
+// bytes are what the store kept, so a record whose add failed and one a client
+// archived answer as well as a completed one.
+func (h *Handler) nzbFile(w http.ResponseWriter, r *http.Request) {
+	id := r.FormValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "no id")
+		return
+	}
+
+	raw, err := h.service.NzbRaw(id)
+	if errors.Is(err, nzbservice.ErrNzbNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// The name comes from the nzb, so it is quoted and escaped rather than pasted
+	// into the header
+	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": id + ".nzb"})
+	if disposition == "" {
+		disposition = "attachment"
+	}
+
+	w.Header().Set("Content-Type", "application/x-nzb")
+	w.Header().Set("Content-Disposition", disposition)
+	if _, err := w.Write(raw); err != nil {
+		slog.Error("Failed writing nzb", "id", id, "error", err)
+	}
 }
 
 // uploaded parses the nzb of a multipart request, answering the caller itself on

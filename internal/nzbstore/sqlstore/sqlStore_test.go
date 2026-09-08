@@ -1,10 +1,12 @@
 package sqlstore
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
 
@@ -76,6 +78,36 @@ func TestAnAddAndHowItEndedSurviveReopening(t *testing.T) {
 	}
 	if got.Data.Meta[nzbparser.MetaKeyPassword] != "secret" {
 		t.Errorf("meta: got %v", got.Data.Meta)
+	}
+}
+
+// The nzb of an add that failed is the one worth looking at, and it is offered
+// for download byte for byte rather than re-encoded from what the parser made
+// of it.
+func TestTheStoredNzbIsHandedBackUnchangedAfterAFailedAdd(t *testing.T) {
+	data, err := nzbparser.ParseNzb(strings.NewReader(nzbXML), "Some.Release.nzb")
+	if err != nil {
+		t.Fatalf("ParseNzb: %v", err)
+	}
+
+	store := storeAt(t, t.TempDir())
+	if err := store.Add(data, "queued", ""); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := store.SetStage(data.MetaName, "failed", "posts are gone"); err != nil {
+		t.Fatalf("SetStage: %v", err)
+	}
+
+	raw, err := store.Raw(data.MetaName)
+	if err != nil {
+		t.Fatalf("Raw: %v", err)
+	}
+	if string(raw) != nzbXML {
+		t.Errorf("raw: got %q, want %q", raw, nzbXML)
+	}
+
+	if _, err := store.Raw("nothing"); !errors.Is(err, nzbstore.ErrNotFound) {
+		t.Errorf("Raw of an unknown name: got %v, want %v", err, nzbstore.ErrNotFound)
 	}
 }
 

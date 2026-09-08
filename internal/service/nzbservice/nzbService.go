@@ -632,6 +632,22 @@ func (s *Service) RemoveNzb(nzbData *nzbparser.NzbData) error {
 	return s.Delete(nzbData.MetaName)
 }
 
+// NzbRaw answers the nzb an add was made from. It comes from the store rather
+// than from what is presented, so it answers for an nzb whose add failed and one
+// a client archived as well: the record is what holds the nzb, and it outlives
+// both.
+func (s *Service) NzbRaw(id string) ([]byte, error) {
+	raw, err := s.store.Raw(id)
+	if errors.Is(err, nzbstore.ErrNotFound) {
+		return nil, fmt.Errorf("%w: %s", ErrNzbNotFound, id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed reading nzb %s: %w", id, err)
+	}
+
+	return raw, nil
+}
+
 // Delete removes an nzb and everything recorded about it: the files it
 // presents, the segment data it accumulated, and the record of the add. The two
 // go together - files nothing can report on, and a report on files that are

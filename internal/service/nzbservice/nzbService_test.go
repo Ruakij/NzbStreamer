@@ -99,6 +99,17 @@ func (s *fakeStore) List() ([]nzbstore.Record, error) {
 	return list, nil
 }
 
+func (s *fakeStore) Raw(name string) ([]byte, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	record, ok := s.records[name]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", nzbstore.ErrNotFound, name)
+	}
+	return record.Data.Raw, nil
+}
+
 func (s *fakeStore) Add(data *nzbparser.NzbData, stage, category string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()

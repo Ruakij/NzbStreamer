@@ -37,6 +37,28 @@ function setBreakable(node, value) {
   node.replaceChildren(...parts.flatMap((part) => [part, document.createElement("wbr")]).slice(0, -1));
 }
 
+// Icons are drawn inline rather than fetched, so they inherit the colour of the
+// text they sit in and cost no request. One 24-grid path each, stroked.
+const icons = {
+  download: "M12 3v12m0 0 4-4m-4 4-4-4M5 20h14",
+};
+
+function icon(name) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("icon");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", icons[name]);
+  svg.append(path);
+  return svg;
+}
+
 function fileTree(paths, id) {
   const root = new Map();
   for (const fullPath of paths) {
@@ -89,7 +111,7 @@ function reconcileTree(list, tree, prefix = "") {
         span.className = "file";
         const link = document.createElement("a");
         link.className = "download";
-        link.textContent = "download";
+        link.append(icon("download"), "download");
         item.append(span, link);
       }
     }
@@ -364,6 +386,15 @@ function createRow(id, action) {
   title.className = "title";
   const toggles = document.createElement("div");
   toggles.className = "toggles";
+  // What was added rather than what came of it, so it is offered whatever state
+  // the row is in
+  const nzb = document.createElement("a");
+  nzb.className = "download";
+  nzb.append(icon("download"), "nzb");
+  nzb.title = "download the nzb this was added from";
+  nzb.href = "/api/nzb/file?id=" + encodeURIComponent(id);
+  nzb.download = id + ".nzb";
+  toggles.append(nzb);
   const inner = document.createElement("div");
   inner.className = "name-cell";
   inner.append(title, toggles);

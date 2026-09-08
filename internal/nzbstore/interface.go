@@ -3,6 +3,7 @@
 package nzbstore
 
 import (
+	"errors"
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
@@ -42,8 +43,14 @@ type File struct {
 	Exact bool
 }
 
+// ErrNotFound reports a name no record is kept under.
+var ErrNotFound = errors.New("nzb not found")
+
 type NzbStore interface {
 	List() ([]Record, error)
+	// Raw reads back the nzb as it was submitted, for any record the store
+	// holds - a failed or archived one included
+	Raw(name string) ([]byte, error)
 	// Add records an accepted nzb, before anything is built from it, and
 	// supersedes an earlier record of the same name
 	Add(data *nzbparser.NzbData, stage, category string) error
