@@ -86,6 +86,9 @@ type FullCacheResource struct {
 type FullCacheResourceOptions struct {
 	// Force lookup Size() from underlying resource, ignoring any Caches
 	SizeAlwaysFromResource bool
+	// OnRead is called once per reader that needs the content, whether it comes
+	// from the cache or from a fetch. May be nil.
+	OnRead func()
 }
 
 func NewFullCacheResource(underlyingResource resource.ReadCloseableResource, cacheKey diskcache.Key, cache *diskcache.Cache, options *FullCacheResourceOptions) *FullCacheResource {
@@ -295,7 +298,17 @@ func (r *FullCacheResourceReader) ReadAt(p []byte, off int64) (int, error) {
 
 // load makes the segment readable, from the cache-file where it is cached and
 // from the content of a fetch where it is not. Requires fileMutex.
-func (r *FullCacheResourceReader) load() error {
+//
+// The read is reported once the content is in hand, so that a fetch has already
+// reported the segments size by then: a consumer keyed by segment sees the two
+// in that order for a segment it has never seen.
+func (r *FullCacheResourceReader) load() (err error) {
+	defer func() {
+		if err == nil && r.resource.options.OnRead != nil {
+			r.resource.options.OnRead()
+		}
+	}()
+
 	file, size, err := r.resource.Cache.Open(r.resource.CacheKey)
 	if err == nil {
 		r.cacheFile = file

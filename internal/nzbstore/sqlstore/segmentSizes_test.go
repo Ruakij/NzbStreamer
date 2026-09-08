@@ -3,6 +3,7 @@ package sqlstore
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestSegmentSizesSurviveReopening(t *testing.T) {
@@ -47,6 +48,40 @@ func TestForgetSegments(t *testing.T) {
 	}
 	if len(sizes) != 0 {
 		t.Errorf("forgotten sizes came back: %v", sizes)
+	}
+}
+
+func TestSegmentActivityCountsWhatWasReadAndWhatWasFetchedTwice(t *testing.T) {
+	store := storeAt(t, t.TempDir())
+
+	store.RecordSegmentSize("a@example.com", 700)
+	store.RecordSegmentRead("a@example.com")
+	// Read from the cache, so it belongs to the working set without a fetch
+	store.RecordSegmentRead("b@example.com")
+	store.RecordSegmentSize("b@example.com", 300)
+	store.flushSegmentSizes()
+
+	// Evicted and read again, which is what the working set outgrowing the cache
+	// looks like
+	store.RecordSegmentSize("a@example.com", 700)
+	store.RecordSegmentRead("a@example.com")
+	store.flushSegmentSizes()
+
+	activity, err := store.SegmentActivitySince(time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("SegmentActivitySince: %v", err)
+	}
+	if activity.WorkingSet != 1000 || activity.Refetched != 700 || activity.Thrashing != 0 {
+		t.Errorf("activity: got %+v, want a working set of 1000 with 700 refetched", activity)
+	}
+
+	// Nothing was read in the window, so nothing is in the working set
+	activity, err = store.SegmentActivitySince(time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("SegmentActivitySince: %v", err)
+	}
+	if activity != (SegmentActivity{}) {
+		t.Errorf("activity outside the window: got %+v", activity)
 	}
 }
 

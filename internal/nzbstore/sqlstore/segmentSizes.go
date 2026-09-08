@@ -24,6 +24,15 @@ func placeholders(n int) string {
 // learned, never invalidated, and two nzbs describing the same post share it.
 // That is why the key is the message-id and not a position in an nzb.
 
+// activity is what a read path has observed about a segment since the last
+// flush. A read is counted whether the bytes came from the cache or from the
+// server; a fetch is only the latter.
+type activity struct {
+	size    int64
+	fetched bool
+	read    bool
+}
+
 // SegmentSizes returns the known decoded lengths among ids. Absent ids are
 // absent from the map; not knowing one is the normal state, not an error.
 func (s *Store) SegmentSizes(ids []string) (map[string]int64, error) {
@@ -67,7 +76,21 @@ func (s *Store) RecordSegmentSize(messageID string, size int64) {
 	s.pendingMutex.Lock()
 	defer s.pendingMutex.Unlock()
 
-	s.pending[messageID] = size
+	pending := s.pending[messageID]
+	pending.size, pending.fetched = size, true
+	s.pending[messageID] = pending
+}
+
+// RecordSegmentRead notes that a segment was read, from the cache or from the
+// server. What was read within a timespan is the working set the cache has to
+// hold, so this is called on every read and not only on the ones that missed.
+func (s *Store) RecordSegmentRead(messageID string) {
+	s.pendingMutex.Lock()
+	defer s.pendingMutex.Unlock()
+
+	pending := s.pending[messageID]
+	pending.read = true
+	s.pending[messageID] = pending
 }
 
 // ForgetSegments drops what is known about ids, for posts nobody will read
@@ -119,19 +142,22 @@ func (s *Store) flushLoop() {
 func (s *Store) flushSegmentSizes() {
 	s.pendingMutex.Lock()
 	pending := s.pending
-	s.pending = make(map[string]int64, len(pending))
+	s.pending = make(map[string]activity, len(pending))
 	s.pendingMutex.Unlock()
 
 	if len(pending) == 0 {
 		return
 	}
 
-	if err := s.writeSegmentSizes(pending); err != nil {
+	if err := s.writeSegmentActivity(pending); err != nil {
 		slog.Error("Failed storing segment sizes", "count", len(pending), "error", err)
 	}
 }
 
-func (s *Store) writeSegmentSizes(sizes map[string]int64) (err error) {
+// writeSegmentActivity stamps the buffer with the time it is written, so the
+// times are as coarse as flushInterval. Nothing reads them at a finer grain than
+// a window of hours.
+func (s *Store) writeSegmentActivity(pending map[string]activity) (err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed starting transaction: %w", err)
@@ -142,15 +168,34 @@ func (s *Store) writeSegmentSizes(sizes map[string]int64) (err error) {
 		}
 	}()
 
-	stmt, err := tx.Prepare("INSERT INTO segment (message_id, size) VALUES (?, ?) ON CONFLICT (message_id) DO UPDATE SET size = excluded.size")
+	fetch, err := tx.Prepare(
+		"INSERT INTO segment (message_id, size, fetched_at, fetches) VALUES (?, ?, ?, 1)" +
+			" ON CONFLICT (message_id) DO UPDATE SET size = excluded.size, fetched_at = excluded.fetched_at, fetches = segment.fetches + 1")
 	if err != nil {
 		return fmt.Errorf("failed preparing insert: %w", err)
 	}
-	defer stmt.Close()
+	defer fetch.Close()
 
-	for id, size := range sizes {
-		if _, err = stmt.Exec(id, size); err != nil {
-			return fmt.Errorf("failed storing size of %s: %w", id, err)
+	// A read of a segment with no row is one whose size was forgotten while its
+	// cached bytes were not, which leaves it out of the working set until it is
+	// fetched again
+	read, err := tx.Prepare("UPDATE segment SET read_at = ? WHERE message_id = ?")
+	if err != nil {
+		return fmt.Errorf("failed preparing update: %w", err)
+	}
+	defer read.Close()
+
+	now := time.Now().Unix()
+	for id, seen := range pending {
+		if seen.fetched {
+			if _, err = fetch.Exec(id, seen.size, now); err != nil {
+				return fmt.Errorf("failed storing size of %s: %w", id, err)
+			}
+		}
+		if seen.read {
+			if _, err = read.Exec(now, id); err != nil {
+				return fmt.Errorf("failed storing read of %s: %w", id, err)
+			}
 		}
 	}
 
@@ -158,4 +203,34 @@ func (s *Store) writeSegmentSizes(sizes map[string]int64) (err error) {
 		return fmt.Errorf("failed committing segment sizes: %w", err)
 	}
 	return nil
+}
+
+// SegmentActivity is what the segments read within a window say about the cache.
+type SegmentActivity struct {
+	// WorkingSet is the bytes of the distinct segments read in the window, which
+	// is the size a cache would have to have to hold all of them
+	WorkingSet int64
+	// Refetched is the bytes among them that had to be downloaded again, which
+	// is what the cache being smaller than the working set cost
+	Refetched int64
+	// Thrashing counts the segments fetched more than twice over their lifetime
+	Thrashing int64
+}
+
+// SegmentActivitySince measures the reads since a point in time. It scans the
+// segment table, so it belongs behind a cached value rather than in a request.
+func (s *Store) SegmentActivitySince(since time.Time) (SegmentActivity, error) {
+	var a SegmentActivity
+	err := s.db.QueryRow(
+		"SELECT coalesce(sum(size), 0),"+
+			" coalesce(sum(CASE WHEN fetches > 1 AND fetched_at > ?1 THEN size END), 0),"+
+			" count(CASE WHEN fetches > 2 THEN 1 END)"+
+			" FROM segment WHERE read_at > ?1",
+		since.Unix(),
+	).Scan(&a.WorkingSet, &a.Refetched, &a.Thrashing)
+	if err != nil {
+		return SegmentActivity{}, fmt.Errorf("failed measuring segment activity: %w", err)
+	}
+
+	return a, nil
 }

@@ -12,6 +12,7 @@ import (
 type fakeSizeStore struct {
 	known    map[string]int64
 	recorded map[string]int64
+	reads    map[string]int
 }
 
 func (s *fakeSizeStore) SegmentSizes(ids []string) (map[string]int64, error) {
@@ -28,6 +29,10 @@ func (s *fakeSizeStore) RecordSegmentSize(messageID string, size int64) {
 	s.recorded[messageID] = size
 }
 
+func (s *fakeSizeStore) RecordSegmentRead(messageID string) {
+	s.reads[messageID]++
+}
+
 func (s *fakeSizeStore) ForgetSegments(ids []string) error {
 	for _, id := range ids {
 		delete(s.known, id)
@@ -40,6 +45,7 @@ func TestAKnownSizeIsExactWithoutFetching(t *testing.T) {
 	store := &fakeSizeStore{
 		known:    map[string]int64{"a@example.com": 700000},
 		recorded: map[string]int64{},
+		reads:    map[string]int{},
 	}
 	getSegment := func(string, string) ([]byte, error) {
 		t.Fatal("a known size must not cost a fetch")
@@ -67,7 +73,7 @@ func TestAKnownSizeIsExactWithoutFetching(t *testing.T) {
 }
 
 func TestFetchingRecordsTheDecodedLength(t *testing.T) {
-	store := &fakeSizeStore{known: map[string]int64{}, recorded: map[string]int64{}}
+	store := &fakeSizeStore{known: map[string]int64{}, recorded: map[string]int64{}, reads: map[string]int{}}
 	getSegment := func(string, string) ([]byte, error) {
 		return make([]byte, 4242), nil
 	}

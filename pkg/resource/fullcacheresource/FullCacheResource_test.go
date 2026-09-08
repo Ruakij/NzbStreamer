@@ -209,3 +209,32 @@ func TestReadAfterEvictionRefetches(t *testing.T) {
 		t.Errorf("underlying resource opened %d times, want 2", opens)
 	}
 }
+
+// A cold read is only reported once the fetch behind it is done, so a consumer
+// that keys on the segment has whatever the fetch told it before the read
+// arrives.
+func TestOnReadIsReportedAfterTheFetch(t *testing.T) {
+	cache, err := diskcache.NewCache(&diskcache.CacheOptions{CacheDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("failed creating cache: %v", err)
+	}
+
+	var events []string
+	underlying := &countingResource{content: []byte("0123456789")}
+	res := fullcacheresource.NewFullCacheResource(underlying, diskcache.Key{"segment-d"}, cache,
+		&fullcacheresource.FullCacheResourceOptions{OnRead: func() { events = append(events, "read") }})
+
+	reader, err := res.Open()
+	if err != nil {
+		t.Fatalf("failed opening: %v", err)
+	}
+	defer reader.Close()
+
+	if _, err := io.ReadAll(reader); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("failed reading: %v", err)
+	}
+	// The fetch is the open of the underlying resource
+	if opens := underlying.opens.Load(); opens != 1 || len(events) != 1 {
+		t.Fatalf("opens %d, events %v, want one fetch reported before one read", opens, events)
+	}
+}

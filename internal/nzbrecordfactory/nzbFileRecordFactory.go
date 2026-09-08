@@ -31,6 +31,7 @@ import (
 type SegmentSizeStore interface {
 	SegmentSizes(ids []string) (map[string]int64, error)
 	RecordSegmentSize(messageID string, size int64)
+	RecordSegmentRead(messageID string)
 	ForgetSegments(ids []string) error
 }
 
@@ -353,12 +354,27 @@ func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, 
 			f.cache,
 			&fullcacheresource.FullCacheResourceOptions{
 				SizeAlwaysFromResource: false,
+				OnRead:                 f.readRecorder(nzbSegment.ID),
 			},
 		)
 		cachedSegmentResources = append(cachedSegmentResources, cachedSegmentResource)
 	}
 
 	return adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(cachedSegmentResources)
+}
+
+// readRecorder reports a read of a segment, from the cache or from the server.
+// A cold read is reported after the fetch that learned the segments size, so the
+// store has the segment by the time the read arrives.
+// Which segments were read within a timespan is the working set the cache has to
+// hold, which the fetches alone cannot say: a cache large enough to serve every
+// read reports no fetches at all.
+func (f *NzbFileFactory) readRecorder(messageID string) func() {
+	if f.sizeStore == nil {
+		return nil
+	}
+
+	return func() { f.sizeStore.RecordSegmentRead(messageID) }
 }
 
 func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbparser.Segment, groups string, sizer nzbfileanalyzer.SegmentSizer, known map[string]int64) *nzbpostresource.NzbPostResource {

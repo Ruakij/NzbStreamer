@@ -29,7 +29,7 @@ type Store struct {
 	// it, so both are buffered here and written by flushLoop instead of by the
 	// read
 	pendingMutex sync.Mutex
-	pending      map[string]int64
+	pending      map[string]activity
 	pendingUsage map[string]usage
 	closing      chan struct{}
 	flusherDone  sync.WaitGroup
@@ -76,7 +76,7 @@ func New(path string) (*Store, error) {
 
 	store := &Store{
 		db:           db,
-		pending:      make(map[string]int64),
+		pending:      make(map[string]activity),
 		pendingUsage: make(map[string]usage),
 		closing:      make(chan struct{}),
 	}
