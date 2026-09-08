@@ -184,3 +184,9 @@ tr.info td { padding-top: 0; font-size: .85rem; }
 .file-tree details[open] > summary::before { transform: rotate(90deg) translateX(-1px); }
 .file-tree .dir { font-weight: 500; }
 .file-tree .file { display: inline-block; margin-left: 1rem; color: var(--muted); font-family: ui-monospace, monospace; }
+.file-tree .download {
+  margin-left: .5rem; color: var(--muted); font-size: .75rem; text-decoration: none;
+  background: transparent; border: 1px solid var(--line); border-radius: 6px;
+  padding: 0 .4rem;
+}
+.file-tree .download:hover { color: var(--fg); background: var(--hover); }

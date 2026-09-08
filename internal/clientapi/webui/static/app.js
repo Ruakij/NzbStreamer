@@ -42,8 +42,14 @@ function fileTree(paths, id) {
       if (!node.has(part)) node.set(part, new Map());
       node = node.get(part);
     }
+    node.path = fullPath;
   }
   return root;
+}
+
+// Files are served over webdav, under the same origin as this page.
+function webdavURL(path) {
+  return "/webdav/" + path.split("/").map(encodeURIComponent).join("/");
 }
 
 // Directories first, then names naturally ordered, so part2 follows part1.
@@ -77,7 +83,10 @@ function reconcileTree(list, tree, prefix = "") {
       } else {
         const span = document.createElement("span");
         span.className = "file";
-        item.append(span);
+        const link = document.createElement("a");
+        link.className = "download";
+        link.textContent = "download";
+        item.append(span, link);
       }
     }
     existing.delete(key);
@@ -86,6 +95,9 @@ function reconcileTree(list, tree, prefix = "") {
       reconcileTree(item.querySelector("ul"), child, key);
     } else {
       setBreakable(item.firstElementChild, name);
+      const link = item.lastElementChild;
+      link.href = webdavURL(child.path);
+      link.download = name;
     }
     if (item !== position) list.insertBefore(item, position);
     position = item.nextElementSibling;
