@@ -63,6 +63,8 @@ type SabnzbdConfig struct {
 	Categories  []string `env:"SABNZBD_CATEGORIES, default=*,tv,movies"` // Categories offered to a client; it refuses to save if the one it is configured with is missing
 	// Removing a download from a client's history deletes the nzb and takes its files off the mount, rather than archiving it. A client removes what it has imported, and here it imported from the mount, so this is only right where nothing reads those files afterwards
 	DeleteOnRemove bool `env:"SABNZBD_DELETE_ON_REMOVE, default=false"`
+	// How long an add is held open to fail before it is answered as accepted, so a client that grabbed a broken release is told while it is still choosing one instead of a queue refresh later; one that takes longer is answered with its id and polled for as usual. Keep it under the clients own request timeout; 0 answers every add immediately
+	AddWait time.Duration `env:"SABNZBD_ADD_WAIT, default=30s"`
 }
 
 type MountConfig struct {

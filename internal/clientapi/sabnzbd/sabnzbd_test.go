@@ -33,6 +33,14 @@ type fakeService struct {
 	deleted   []string
 	archived  []string
 	addErr    error
+
+	// waited is what Wait answers with, and waitDone whether the add ended at all
+	waited   nzbservice.QueueItem
+	waitDone bool
+}
+
+func (s *fakeService) Wait(_ string, _ time.Duration) (nzbservice.QueueItem, bool) {
+	return s.waited, s.waitDone
 }
 
 func (s *fakeService) Add(nzbData *nzbparser.NzbData, category string) (string, error) {
@@ -179,6 +187,41 @@ func TestAddingAnNzbThatIsAlreadyThereSucceeds(t *testing.T) {
 	status, ids := addfile(t, handler)
 	if !status || len(ids) != 1 || ids[0] != "Some.Release" {
 		t.Fatalf("addfile answered %v %v", status, ids)
+	}
+}
+
+// An add that fails while the client is still holding the request open is
+// answered as a failed grab, so it picks the next release now. The record is
+// archived with it: the client has been told this was never added and will never
+// poll the id, so a row left listed for it is one nothing would ever clear.
+func TestAddingAnNzbThatFailsWhileWaitingIsAnsweredAsAFailedGrab(t *testing.T) {
+	service := &fakeService{
+		waitDone: true,
+		waited:   nzbservice.QueueItem{ID: "Some.Release", Stage: nzbservice.StageFailed, Err: "3 files beyond repair"},
+	}
+	handler := sabnzbd.NewHandler(service, sabnzbd.Config{AddWait: time.Second})
+
+	status, _ := addfile(t, handler)
+	if status {
+		t.Fatalf("addfile answered %v for a failed add", status)
+	}
+	if len(service.archived) != 1 || service.archived[0] != "Some.Release/true" {
+		t.Errorf("service saw %v", service.archived)
+	}
+}
+
+// One still running when the wait is up is the accepted add it was before, and
+// the client polls for it as usual.
+func TestAddingAnNzbThatOutlastsTheWaitIsAccepted(t *testing.T) {
+	service := &fakeService{waitDone: false}
+	handler := sabnzbd.NewHandler(service, sabnzbd.Config{AddWait: time.Second})
+
+	status, ids := addfile(t, handler)
+	if !status || len(ids) != 1 || ids[0] != "Some.Release" {
+		t.Fatalf("addfile answered %v %v", status, ids)
+	}
+	if len(service.archived) != 0 {
+		t.Errorf("a running add was archived: %v", service.archived)
 	}
 }
 

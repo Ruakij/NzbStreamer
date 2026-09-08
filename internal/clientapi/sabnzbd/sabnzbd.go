@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -37,6 +38,7 @@ const megabyte = 1024 * 1024
 // Service is the part of nzbservice this surface projects.
 type Service interface {
 	Add(nzbData *nzbparser.NzbData, category string) (string, error)
+	Wait(id string, timeout time.Duration) (nzbservice.QueueItem, bool)
 	Queue() []nzbservice.QueueItem
 	History() []nzbservice.QueueItem
 	Cancel(id string) error
@@ -58,6 +60,12 @@ type Config struct {
 	// Off by default: a client removes what it has imported, and what it
 	// imported from here is the mount itself
 	DeleteOnRemove bool
+	// AddWait is how long an add is given to fail before it is answered as
+	// accepted. A client that grabs a broken release is told so while it is still
+	// deciding what to grab, instead of finding out a queue refresh later; one
+	// that takes longer than this is answered with its id as usual and polled
+	// for. 0 answers every add immediately.
+	AddWait time.Duration
 	// Ready holds the whole surface at 503 while it reports false; nil is always
 	// ready. It is the startup restore: reporting an nzb complete before its
 	// files are there is an import that fails and a release that gets
@@ -90,7 +98,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mode := query.Get("mode")
-	slog.Debug("Request", "mode", mode, "query", query.Encode())
+	slog.Debug("Request", "mode", mode, "query", redacted(query))
 
 	switch mode {
 	case "version":
@@ -126,6 +134,22 @@ func (h *Handler) authenticate(query map[string][]string) string {
 		return "API Key Incorrect"
 	}
 	return ""
+}
+
+// redacted renders a query for the log with the credentials in it masked. The
+// key is on every request a client makes, and a debug log is the one thing here
+// that routinely leaves the machine.
+func redacted(query url.Values) string {
+	safe := make(url.Values, len(query))
+	for key, values := range query {
+		switch key {
+		case "apikey", "ma_password", "password":
+			safe[key] = []string{"***"}
+		default:
+			safe[key] = values
+		}
+	}
+	return safe.Encode()
 }
 
 // configResponse is what a client validates itself against on save. Everything it
@@ -227,10 +251,33 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request, query map[stri
 	case err != nil:
 		writeError(w, err.Error())
 		return
+
+	// An add that fails inside the window is answered as a failed grab, which is
+	// what makes the client move on to the next release now rather than after the
+	// refresh that would have found it failed. The record is archived first: we
+	// are telling the client this was never added, and it will never poll the id
+	// again, so anything left listed for it is a row nothing will ever clear
+	case h.config.AddWait > 0:
+		if item, done := h.service.Wait(id, h.config.AddWait); done && item.Stage != nzbservice.StageCompleted {
+			if err := h.service.Archive(id, true); err != nil {
+				slog.Error("Failed archiving an add answered as failed", "id", id, "error", err)
+			}
+			writeError(w, addFailure(item))
+			return
+		}
 	}
 
 	slog.Info("Accepted nzb", "id", id, "category", first(query, "cat", "category"))
 	writeJSON(w, map[string]any{"status": true, "nzo_ids": []string{id}})
+}
+
+// addFailure is what a client is told about an add that ended badly while it
+// waited. A cancelled one has no error of its own, so the stage is the answer.
+func addFailure(item nzbservice.QueueItem) string {
+	if item.Err != "" {
+		return item.Err
+	}
+	return fmt.Sprintf("add %s", item.Stage)
 }
 
 func (h *Handler) queue(w http.ResponseWriter, query map[string][]string) {

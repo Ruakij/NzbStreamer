@@ -115,6 +115,40 @@ func (s *Service) Add(nzbData *nzbparser.NzbData, category string) (string, erro
 	return nzbData.MetaName, nil
 }
 
+// Wait gives an add up to timeout to end and reports it if it does. ok is false
+// for one still running when the time is up, and for an id nothing is tracking;
+// both leave the add alone, running, for a caller to poll as usual.
+func (s *Service) Wait(id string, timeout time.Duration) (item QueueItem, ok bool) {
+	s.queueMutex.Lock()
+	found := s.find(id)
+	if found == nil {
+		s.queueMutex.Unlock()
+		return QueueItem{}, false
+	}
+	done := found.done
+	s.queueMutex.Unlock()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+	case <-timer.C:
+		return QueueItem{}, false
+	}
+
+	// Read again rather than keeping the pointer: finish writes the stage under
+	// the lock, and a copy taken outside it is a race
+	s.queueMutex.Lock()
+	defer s.queueMutex.Unlock()
+
+	found = s.find(id)
+	if found == nil {
+		return QueueItem{}, false
+	}
+	return *found, true
+}
+
 // Queue lists the adds still in flight, oldest first.
 func (s *Service) Queue() []QueueItem {
 	return s.items(false)

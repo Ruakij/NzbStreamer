@@ -354,6 +354,42 @@ func TestAFailedAddIsHistoryWithItsError(t *testing.T) {
 	}
 }
 
+// Wait is what a client api holds a request open on: it answers an add that
+// ends inside the window with how it ended, and one that outlasts it with
+// nothing, leaving it running to be polled for.
+func TestWaitAnswersAnAddThatEndsAndGivesUpOnOneThatRuns(t *testing.T) {
+	checker := blockingChecker{entered: make(chan struct{}), release: make(chan struct{})}
+	service := nzbservice.NewService(newFakeStore(), &fakeFactory{err: errBuildFailed}, nil, nil, checker)
+
+	nzbData := &nzbparser.NzbData{
+		MetaName: "Some.Release",
+		Files:    []nzbparser.File{{Filename: "some.release.rar"}},
+	}
+
+	if _, err := service.Add(nzbData, "tv"); err != nil {
+		t.Fatalf("Add returned %v", err)
+	}
+	<-checker.entered
+
+	if _, done := service.Wait("Some.Release", 10*time.Millisecond); done {
+		t.Errorf("Wait answered an add that was still checking")
+	}
+
+	close(checker.release)
+
+	item, done := service.Wait("Some.Release", time.Second)
+	if !done {
+		t.Fatalf("Wait gave up on an add that had ended")
+	}
+	if item.Stage != nzbservice.StageFailed || !strings.Contains(item.Err, errBuildFailed.Error()) {
+		t.Errorf("Wait answered %+v", item)
+	}
+
+	if _, done := service.Wait("Never.Added", time.Second); done {
+		t.Errorf("Wait answered an id nothing is tracking")
+	}
+}
+
 // A release nothing could unpack is not one a client can import, so the add
 // ends failed - with what it did build presented, for whoever wants to look at
 // what was posted.

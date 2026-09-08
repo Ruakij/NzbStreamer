@@ -277,6 +277,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager, c Config) {
 			Ready:       service.Ready,
 
 			DeleteOnRemove: c.Sabnzbd.DeleteOnRemove,
+			AddWait:        c.Sabnzbd.AddWait,
 		}),
 		Webdav:  webdav.BasicAuth(&gowebdav.Handler{FileSystem: webdavFS}, webdavAuth),
 		Metrics: metrics,
