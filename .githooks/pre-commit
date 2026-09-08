@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+if ! git status --porcelain --untracked-files=all -- '*.go' | grep -q .; then
+	exit 0
+fi
+
 unformatted=$(gofmt -l cmd internal pkg test)
 if [ -n "$unformatted" ]; then
 	echo "gofmt: $unformatted" >&2
