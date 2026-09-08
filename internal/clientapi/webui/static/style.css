@@ -98,6 +98,9 @@ tr[data-id] td:nth-child(n+4):not(:last-child) {
   font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted);
 }
 .share { font-size: .8rem; opacity: .8; }
+/* Size and cached line up on their last digit, as they do in the info table */
+table:has(#queue, #history) th:nth-child(4), table:has(#queue, #history) th:nth-child(5),
+tr[data-id] td:nth-child(4), tr[data-id] td:nth-child(5) { text-align: right; }
 /* The pair stacks, so it is aligned and kept slim rather than made to fit
    side by side in a cell the name column has already taken the width from. */
 tr[data-id] td:last-child { text-align: right; }
