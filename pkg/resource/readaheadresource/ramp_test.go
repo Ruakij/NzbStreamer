@@ -367,11 +367,11 @@ func TestReadingFarBehindCostsTheWindow(t *testing.T) {
 			}
 		}
 
-		before := underlying.calls.Load()
+		before := settledCalls(t, underlying)
 		if _, err := at.ReadAt(buf, 6<<20); err != nil {
 			t.Fatal(err)
 		}
-		return underlying.calls.Load() - before
+		return settledCalls(t, underlying) - before
 	}
 
 	plain, behind := fetches(false), fetches(true)

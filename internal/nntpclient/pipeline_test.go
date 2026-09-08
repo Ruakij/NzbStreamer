@@ -130,6 +130,27 @@ func (fc *fakeNNTPConn) article() string {
 	return strings.TrimSuffix(id, ">")
 }
 
+// carrier returns whichever of two connections the client sent want on, and
+// the other. Connections dialled together are usable in whatever order their
+// handshakes finish, which is not the order they were accepted.
+func carrier(a, b *fakeNNTPConn, want string) (first, spare *fakeNNTPConn) {
+	a.t.Helper()
+
+	var line string
+	select {
+	case line = <-a.cmds:
+		first, spare = a, b
+	case line = <-b.cmds:
+		first, spare = b, a
+	case <-time.After(5 * time.Second):
+		a.t.Fatal("no command sent")
+	}
+	if line != want {
+		a.t.Fatalf("command %q, want %q", line, want)
+	}
+	return first, spare
+}
+
 func (fc *fakeNNTPConn) expect(want string) {
 	fc.t.Helper()
 	if line := fc.next(); line != want {
@@ -500,12 +521,10 @@ func TestPipelineDialsAheadOfDemand(t *testing.T) {
 	f := newFetches(t, c)
 	f.start("a")
 
-	first := s.conn()
-	first.expect("GROUP " + testGroup)
+	// both come up together; the fetch lands on whichever handshake finished
+	// first, and the other is the spare that nothing has been given
+	first, spare := carrier(s.conn(), s.conn(), "GROUP "+testGroup)
 	first.article()
-
-	// the spare, which nothing has been given: it only ever gets the greeting
-	spare := s.conn()
 
 	first.groupOK(testGroup)
 	first.respond([]byte("body"))
