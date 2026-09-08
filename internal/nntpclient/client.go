@@ -126,11 +126,13 @@ func (c *Client) Conns() int {
 	return c.config.MaxConns
 }
 
-// OpenConns reports how many are open now: the pipelined ones, the idle ones and
-// the ones a command holds. A slot taken by a dial that has not finished counts
-// as the connection it is about to be.
+// OpenConns reports how many are open now. A pipelined connection holds its slot
+// for its whole life and a command holds one while it runs, so the taken slots
+// are both of those; an idle connection gave its slot back and is counted from
+// the idle queue. A slot taken by a dial that has not finished counts as the
+// connection it is about to be.
 func (c *Client) OpenConns() int {
-	return c.pipesOpen() + len(c.idle) + c.config.MaxConns - len(c.slots)
+	return len(c.idle) + c.config.MaxConns - len(c.slots)
 }
 
 func New(config Config) *Client {

@@ -688,6 +688,32 @@ func TestPipelineReapsIdleConnection(t *testing.T) {
 	}
 }
 
+// A pipelined connection holds a slot for its whole life, so it must not also be
+// counted as one of the pipes: the reported number never exceeds the limit.
+func TestOpenConnsCountsPipesOnce(t *testing.T) {
+	s := newFakeNNTP(t)
+	c := pipelineClient(t, s, Config{MaxConns: 2, ConnectionPipeliningSize: 2})
+
+	f := newFetches(t, c)
+	f.start("a")
+	fc := s.conn()
+	fc.expect("GROUP " + testGroup)
+
+	if open := c.OpenConns(); open != 1 {
+		t.Fatalf("got %d open, want 1", open)
+	}
+
+	fc.article()
+	fc.groupOK(testGroup)
+	fc.respond([]byte("body"))
+	f.wait()
+	f.assertBody("a", "body")
+
+	if open := c.OpenConns(); open > c.Conns() {
+		t.Fatalf("got %d open, want at most %d", open, c.Conns())
+	}
+}
+
 // Pipelining needs a window worth having and a connection to hold back for the
 // synchronous commands, so anything less takes the plain path.
 func TestPipeliningOffWhenItCannotHelp(t *testing.T) {
