@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/bytesize"
 )
 
 var ErrInvalidCacheOptions = errors.New("invalid cache settings")
@@ -72,14 +74,14 @@ func (c *Cache) index() {
 	}
 
 	stats := c.Stats()
-	slog.Info("Cache indexed", "items", stats.Items, "bytes", stats.Bytes, "max bytes", stats.MaxBytes, "took", time.Since(start))
+	slog.Info("Cache indexed", "items", stats.Items, "bytes", bytesize.Bytes(stats.Bytes), "max bytes", bytesize.Bytes(stats.MaxBytes), "took", time.Since(start))
 
 	if stats.MaxBytes > 0 && stats.Bytes > stats.MaxBytes {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
 		if err := c.maxSizeEvict(0); err != nil {
-			slog.Error("Failed evicting down to the cache size limit", "bytes", stats.Bytes, "max bytes", stats.MaxBytes, "error", err)
+			slog.Error("Failed evicting down to the cache size limit", "bytes", bytesize.Bytes(stats.Bytes), "max bytes", bytesize.Bytes(stats.MaxBytes), "error", err)
 		}
 	}
 }
@@ -193,7 +195,7 @@ func (c *Cache) evictFor(size int64) error {
 			err := c.maxSizeEvict(size)
 			c.mu.Unlock()
 			if err != nil {
-				slog.Error("Couldnt evict for item", "wanted space", size, "error", err)
+				slog.Error("Couldnt evict for item", "wanted space", bytesize.Bytes(size), "error", err)
 			}
 		}()
 

@@ -1,8 +1,10 @@
-package main
+// Package bytesize is a byte count that reads and prints the way one is said.
+package bytesize
 
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -40,4 +42,29 @@ func (b *Bytes) UnmarshalText(text []byte) error {
 	return nil
 }
 
-func (b Bytes) String() string { return strconv.FormatInt(int64(b), 10) }
+// String is the count rounded to the largest unit it fills, which is what a log
+// line wants: how much, not exactly how many. A count under a kibibyte, and one
+// that lands on a whole unit, prints without a fraction.
+func (b Bytes) String() string {
+	value, unit := float64(b), ""
+	for _, next := range []string{"K", "M", "G", "T"} {
+		if math.Abs(value) < 1024 {
+			break
+		}
+		value, unit = value/1024, next
+	}
+
+	if unit == "" {
+		return strconv.FormatInt(int64(b), 10)
+	}
+	return strconv.FormatFloat(value, 'f', fraction(value), 64) + unit
+}
+
+// fraction keeps a digit where it says something: 1.4G is worth more than 1G,
+// 512M is not worth 512.0M.
+func fraction(value float64) int {
+	if value == math.Trunc(value) {
+		return 0
+	}
+	return 1
+}

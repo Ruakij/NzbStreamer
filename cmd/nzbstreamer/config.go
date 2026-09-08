@@ -4,7 +4,12 @@ import (
 	"log/slog"
 	"regexp"
 	"time"
+
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/bytesize"
 )
+
+// Bytes is a byte count written the way one is said: 32M rather than 33554432.
+type Bytes = bytesize.Bytes
 
 // UsenetServerConfig is one news server. It is read under a prefix: USENET_ for
 // the first server and USENET_<n>_ for every further one, so the variable names

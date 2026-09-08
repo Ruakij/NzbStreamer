@@ -1,11 +1,6 @@
-package main
+package bytesize
 
-import (
-	"context"
-	"testing"
-
-	"github.com/sethvargo/go-envconfig"
-)
+import "testing"
 
 func TestBytesUnmarshal(t *testing.T) {
 	for _, tc := range []struct {
@@ -43,21 +38,21 @@ func TestBytesUnmarshal(t *testing.T) {
 	}
 }
 
-// envconfig has to reach UnmarshalText for any of this to matter, defaults
-// included.
-func TestBytesThroughEnvconfig(t *testing.T) {
-	var config ReadaheadConfig
-	lookup := envconfig.MapLookuper(map[string]string{"READAHEAD_MAX_SIZE": "12M"})
-	if err := envconfig.ProcessWith(context.Background(), &envconfig.Config{
-		Target: &config, Lookuper: lookup,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	if config.MaxSize != 12*1024*1024 {
-		t.Errorf("max size = %d, want 12M", config.MaxSize)
-	}
-	if config.Chunk != 1024*1024 {
-		t.Errorf("chunk = %d, want the 1M default", config.Chunk)
+func TestBytesReadsAsItIsSaid(t *testing.T) {
+	for _, tc := range []struct {
+		in   Bytes
+		want string
+	}{
+		{0, "0"},
+		{512, "512"},
+		{8 * 1024, "8K"},
+		{12 * 1024 * 1024, "12M"},
+		{1536 * 1024 * 1024, "1.5G"},
+		{1024 * 1024 * 1024 * 1024, "1T"},
+		{5 * 1024 * 1024 * 1024 * 1024, "5T"},
+	} {
+		if got := tc.in.String(); got != tc.want {
+			t.Errorf("%d printed as %q, want %q", int64(tc.in), got, tc.want)
+		}
 	}
 }
