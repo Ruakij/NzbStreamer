@@ -6,6 +6,7 @@ package webui
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -126,6 +127,14 @@ func (h *Handler) add(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id, err := h.service.Add(nzbData, r.FormValue("category"))
+	if errors.Is(err, nzbservice.ErrNzbAlreadyExists) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, nzbservice.ErrLibraryFull) {
+		writeError(w, http.StatusInsufficientStorage, err.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -161,7 +170,14 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, nzbservice.ErrNzbNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, nzbservice.ErrNzbStillRunning):
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 

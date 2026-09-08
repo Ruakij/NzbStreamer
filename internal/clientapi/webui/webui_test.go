@@ -1,8 +1,10 @@
 package webui_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,13 +20,20 @@ type fakeService struct {
 	queue   []nzbservice.QueueItem
 	history []nzbservice.QueueItem
 	files   map[string][]string
+	addErr  error
 
-	cancelled []string
-	deleted   []string
-	archived  []string
+	cancelErr  error
+	deleteErr  error
+	archiveErr error
+	cancelled  []string
+	deleted    []string
+	archived   []string
 }
 
 func (s *fakeService) Add(nzbData *nzbparser.NzbData, _ string) (string, error) {
+	if s.addErr != nil {
+		return "", s.addErr
+	}
 	return nzbData.MetaName, nil
 }
 
@@ -34,17 +43,86 @@ func (s *fakeService) Files() map[string][]string      { return s.files }
 
 func (s *fakeService) Cancel(id string) error {
 	s.cancelled = append(s.cancelled, id)
-	return nil
+	return s.cancelErr
 }
 
 func (s *fakeService) Delete(id string) error {
 	s.deleted = append(s.deleted, id)
-	return nil
+	return s.deleteErr
 }
 
 func (s *fakeService) Archive(id string, archived bool) error {
 	s.archived = append(s.archived, fmt.Sprintf("%s/%t", id, archived))
-	return nil
+	return s.archiveErr
+}
+
+const nzbXML = `<?xml version="1.0" encoding="utf-8" ?>
+<nzb>
+	<file poster="p@example.com" date="1700000000" subject="Release &#34;file.rar&#34; yEnc (1/1)">
+		<groups><group>alt.binaries.test</group></groups>
+		<segments><segment bytes="100" number="1">a@example.com</segment></segments>
+	</file>
+</nzb>`
+
+func postAdd(t *testing.T, service *fakeService) *httptest.ResponseRecorder {
+	t.Helper()
+
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	file, err := form.CreateFormFile("file", "Some.Release.nzb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte(nzbXML)); err != nil {
+		t.Fatal(err)
+	}
+	if err := form.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/add", &body)
+	request.Header.Set("Content-Type", form.FormDataContentType())
+	recorder := httptest.NewRecorder()
+	webui.NewHandler(service).ServeHTTP(recorder, request)
+	return recorder
+}
+
+func TestAddAlreadyExistsIsBadRequest(t *testing.T) {
+	if recorder := postAdd(t, &fakeService{addErr: nzbservice.ErrNzbAlreadyExists}); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate add answered %d, want 400", recorder.Code)
+	}
+}
+
+func TestAddLibraryFullIsInsufficientStorage(t *testing.T) {
+	if recorder := postAdd(t, &fakeService{addErr: fmt.Errorf("%w: Some.Release", nzbservice.ErrLibraryFull)}); recorder.Code != http.StatusInsufficientStorage {
+		t.Fatalf("full library answered %d, want 507", recorder.Code)
+	}
+}
+
+func TestRemoveMapsServiceErrors(t *testing.T) {
+	tests := []struct {
+		action string
+		setup  func(*fakeService)
+		want   int
+	}{
+		{"cancel", func(s *fakeService) { s.cancelErr = fmt.Errorf("%w: x", nzbservice.ErrNzbNotFound) }, http.StatusNotFound},
+		{"delete", func(s *fakeService) { s.deleteErr = fmt.Errorf("%w: x", nzbservice.ErrNzbStillRunning) }, http.StatusConflict},
+		{"archive", func(s *fakeService) { s.archiveErr = fmt.Errorf("%w: x", nzbservice.ErrNzbNotFound) }, http.StatusNotFound},
+		{"restore", func(s *fakeService) { s.archiveErr = fmt.Errorf("%w: x", nzbservice.ErrNzbStillRunning) }, http.StatusConflict},
+	}
+
+	for _, test := range tests {
+		service := &fakeService{}
+		test.setup(service)
+		request := httptest.NewRequest(http.MethodPost, "/api/remove", strings.NewReader("id=x&action="+test.action))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		recorder := httptest.NewRecorder()
+		webui.NewHandler(service).ServeHTTP(recorder, request)
+		if recorder.Code != test.want {
+			t.Errorf("%s answered %d, want %d", test.action, recorder.Code, test.want)
+		}
+	}
 }
 
 func TestItems(t *testing.T) {
