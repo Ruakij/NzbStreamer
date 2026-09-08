@@ -1,4 +1,5 @@
-# NzbStreamer
+<h1>
+<img src="internal/clientapi/webui/static/logo-stream.svg" height="40" width="40" align="left" alt="NzbStreamer logo"/>NzbStreamer</h1>
 
 [![CI](https://github.com/Ruakij/NzbStreamer/actions/workflows/ci.yaml/badge.svg)](https://github.com/Ruakij/NzbStreamer/actions/workflows/ci.yaml)
 [![Version](https://img.shields.io/github/v/release/Ruakij/NzbStreamer?label=Version&color=green)](https://github.com/Ruakij/NzbStreamer/releases)
@@ -14,7 +15,6 @@
 ---
 
 <!-- TOC -->
-- [NzbStreamer](#nzbstreamer)
 - [1. Description](#1-description)
 - [2. Usage](#2-usage)
   - [2.1. How to run](#21-how-to-run)
