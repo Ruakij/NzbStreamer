@@ -707,13 +707,15 @@ func took(started time.Time) time.Duration {
 	}
 }
 
-// Names lists the nzbs presented. Files answers the same keys, at the cost of
-// cloning and sorting every path of every one of them.
+// Names lists every nzb the service holds, one still being added included: it
+// has a name, a record and segments in the cache from the moment it is accepted,
+// which is what anything reporting per-nzb numbers is asking about. Files
+// answers only the ones that got as far as being presented.
 func (s *Service) Names() []string {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	return slices.Collect(maps.Keys(s.nzbFiles))
+	return slices.Collect(maps.Keys(s.nzbFiledata))
 }
 
 // PostedFile is one file as it was posted. What a presenter shows is extracted
