@@ -149,7 +149,10 @@ func (s *Service) reconcile(nzbData *nzbparser.NzbData, tree map[string]presenta
 	slices.Sort(built)
 
 	s.mutex.RLock()
-	presented := slices.Clone(s.nzbFiles[nzbData.MetaName])
+	presented := make([]string, 0, len(s.nzbFiles[nzbData.MetaName]))
+	for _, file := range s.nzbFiles[nzbData.MetaName] {
+		presented = append(presented, file.Path)
+	}
 	s.mutex.RUnlock()
 	slices.Sort(presented)
 

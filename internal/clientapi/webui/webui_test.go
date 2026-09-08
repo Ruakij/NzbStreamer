@@ -21,7 +21,7 @@ import (
 type fakeService struct {
 	queue   []nzbservice.QueueItem
 	history []nzbservice.QueueItem
-	files   map[string][]string
+	files   map[string][]nzbservice.PresentedFile
 	addErr  error
 	raw     map[string][]byte
 
@@ -50,9 +50,9 @@ func (s *fakeService) NzbRaw(id string) ([]byte, error) {
 	return raw, nil
 }
 
-func (s *fakeService) Queue() []nzbservice.QueueItem   { return s.queue }
-func (s *fakeService) History() []nzbservice.QueueItem { return s.history }
-func (s *fakeService) Files() map[string][]string      { return s.files }
+func (s *fakeService) Queue() []nzbservice.QueueItem                { return s.queue }
+func (s *fakeService) History() []nzbservice.QueueItem              { return s.history }
+func (s *fakeService) Files() map[string][]nzbservice.PresentedFile { return s.files }
 
 func (s *fakeService) Cancel(id string) error {
 	s.cancelled = append(s.cancelled, id)
@@ -176,16 +176,16 @@ func TestItems(t *testing.T) {
 	service := &fakeService{
 		queue:   []nzbservice.QueueItem{{ID: "a", Stage: nzbservice.StageChecking, Bytes: 42, Added: time.Now()}},
 		history: []nzbservice.QueueItem{{ID: "b", Stage: nzbservice.StageFailed, Err: "boom"}},
-		files:   map[string][]string{"b": {"b/video.mkv"}},
+		files:   map[string][]nzbservice.PresentedFile{"b": {{Path: "b/video.mkv", Bytes: 7, Exact: true}}},
 	}
 
 	recorder := httptest.NewRecorder()
 	webui.NewHandler(service).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/items", nil))
 
 	var body struct {
-		Queue   []map[string]any    `json:"queue"`
-		History []map[string]any    `json:"history"`
-		Files   map[string][]string `json:"files"`
+		Queue   []map[string]any            `json:"queue"`
+		History []map[string]any            `json:"history"`
+		Files   map[string][]map[string]any `json:"files"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("response was not json: %v (%s)", err, recorder.Body)
@@ -200,8 +200,8 @@ func TestItems(t *testing.T) {
 	if got := body.History[0]["error"]; got != "boom" {
 		t.Errorf("history error is %v, want boom", got)
 	}
-	if got := body.Files["b"]; len(got) != 1 || got[0] != "b/video.mkv" {
-		t.Errorf("files are %v, want [b/video.mkv]", got)
+	if got := body.Files["b"]; len(got) != 1 || got[0]["path"] != "b/video.mkv" || got[0]["bytes"] != float64(7) {
+		t.Errorf("files are %v, want the one presented file sized 7", got)
 	}
 }
 

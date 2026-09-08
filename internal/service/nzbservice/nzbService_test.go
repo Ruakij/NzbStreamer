@@ -249,7 +249,7 @@ func TestAnAddIsVisibleWhileItRunsAndAfterItFinishes(t *testing.T) {
 		t.Errorf("finished add is still in the queue")
 	}
 	files := service.Files()
-	if got := files[id]; len(got) != 1 || got[0] != "Some.Release/file.mkv" {
+	if got := files[id]; len(got) != 1 || got[0].Path != "Some.Release/file.mkv" {
 		t.Errorf("files are %v, want [Some.Release/file.mkv]", got)
 	}
 

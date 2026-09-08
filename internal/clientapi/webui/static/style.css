@@ -10,14 +10,18 @@ html {
 
 :root {
   color-scheme: light dark;
-  --fg: light-dark(#1b1d20, #e6e8ea);
-  --muted: light-dark(#5d6470, #9aa3af);
+  --fg: light-dark(#080a0d, #fafbfc);
+  --muted: light-dark(#3d4553, #c6ced9);
   --line: light-dark(#0002, #fff2);
   --panel: light-dark(#fff, #17191c);
   --hover: light-dark(#0000000a, #ffffff0a);
   --accent: light-dark(#0b6bcb, #6bb6ff);
   --bad: light-dark(#c0392b, #ff7a6b);
+  --warn: light-dark(#a8620a, #f0b357);
   --good: light-dark(#1f7a3d, #57c780);
+  --violet: light-dark(#6b3fc4, #b492ff);
+  --teal: light-dark(#0f7a86, #5fd0dd);
+  --rose: light-dark(#b02f60, #ff92b8);
   --radius: 8px;
 }
 
@@ -31,11 +35,11 @@ body {
 }
 
 header { display: flex; align-items: baseline; gap: .75rem; margin-bottom: 1.5rem; }
-h1 { font-size: 1.35rem; margin: 0; letter-spacing: -.01em; }
+h1 { font-size: 1.35rem; margin: 0; letter-spacing: -.01em; display: flex; align-items: center; gap: .4rem; }
 h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 2rem 0 .5rem; }
 
 #offline { color: var(--bad); font-size: .85rem; display: none; }
-#offline.on { display: inline; }
+#offline.on { display: inline-flex; align-items: center; gap: .3rem; }
 
 form {
   display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
@@ -57,12 +61,17 @@ input[type=text] {
   background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: .3rem .5rem;
 }
 button {
+  display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
   background: transparent; border: 1px solid var(--line); border-radius: 6px;
   padding: .3rem .7rem; cursor: pointer;
 }
 button:hover:not(:disabled) { background: var(--hover); }
+/* Green makes something, blue only looks at it - the same reading the row
+   actions take, where blue downloads, amber holds back and red destroys */
+#add button[type=submit] { color: var(--good); border-color: currentColor; }
+#inspect { color: var(--accent); border-color: currentColor; }
+#add button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 10%, transparent); }
 button:disabled { opacity: .5; cursor: default; }
-.danger:hover:not(:disabled) { color: var(--bad); border-color: currentColor; }
 
 .count { font-weight: 400; text-transform: none; letter-spacing: 0; }
 
@@ -109,20 +118,36 @@ td.name .title { font-weight: 500; }
 tr[data-id] td:nth-child(n+4):not(:last-child) {
   font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted);
 }
-.share { font-size: .8rem; opacity: .8; }
-/* The unit sits in a box of its own, so a column of sizes lines up on its digits
-   rather than on the B of whichever unit each row happened to reach */
-.unit { display: inline-block; min-width: 2.4em; text-align: left; padding-left: .35em; opacity: .8; }
+/* The number sits in a box of its own, so a column of sizes lines up on its
+   digits rather than on the first character of whichever number each row
+   happened to need. The unit follows it directly - closer than the gap to the
+   next column, so the two read as one value. */
+/* A line of its own inside the box would hang below the line it sits in and pad
+   the row it is in unevenly, so the box is as tall as its digits */
+.num { display: inline-block; min-width: 3.2em; text-align: right; line-height: 1; }
+.unit { padding-left: .25em; opacity: .8; }
+/* The size and its share are one column: the stack is as wide as the size, and
+   a share too wide for it grows leftwards under the number */
+.stack { display: inline-block; text-align: right; }
+.share { display: block; font-size: .8rem; opacity: .8; }
 /* Size and cached line up on their last digit, as they do in the info table */
-table:has(#queue, #history) th:nth-child(4), table:has(#queue, #history) th:nth-child(5),
 tr[data-id] td:nth-child(4), tr[data-id] td:nth-child(5) { text-align: right; }
-/* The pair stacks, so it is aligned and kept slim rather than made to fit
-   side by side in a cell the name column has already taken the width from. */
-tr[data-id] td:last-child { text-align: right; }
-tr[data-id] td:last-child button {
-  display: block; margin-left: auto; min-width: 5rem; padding: .15rem .05rem;
+/* Icon-only and square, so they sit in one row of identical boxes rather than a
+   stack of buttons as wide as their longest word */
+.actions { display: flex; justify-content: flex-end; gap: .25rem; }
+.act {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: .25rem; color: var(--muted); text-decoration: none;
+  background: transparent; border: 1px solid var(--line); border-radius: 6px;
+  cursor: pointer;
 }
-tr[data-id] td:last-child button + button { margin-top: .1rem; }
+/* Without a word to read, the colour is what tells the four apart at a glance */
+.act[data-act=nzb], .act[data-act=download] { color: var(--accent); }
+.act[data-act=archive], .act[data-act=cancel] { color: var(--warn); }
+.act[data-act=restore] { color: var(--good); }
+.act[data-act=delete] { color: var(--bad); }
+.act:hover:not(:disabled) { background: var(--hover); border-color: currentColor; }
+.act .icon { width: 1.1rem; height: 1.1rem; }
 
 .err { color: var(--bad); font-size: .85rem; margin-top: .2rem; }
 .empty { color: var(--muted); }
@@ -146,13 +171,18 @@ tr:has(+ tr.file-list:not([hidden])) td { border-bottom: 0; }
 tr:has(+ tr.file-list:not([hidden])):hover + tr.file-list, tr:has(+ tr.file-list:hover) { background: var(--hover); }
 tr.file-list td { padding-top: 0; font-size: .85rem; }
 
+/* The icon is what the panel below holds, and the button reads as pressed while
+   that panel is open, which is what the sign in front of it used to say */
 .files-toggle {
-  display: inline-block; margin: 0; padding: .05rem .45rem;
+  display: inline-flex; align-items: center; gap: .3rem; margin: 0; padding: .1rem .45rem;
   font-size: .85rem; color: var(--muted);
 }
+.files-toggle .kind { width: .95rem; height: .95rem; }
 .files-toggle:hover:not(:disabled) { color: var(--fg); }
-.files-toggle::before { content: "+"; margin-right: .35rem; }
-.files-toggle[data-open="true"]::before { content: "-"; }
+.files-toggle[data-open="true"] {
+  color: var(--fg); border-color: currentColor;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
 
 #stats { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
 #stats[hidden] { display: none; }
@@ -172,45 +202,73 @@ tr.file-list td { padding-top: 0; font-size: .85rem; }
 
 tr:has(+ tr.info:not([hidden])) td { border-bottom: 0; }
 tr:has(+ tr.info:not([hidden])):hover + tr.info, tr:has(+ tr.info:hover) { background: var(--hover); }
-tr.info td { padding-top: 0; font-size: .85rem; }
+/* The panels own cell only: the tables inside it pad their rows themselves */
+tr.info > td { padding-top: 0; font-size: .85rem; }
 .info-total { color: var(--muted); margin: .3rem 0 .5rem; }
 .info-files { font-size: .85rem; }
-.info-files td, .info-files th { padding: .25rem .5rem; }
+/* A row is one line of text tall, and what is in it sits on the middle of that
+   line, whether the name beside it wrapped or not */
+.info-files td, .info-files th { padding: .15rem .5rem; vertical-align: middle; }
 .info-files td:first-child { overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
-.info-files td:not(:first-child) { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
-.info-files th:not(:first-child), .info-files td:not(:first-child) { text-align: right; }
-/* Both halves of a pair are right aligned, so each column lines up down the
-   table, and the header of the pair sits over where they meet */
-.info-files th[colspan="2"] { text-align: center; }
+.info-files td:first-child .kind { width: 1.05em; height: 1.05em; vertical-align: -.22em; margin-right: .4em; }
+/* A value lines up down the table on its last digit; every heading reads from
+   the left, as it does in every other table */
+.info-files td:not(:first-child) {
+  white-space: nowrap; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums;
+}
 .info-files td:nth-child(3), .info-files td:nth-child(5) { padding-right: .15rem; }
-.info-files td:nth-child(4), .info-files td:nth-child(6) { padding-left: .15rem; opacity: .8; }
+/* What a value is out of follows it directly rather than sitting at the far end
+   of a column as wide as the largest of them */
+.info-files td:nth-child(4), .info-files td:nth-child(6) {
+  text-align: left; padding-left: .15rem; opacity: .8;
+}
 
 .file-tree, .file-tree ul { list-style: none; margin: 0; padding: 0; }
 .file-tree { margin-top: .3rem; }
-.file-tree ul { margin-left: .45rem; padding-left: .8rem; border-left: 1px solid var(--line); }
-.file-tree li { padding: .05rem 0; }
-.file-tree summary { cursor: pointer; list-style: none; }
+.file-tree ul { margin-left: .95rem; padding-left: .8rem; border-left: 1px solid var(--line); }
+/* Nesting moves the left edge only, so the columns on the right line up however
+   deep a file sits */
+.file-tree .row { display: flex; align-items: center; gap: .8rem; padding: .1rem .25rem; border-radius: 6px; }
+.file-tree .row:hover { background: var(--hover); }
+.file-tree summary.row { cursor: pointer; list-style: none; }
 .file-tree summary::-webkit-details-marker { display: none; }
-.file-tree summary::before {
-  content: ""; display: inline-block; width: 0; height: 0; margin-right: .4rem;
-  border: .3rem solid transparent; border-left-color: var(--muted);
-  transform: translateY(-1px); transition: transform .1s;
-}
-.file-tree details[open] > summary::before { transform: rotate(90deg) translateX(-1px); }
+/* The icon belongs to the name, not to a column of its own */
+.file-tree .kind { width: 1.05rem; height: 1.05rem; margin-right: -.45rem; }
+.file-tree .label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .file-tree .dir { font-weight: 500; }
-.file-tree .file { display: inline-block; margin-left: 1rem; color: var(--muted); font-family: ui-monospace, monospace; }
-.download {
-  display: inline-flex; align-items: center; gap: .25rem;
-  margin-left: .5rem; color: var(--muted); font-size: .75rem; text-decoration: none;
-  background: transparent; border: 1px solid var(--line); border-radius: 6px;
-  padding: 0 .4rem;
-}
-.download:hover { color: var(--fg); background: var(--hover); }
-/* The toggles are built as the row learns what it has; the nzb is the one thing
-   every row carries, so it is placed rather than ordered by that. */
-.toggles .download { margin-left: 0; order: 1; }
+.file-tree .file { color: var(--muted); font-family: ui-monospace, monospace; }
+.file-tree .col { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.file-tree .size { width: 5.5rem; text-align: right; }
+.file-tree .date { width: 8rem; text-align: right; }
+/* Empty on a directory, which has nothing to download, so its row ends where the
+   file rows under it do */
+.file-tree .row-actions { flex: none; width: 1.8rem; display: flex; justify-content: flex-end; }
+.file-tree .act { padding: .15rem; }
+.file-tree .act .icon { width: .95rem; height: .95rem; }
 
 .icon { width: 1em; height: 1em; flex: none; }
+
+/* What a file is, in colour, so a listing is scanned by kind before it is read */
+.kind { color: var(--muted); }
+[data-kind^=folder] .kind { color: var(--warn); }
+[data-kind=video] .kind { color: var(--accent); }
+[data-kind=image] .kind { color: var(--good); }
+[data-kind=audio] .kind { color: var(--violet); }
+[data-kind=archive] .kind { color: var(--teal); }
+[data-kind=recovery] .kind { color: var(--rose); }
+
+/* The hint names an icon that carries no word, and explains what a number or a
+   column counts. It draws in the top layer, so it is placed in viewport
+   coordinates and the uas centring has to go. A posted subject is long enough
+   to need the wrap; everything else fits on one line without it. */
+.hint {
+  position: fixed; inset: auto; margin: 0; translate: -50% 0;
+  max-width: min(32rem, calc(100vw - 2rem)); width: max-content;
+  background: var(--panel); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: .15rem .45rem; font-size: .75rem; overflow-wrap: anywhere;
+  box-shadow: 0 2px 8px #0003;
+}
 
 /* The close sits in a row of its own, so the body below it scrolls across the
    whole width rather than around the button. */
@@ -237,7 +295,6 @@ tr.info td { padding-top: 0; font-size: .85rem; }
 /* Every column here stands on its own, none of them half of a pair */
 #inspect-body .info-files td:nth-child(n+3) { opacity: 1; }
 #inspect-body .info-files td, #inspect-body .info-files th { padding: .45rem .8rem; }
-#inspect-body .info-files th { text-align: left; }
 /* The numbers take only the width they need, so their heading sits over them and
    the posted name gets the rest */
 #inspect-body .info-files:not(.inspect-meta) :is(td, th):not(:first-child) {

@@ -41,7 +41,7 @@ type Service struct {
 	presenters  []presentation.Presenter
 	triggers    []TriggerListener
 	nzbFiledata map[string]*nzbparser.NzbData
-	nzbFiles    map[string][]string // Maps NZB MetaName to its file paths
+	nzbFiles    map[string][]PresentedFile // Maps NZB MetaName to what it presents
 
 	// What every client api reports on, kept apart from the tree because an add
 	// is observable long before it has one. Scanned linearly and never trimmed:
@@ -104,7 +104,7 @@ func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, prese
 		fileBlacklist:    []regexp.Regexp{},
 		nzbFileBlacklist: []regexp.Regexp{},
 		nzbFiledata:      make(map[string]*nzbparser.NzbData),
-		nzbFiles:         make(map[string][]string),
+		nzbFiles:         make(map[string][]PresentedFile),
 		healthChecker:    healthChecker,
 	}
 	service.observeQueue()
@@ -380,8 +380,8 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 		return fmt.Errorf("%w: %s", ErrAddCancelled, nzbData.MetaName)
 	}
 
-	s.register(nzbData, tree)
 	s.measure(nzbData.MetaName, tree)
+	s.register(nzbData, tree)
 	s.storeFiles(nzbData.MetaName, tree)
 
 	// The record already holds it: enqueue wrote it there when the add was
@@ -448,20 +448,29 @@ func (s *Service) buildTree(nzbData *nzbparser.NzbData, progress nzbrecordfactor
 	return tree, packed
 }
 
-// register presents a tree and records what it presents.
+// register presents a tree and records what it presents. Sizing happens outside
+// the lock, since a file that has not been measured yet answers by opening.
 func (s *Service) register(nzbData *nzbparser.NzbData, tree map[string]presentation.Openable) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
 	modTime := time.Time{}
 	if len(nzbData.Files) > 0 {
 		modTime = nzbData.Files[0].ParsedDate
 	}
 
-	s.nzbFiles[nzbData.MetaName] = make([]string, 0, len(tree))
+	presented := make([]PresentedFile, 0, len(tree))
 	for fullPath, file := range tree {
-		s.nzbFiles[nzbData.MetaName] = append(s.nzbFiles[nzbData.MetaName], fullPath)
+		size, exact, err := presentedSize(file)
+		if err != nil {
+			slog.Warn("Failed sizing a presented file, listing it as unknown",
+				"nzb", nzbData.MetaName, "file", fullPath, "error", err)
+		}
+		presented = append(presented, PresentedFile{Path: fullPath, Bytes: size, Exact: exact, ModTime: modTime})
+	}
 
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	s.nzbFiles[nzbData.MetaName] = presented
+	for fullPath, file := range tree {
 		for _, presenter := range s.presenters {
 			if err := presenter.AddFile(fullPath, modTime, file); err != nil {
 				slog.Error("Failed adding segment-stack as file", "nzb", nzbData.MetaName, "error", err)
@@ -695,12 +704,12 @@ func (s *Service) Delete(id string) error {
 // unregister takes an nzb's files back out of the presenters and drops its
 // tracking entries. Caller holds the mutex.
 func (s *Service) unregister(metaName string) {
-	for _, filepath := range s.nzbFiles[metaName] {
+	for _, file := range s.nzbFiles[metaName] {
 		for _, presenter := range s.presenters {
-			if err := presenter.RemoveFile(filepath); err != nil {
+			if err := presenter.RemoveFile(file.Path); err != nil {
 				slog.Error("Failed removing file from presenter",
 					"nzb", metaName,
-					"file", filepath,
+					"file", file.Path,
 					"error", err)
 			}
 		}
@@ -782,16 +791,26 @@ func (s *Service) PostedFiles(id string) []PostedFile {
 	return files
 }
 
-// Files returns the final paths exposed for each NZB.
-func (s *Service) Files() map[string][]string {
+// PresentedFile is one path an nzb exposes, sized the way a listing reports it.
+// The time is the nzb's posting date, which is what every file of it is stamped
+// with.
+type PresentedFile struct {
+	Path    string    `json:"path"`
+	Bytes   int64     `json:"bytes"`
+	Exact   bool      `json:"exact"`
+	ModTime time.Time `json:"date"`
+}
+
+// Files returns the files exposed for each NZB.
+func (s *Service) Files() map[string][]PresentedFile {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	files := make(map[string][]string, len(s.nzbFiles))
-	for id, paths := range s.nzbFiles {
-		paths = slices.Clone(paths)
-		slices.Sort(paths)
-		files[id] = slices.Compact(paths)
+	files := make(map[string][]PresentedFile, len(s.nzbFiles))
+	for id, presented := range s.nzbFiles {
+		presented = slices.Clone(presented)
+		slices.SortFunc(presented, func(a, b PresentedFile) int { return strings.Compare(a.Path, b.Path) })
+		files[id] = slices.CompactFunc(presented, func(a, b PresentedFile) bool { return a.Path == b.Path })
 	}
 	return files
 }

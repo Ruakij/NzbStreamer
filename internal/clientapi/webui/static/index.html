@@ -4,13 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NzbStreamer</title>
+<meta name="description" content="Stream files from Usenet without downloading them first.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0b6bcb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#6bb6ff" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/static/logo-solid.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/logo-solid.svg">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header>
-  <h1>NzbStreamer</h1>
-  <span id="offline">disconnected</span>
-  <label id="per-page-label">rows
+  <h1><img src="/static/logo-stream.svg" alt="" width="22" height="22">NzbStreamer</h1>
+  <span id="offline" data-hint="no connection to the server">disconnected</span>
+  <label id="per-page-label" data-hint="rows per page">rows
     <select id="per-page">
       <option>10</option><option>25</option><option>50</option><option>100</option>
       <option value="0">all</option>
@@ -21,38 +27,48 @@
 <div id="stats" hidden></div>
 
 <form id="add">
-  <input type="file" name="file" accept=".nzb" aria-label="nzb files" multiple required>
-  <input type="text" name="category" placeholder="category" aria-label="category" size="10">
-  <button type="submit" title="add the selected nzbs and start presenting them">Add</button>
-  <button type="button" id="inspect" title="show what the parser makes of the selected nzbs without adding them">Inspect</button>
+  <input type="file" name="file" accept=".nzb" aria-label="nzb files" data-hint="Nzb files to add, or drop them on the page" multiple required>
+  <input type="text" name="category" placeholder="category" aria-label="category" data-hint="category of the Nzb" size="10">
+  <button type="submit" data-hint="add the selected Nzbs">Add</button>
+  <button type="button" id="inspect" data-hint="show the contents of the selected Nzbs">Inspect</button>
 </form>
 
 <dialog id="inspect-dialog">
   <div id="inspect-head">
     <div id="inspect-title"></div>
-    <form method="dialog"><button aria-label="close" title="close">x</button></form>
+    <form method="dialog"><button aria-label="close" data-hint="close">x</button></form>
   </div>
   <div id="inspect-body"></div>
 </dialog>
 
-<h2>Queue <span class="count" data-for="queue"></span></h2>
+<h2>Queue <span class="count" data-for="queue" data-hint="Nzbs in progress"></span></h2>
 <table><thead><tr>
-  <th data-key="name">Name<th data-key="category">Category<th data-key="stage">Stage
-  <th data-key="bytes">Size<th data-key="cached">Cached
-  <th data-key="age">Age<th data-key="read">Read<th>
+  <th data-key="name" data-hint="name of the Nzb">Name
+  <th data-key="category" data-hint="category of the Nzb">Category
+  <th data-key="stage" data-hint="how far the Nzb got">Stage
+  <th data-key="bytes" data-hint="decoded size, ~ if estimated">Size
+  <th data-key="cached" data-hint="how much is cached on disk">Cached
+  <th data-key="age" data-hint="time since added">Age
+  <th data-key="read" data-hint="time since last read">Read
+  <th>
 </tr></thead><tbody id="queue"></tbody></table>
 <div class="pager" data-for="queue" hidden>
-  <span></span><button data-step="-1">Prev</button><button data-step="1">Next</button>
+  <span></span><button data-step="-1" data-hint="Previous Page">Prev</button><button data-step="1" data-hint="Next Page">Next</button>
 </div>
 
-<h2>History <span class="count" data-for="history"></span> <label id="show-archived"><input type="checkbox"> archived</label></h2>
+<h2>History <span class="count" data-for="history" data-hint="finished Nzbs"></span> <label id="show-archived" data-hint="show archived Nzbs"><input type="checkbox"> archived</label></h2>
 <table><thead><tr>
-  <th data-key="name">Name<th data-key="category">Category<th data-key="stage">Stage
-  <th data-key="bytes">Size<th data-key="cached">Cached
-  <th data-key="age">Age<th data-key="read">Read<th>
+  <th data-key="name" data-hint="name of the Nzb">Name
+  <th data-key="category" data-hint="category of the Nzb">Category
+  <th data-key="stage" data-hint="how far the Nzb got">Stage
+  <th data-key="bytes" data-hint="decoded size, ~ if estimated">Size
+  <th data-key="cached" data-hint="how much is cached on disk">Cached
+  <th data-key="age" data-hint="time since added">Age
+  <th data-key="read" data-hint="time since last read">Read
+  <th>
 </tr></thead><tbody id="history"></tbody></table>
 <div class="pager" data-for="history" hidden>
-  <span></span><button data-step="-1">Prev</button><button data-step="1">Next</button>
+  <span></span><button data-step="-1" data-hint="Previous Page">Prev</button><button data-step="1" data-hint="Next Page">Next</button>
 </div>
 
 <script src="/static/app.js"></script>

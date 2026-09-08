@@ -25,7 +25,7 @@ type Service interface {
 	NzbRaw(id string) ([]byte, error)
 	Queue() []nzbservice.QueueItem
 	History() []nzbservice.QueueItem
-	Files() map[string][]string
+	Files() map[string][]nzbservice.PresentedFile
 	Cancel(id string) error
 	Delete(id string) error
 	Archive(id string, archived bool) error

@@ -38,9 +38,30 @@ function setBreakable(node, value) {
 }
 
 // Icons are drawn inline rather than fetched, so they inherit the colour of the
-// text they sit in and cost no request. One 24-grid path each, stroked.
+// text they sit in and cost no request. One 24-grid path each.
 const icons = {
-  download: "M12 3v12m0 0 4-4m-4 4-4-4M5 20h14",
+  download: "M12 4v12m0 0 4-4m-4 4-4-4M5 20h14",
+  nzb: "M14 3H6v18h12V7zm0 0v4h4M12 11v6m0 0 2.5-2.5M12 17l-2.5-2.5",
+  add: "M12 5v14M5 12h14",
+  inspect: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14m5.5 12.5L21 21",
+  close: "M18 6 6 18M6 6l12 12",
+  prev: "m15 6-6 6 6 6",
+  next: "m9 6 6 6-6 6",
+  offline: "M12 4 2.5 20.5h19zM12 10v4m0 3.5h.01",
+  cancel: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M7 7l10 10",
+  delete: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6",
+  archive: "M4 4h16v5H4zM6 9v12h12V9M10 13h4",
+  restore: "M4 9h10a5 5 0 0 1 0 10H9M4 9l4-4M4 9l4 4",
+  folder: "M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z",
+  folderOpen: "M3 19V6a1 1 0 0 1 1-1h5l2 2h7a1 1 0 0 1 1 1v2M3 19l3-8h16l-3 8z",
+  file: "M14 3H6v18h12V7zm0 0v4h4",
+  video: "M4 5h16v14H4zm6 3.5 5 3.5-5 3.5z",
+  audio: "M9 17V5l10-2v12M9 17a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0m10-2a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0",
+  image: "M4 5h16v14H4zm0 11 4-4 3 3 3-3 6 6M9.5 9.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0",
+  text: "M14 3H6v18h12V7zm0 0v4h4M9 12h6M9 16h4",
+  stats: "M4 19h16M8 19v-6M13 19V6M18 19v-9",
+  recovery: "M12 3 5 6v6c0 4.2 3 6.9 7 8 4-1.1 7-3.8 7-8V6zM9.5 12l2 2 3.5-4",
+  show: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12m10-3a3 3 0 1 0 0 6 3 3 0 0 0 0-6",
 };
 
 function icon(name) {
@@ -59,18 +80,90 @@ function icon(name) {
   return svg;
 }
 
-function fileTree(paths, id) {
+// An action on a row is its icon
+function setAction(node, name, text) {
+  if (!node.firstElementChild) node.append(icon(name));
+  node.firstElementChild.firstElementChild.setAttribute("d", icons[name]);
+  node.dataset.act = name;
+  node.dataset.hint = text;
+  node.setAttribute("aria-label", text);
+}
+
+// One hint for the page
+const hint = document.createElement("div");
+hint.className = "hint";
+hint.popover = "manual";
+document.body.append(hint);
+
+let hinting = null;
+let hintTimer = 0;
+
+function showHint(node) {
+  if (node === hinting) return;
+  hinting = node;
+  clearTimeout(hintTimer);
+  // Moving from one action to the next never leaves the page, so the open hint
+  // is taken down here rather than by an event
+  const open = hint.matches(":popover-open");
+  if (open) hint.hidePopover();
+  if (!node) return;
+  // A control carrying no text cannot be read without its hint
+  const wait = node.textContent.trim() && !open ? 1000 : 0;
+  if (wait) hintTimer = setTimeout(() => drawHint(node), wait);
+  else drawHint(node);
+}
+
+function drawHint(node) {
+  setText(hint, node.dataset.hint);
+  hint.showPopover();
+  const box = node.getBoundingClientRect();
+  const room = hint.getBoundingClientRect();
+  // Under the anchor, unless the window ends first, and never past either edge
+  hint.style.top = (box.bottom + room.height + 8 > innerHeight ? box.top - room.height - 6 : box.bottom + 6) + "px";
+  hint.style.left = Math.min(Math.max(box.left + box.width / 2, room.width / 2 + 4), innerWidth - room.width / 2 - 4) + "px";
+}
+
+// Delegated, so an action rendered into a row later is hinted without wiring:
+// moving onto anything that is not hinted takes the hint down with it
+document.addEventListener("pointerover", (event) => showHint(event.target.closest("[data-hint]")));
+document.addEventListener("pointerleave", () => showHint(null));
+document.addEventListener("focusin", (event) => showHint(event.target.closest("[data-hint]")));
+document.addEventListener("focusout", () => showHint(null));
+
+// The chrome the page ships with is labelled here rather than in the html, so
+// every icon on the page comes out of the one set above. The close is the only
+// icon-only one: it was already a glyph rather than a word.
+for (const [selector, name] of [["#offline", "offline"], ["#add button[type=submit]", "add"], ["#inspect", "inspect"]]) {
+  document.querySelector(selector).prepend(icon(name));
+}
+document.querySelector("#inspect-head button").replaceChildren(icon("close"));
+
+function fileTree(files, id) {
   const root = new Map();
-  for (const fullPath of paths) {
-    const path = fullPath.startsWith(id + "/") ? fullPath.slice(id.length + 1) : fullPath;
+  for (const file of files) {
+    const path = file.path.startsWith(id + "/") ? file.path.slice(id.length + 1) : file.path;
     let node = root;
     for (const part of path.split("/").filter(Boolean)) {
       if (!node.has(part)) node.set(part, new Map());
       node = node.get(part);
     }
-    node.path = fullPath;
+    node.file = file;
   }
+  treeTotals(root);
   return root;
+}
+
+// A directory weighs what it holds, so a collapsed one still says how big it is
+function treeTotals(tree) {
+  let bytes = 0;
+  let exact = true;
+  for (const child of tree.values()) {
+    const total = child.size > 0 ? treeTotals(child) : child.file;
+    bytes += total.bytes;
+    exact = exact && total.exact;
+  }
+  tree.total = { bytes, exact };
+  return tree.total;
 }
 
 // Files are served over webdav, under the same origin as this page.
@@ -81,9 +174,114 @@ function webdavURL(path) {
 // Directories first, then names naturally ordered, so part2 follows part1.
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
+// A posted file reads by its name, except that recovery carries none of the
+// release and follows everything it can repair, rather than landing among the
+// volumes because a digit sorts before a letter.
+function byPostedName(a, b) {
+  return (fileIcon(a) === "recovery") - (fileIcon(b) === "recovery") || collator.compare(a, b);
+}
+
 function sortedEntries(tree) {
   return [...tree.entries()].sort(([aName, a], [bName, b]) =>
     (b.size > 0) - (a.size > 0) || collator.compare(aName, bName));
+}
+
+// The posting date of the nzb, which is what every file of it is stamped with.
+// A zero time is an nzb that posted no date and says nothing worth a column.
+const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" });
+
+function fileDate(file) {
+  const posted = new Date(file.date);
+  return posted.getFullYear() > 1 ? dateFormat.format(posted) : "";
+}
+
+// The icon says what a file is before its name is read. The extensions are the
+// ones a release carries; anything else is a page.
+const iconExtensions = {
+  video: ["mkv", "mp4", "avi", "m4v", "mov", "ts", "mpg", "mpeg", "wmv", "webm"],
+  audio: ["mp3", "flac", "m4a", "aac", "ogg", "wav"],
+  image: ["jpg", "jpeg", "png", "gif", "webp", "bmp"],
+  archive: ["rar", "zip", "7z", "tar", "gz"],
+  recovery: ["par2", "par"],
+  text: ["nfo", "txt", "srt", "sub", "idx", "sfv", "log", "md"],
+};
+const iconByExtension = new Map(Object.entries(iconExtensions)
+  .flatMap(([name, extensions]) => extensions.map((extension) => [extension, name])));
+
+function fileIcon(name) {
+  const extension = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+  // A continuation volume of a split set: rar's r00, zip's z01, 7z's 001
+  if (/^(r\d{2,3}|z\d{2}|\d{2,3})$/.test(extension)) return "archive";
+  return iconByExtension.get(extension) || "file";
+}
+
+function span(className) {
+  const node = document.createElement("span");
+  node.className = className;
+  return node;
+}
+
+// The icon of a row or a toggle, which says what it holds and whether it is open
+function setKind(node, name) {
+  node.querySelector(".kind").firstElementChild.setAttribute("d", icons[name]);
+}
+
+function kindIcon(name) {
+  const glyph = icon(name);
+  glyph.classList.add("kind");
+  return glyph;
+}
+
+// Every row carries the same columns, and nesting only moves its left edge, so
+// what is on the right lines up however deep the file sits.
+function treeRow(tag, kind, label) {
+  const row = document.createElement(tag);
+  row.className = "row";
+  row.dataset.kind = kind;
+  row.append(kindIcon(kind), span(label), span("col size"), span("col date"), span("row-actions"));
+  return row;
+}
+
+// A toggle names what its panel holds. It reads as pressed while the panel is
+// open, which is what says whether it is.
+function toggleButton(className, kind, hint) {
+  const button = document.createElement("button");
+  button.className = "files-toggle " + className;
+  button.dataset.hint = hint;
+  button.append(kindIcon(kind), span("label"));
+  return button;
+}
+
+function setOpen(button, open) {
+  button.dataset.open = open;
+  button.setAttribute("aria-pressed", open);
+}
+
+function createBranch() {
+  const item = document.createElement("li");
+  const details = document.createElement("details");
+  details.open = true;
+  const summary = treeRow("summary", "folderOpen", "label dir");
+  // The folder itself is the marker, so it is what opening the row changes
+  details.ontoggle = () => setKind(summary, details.open ? "folderOpen" : "folder");
+  summary.dataset.kind = "folder";
+  const children = document.createElement("ul");
+  details.append(summary, children);
+  item.append(details);
+  return item;
+}
+
+function createLeaf(name) {
+  const item = document.createElement("li");
+  const row = treeRow("div", fileIcon(name), "label file");
+  const link = document.createElement("a");
+  link.className = "act";
+  link.dataset.act = "download";
+  link.dataset.hint = "download this file";
+  link.append(icon("download"));
+  row.lastElementChild.append(link);
+  item.append(row);
+  return item;
 }
 
 function reconcileTree(list, tree, prefix = "") {
@@ -95,34 +293,21 @@ function reconcileTree(list, tree, prefix = "") {
     let item = existing.get(key);
     if (!item || (item.dataset.branch === "true") !== branch) {
       item?.remove();
-      item = document.createElement("li");
+      item = branch ? createBranch() : createLeaf(name);
       item.dataset.key = key;
       item.dataset.branch = branch;
-      if (branch) {
-        const details = document.createElement("details");
-        details.open = true;
-        const summary = document.createElement("summary");
-        summary.className = "dir";
-        const children = document.createElement("ul");
-        details.append(summary, children);
-        item.append(details);
-      } else {
-        const span = document.createElement("span");
-        span.className = "file";
-        const link = document.createElement("a");
-        link.className = "download";
-        link.append(icon("download"), "download");
-        item.append(span, link);
-      }
     }
     existing.delete(key);
+    const row = item.querySelector(".row");
+    setBreakable(row.querySelector(".label"), name);
     if (branch) {
-      setBreakable(item.querySelector("summary"), name);
+      setSize(row.querySelector(".size"), child.total.bytes, child.total.exact);
       reconcileTree(item.querySelector("ul"), child, key);
     } else {
-      setBreakable(item.firstElementChild, name);
-      const link = item.lastElementChild;
-      link.href = webdavURL(child.path);
+      setSize(row.querySelector(".size"), child.file.bytes, child.file.exact);
+      setText(row.querySelector(".date"), fileDate(child.file));
+      const link = row.querySelector("a.act");
+      link.href = webdavURL(child.file.path);
       link.download = name;
     }
     if (item !== position) list.insertBefore(item, position);
@@ -133,10 +318,10 @@ function reconcileTree(list, tree, prefix = "") {
 
 // The tree gets the full table width as a row of its own, and the toggle stays
 // under the name where it belongs - which a <details> spanning both cannot do.
-function updateFiles(row, paths, id) {
+function updateFiles(row, files, id) {
   const name = row.cells[0];
   let toggle = name.querySelector(".tree-toggle");
-  if (!paths.length) {
+  if (!files.length) {
     toggle?.remove();
     row.filesRow?.remove();
     row.filesRow = null;
@@ -155,19 +340,18 @@ function updateFiles(row, paths, id) {
     row.filesRow = filesRow;
   }
   if (!toggle) {
-    toggle = document.createElement("button");
-    toggle.className = "files-toggle tree-toggle";
-    toggle.title = "the files this nzb presents";
+    toggle = toggleButton("tree-toggle", "folder", "files this Nzb presents");
     toggle.onclick = () => {
       filesRow.hidden = !filesRow.hidden;
-      toggle.dataset.open = !filesRow.hidden;
+      setOpen(toggle, !filesRow.hidden);
+      setKind(toggle, filesRow.hidden ? "folder" : "folderOpen");
     };
-    toggle.dataset.open = !filesRow.hidden;
+    setOpen(toggle, !filesRow.hidden);
     name.querySelector(".toggles").append(toggle);
   }
   row.after(filesRow);
-  setText(toggle, paths.length + (paths.length === 1 ? " file" : " files"));
-  reconcileTree(filesRow.querySelector("ul"), fileTree(paths, id));
+  setText(toggle.lastElementChild, files.length + (files.length === 1 ? " file" : " files"));
+  reconcileTree(filesRow.querySelector("ul"), fileTree(files, id));
   return filesRow;
 }
 
@@ -191,25 +375,27 @@ function strip(stats) {
     // Nominal is everything added, active what of it was read within the window:
     // the cache has to hold the second, not the first
     ["library", [
-      ["nominal", (library.exact ? "" : "~") + size(library.bytes) + (library.max_bytes ? ` / ${size(library.max_bytes)}` : "")],
-      ["active", size(library.active), `distinct bytes read in the last ${window_}`],
+      ["nominal", (library.exact ? "" : "~") + size(library.bytes) + (library.max_bytes ? ` / ${size(library.max_bytes)}` : ""),
+        "decoded size of everything presented"],
+      ["active", size(library.active), `bytes read in the last ${window_}`],
     ]],
     ["cache", [
-      ["used", cache.max_bytes ? `${size(cache.bytes)} / ${size(cache.max_bytes)}` : size(cache.bytes)],
-      ["hit rate", reads ? percent(cache.hits, reads) : "-", "reads served from the cache since start"],
+      ["used", cache.max_bytes ? `${size(cache.bytes)} / ${size(cache.max_bytes)}` : size(cache.bytes),
+        "cached bytes on disk"],
+      ["hit rate", reads ? percent(cache.hits, reads) : "-", "reads served from cache"],
       // What the cache being smaller than the active library cost, which the
       // lifetime hit rate above cannot show once it has averaged out
-      ["refetched", size(cache.refetched), `active bytes downloaded again in the last ${window_}`],
+      ["refetched", size(cache.refetched), `bytes downloaded more than once in the last ${window_}`],
     ]],
     ["usenet", [
-      ["connections", `${stats.servers.conns} / ${stats.servers.max_conns}`, "connections open to the servers in rotation"],
-      ["in", rate("fetched", stats.servers.fetched), "bytes being downloaded from the servers"],
-      ["downloaded", size(stats.servers.fetched), "downloaded since start"],
+      ["connections", `${stats.servers.conns} / ${stats.servers.max_conns}`, "open server connections"],
+      ["in", rate("fetched", stats.servers.fetched), "download rate"],
+      ["downloaded", size(stats.servers.fetched), "total downloaded"],
     ]],
     ["i/o", [
-      ["open files", io.open, "files clients are holding open right now"],
-      ["out", rate("served", io.served), "bytes being handed to clients"],
-      ["served", size(io.served), "bytes handed to clients since start"],
+      ["open files", io.open, "files clients have open"],
+      ["out", rate("served", io.served), "rate served to clients"],
+      ["served", size(io.served), "total served to clients"],
     ]],
   ];
 
@@ -221,7 +407,7 @@ function strip(stats) {
     bubble.append(name);
     for (const [label, value, hint] of values) {
       const entry = document.createElement("span");
-      if (hint) entry.title = hint;
+      if (hint) entry.dataset.hint = hint;
       entry.append(label);
       const number = document.createElement("strong");
       if (String(value).endsWith("/s")) number.className = "rate";
@@ -278,24 +464,34 @@ function cell(row, text, tag = "td") {
   row.append(cell);
 }
 
-// The unit is its own box of a fixed width, so what lines up down the column is
-// the number rather than the B of whichever unit each row happened to reach.
+// The number sits in a box of a fixed width, so what lines up down a column is
+// the digits rather than the B of whichever unit each row happened to reach. The
+// unit follows it directly, closer than any two columns are to each other.
 function setSize(node, bytes, exact = true) {
   const [number, unit] = sizeParts(bytes);
   let suffix = node.querySelector(":scope > .unit");
   if (!suffix) {
-    suffix = document.createElement("span");
-    suffix.className = "unit";
-    node.replaceChildren(document.createTextNode(""), suffix);
+    node.replaceChildren(span("num"), span("unit"));
+    suffix = node.lastElementChild;
   }
-  const text = (exact ? "" : "~") + number;
-  if (node.firstChild.nodeValue !== text) node.firstChild.nodeValue = text;
+  setText(node.firstElementChild, (exact ? "" : "~") + number);
   setText(suffix, unit);
 }
 
 function sizeCell(row, bytes, exact = true) {
   cell(row, "");
   setSize(row.lastElementChild, bytes, exact);
+}
+
+// A posted file is read the same way here as in the tree: what it is, then its
+// name.
+function nameCell(row, name) {
+  const cell = row.insertCell();
+  cell.dataset.kind = fileIcon(name);
+  const label = span("label");
+  setBreakable(label, name);
+  cell.append(kindIcon(cell.dataset.kind), label);
+  return cell;
 }
 
 function renderInfo(target, data) {
@@ -310,16 +506,16 @@ function renderInfo(target, data) {
   const table = document.createElement("table");
   table.className = "info-files";
   const head = table.createTHead().insertRow();
-  for (const [label, span] of [["Posted file", 1], ["Size", 1], ["Cached", 2], ["Segments", 2], ["Read", 1]]) {
+  for (const [label, wide] of [["Posted file", 1], ["Size", 1], ["Cached", 2], ["Segments", 2], ["Read", 1]]) {
     cell(head, label, "th");
-    head.lastElementChild.colSpan = span;
+    head.lastElementChild.colSpan = wide;
   }
   // The order an nzb lists its files in is the posters, so vol03 lands before
   // vol01. The tree reads in name order and so does this.
   const body = table.createTBody();
-  for (const file of data.files.slice().sort((a, b) => collator.compare(a.name, b.name))) {
+  for (const file of data.files.slice().sort((a, b) => byPostedName(a.name, b.name))) {
     const row = body.insertRow();
-    setBreakable(row.insertCell(), file.name);
+    nameCell(row, file.name);
     sizeCell(row, file.bytes, file.exact);
     sizeCell(row, file.cached_bytes);
     cell(row, `(${percent(file.cached_bytes, file.bytes)})`);
@@ -345,8 +541,16 @@ async function loadInfo(id, infoRow) {
 
 // The panel costs a lookup per segment of one nzb, so it follows the poll while
 // it is open and nothing at all while it is not.
-function updateInfo(row, item) {
+function updateInfo(row, item, presented) {
   let infoRow = row.infoRow;
+  // The panel is what is cached of a presented tree, so a record that got as far
+  // as presenting nothing has none: an add that failed or was cancelled
+  if (!presented) {
+    row.cells[0].querySelector(".stats-toggle")?.remove();
+    infoRow?.remove();
+    row.infoRow = null;
+    return row;
+  }
   if (!infoRow) {
     infoRow = document.createElement("tr");
     infoRow.className = "info";
@@ -354,14 +558,12 @@ function updateInfo(row, item) {
     infoRow.insertCell().colSpan = cols;
     row.infoRow = infoRow;
 
-    const toggle = document.createElement("button");
-    toggle.className = "files-toggle stats-toggle";
-    toggle.textContent = "stats";
-    toggle.title = "what of this nzb is cached, per posted file";
-    toggle.dataset.open = "false";
+    const toggle = toggleButton("stats-toggle", "stats", "cached bytes per posted file");
+    toggle.lastElementChild.textContent = "stats";
+    setOpen(toggle, false);
     toggle.onclick = () => {
       infoRow.hidden = !infoRow.hidden;
-      toggle.dataset.open = !infoRow.hidden;
+      setOpen(toggle, !infoRow.hidden);
       if (!infoRow.hidden) loadInfo(row.dataset.id, infoRow);
     };
     row.cells[0].querySelector(".toggles").append(toggle);
@@ -372,6 +574,8 @@ function updateInfo(row, item) {
 }
 
 function removeRow(row) {
+  // A row taken away under the pointer would otherwise leave its hint standing
+  if (row.contains(hinting)) showHint(null);
   row.infoRow?.remove();
   row.filesRow?.remove();
   row.remove();
@@ -386,15 +590,6 @@ function createRow(id, action) {
   title.className = "title";
   const toggles = document.createElement("div");
   toggles.className = "toggles";
-  // What was added rather than what came of it, so it is offered whatever state
-  // the row is in
-  const nzb = document.createElement("a");
-  nzb.className = "download";
-  nzb.append(icon("download"), "nzb");
-  nzb.title = "download the nzb this was added from";
-  nzb.href = "/api/nzb/file?id=" + encodeURIComponent(id);
-  nzb.download = id + ".nzb";
-  toggles.append(nzb);
   const inner = document.createElement("div");
   inner.className = "name-cell";
   inner.append(title, toggles);
@@ -406,23 +601,33 @@ function createRow(id, action) {
   bar.className = "bar";
   bar.append(document.createElement("div"));
   row.cells[2].append(document.createElement("span"), bar, document.createElement("small"));
-  const cachedShare = document.createElement("div");
-  cachedShare.className = "share";
-  row.cells[4].append(document.createElement("div"), cachedShare);
+  // The share is under the size and as wide as it needs, so it grows leftwards
+  // under the number rather than pushing the column
+  const stack = span("stack");
+  stack.append(document.createElement("div"), span("share"));
+  row.cells[4].append(stack);
+  // Everything that acts on the nzb sits together in the last column
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const nzb = document.createElement("a");
+  nzb.className = "act";
+  setAction(nzb, "nzb", "download the Nzb");
+  nzb.href = "/api/nzb/file?id=" + encodeURIComponent(id);
+  nzb.download = id + ".nzb";
+  actions.append(nzb);
   if (action === "delete") {
     const archive = document.createElement("button");
-    archive.className = "archive";
-    archive.title = "hide this from the default listing; the files stay presented";
-    row.cells[7].append(archive);
+    archive.className = "act archive";
+    actions.append(archive);
   }
   const button = document.createElement("button");
-  button.className = action === "cancel" ? "" : "danger";
-  button.textContent = action === "cancel" ? "Cancel" : "Delete";
-  button.title = action === "cancel"
-    ? "stop this add and take it off the queue"
-    : "take this off the mount and drop what it cached";
+  button.className = "act";
+  setAction(button, action, action === "cancel"
+    ? "cancel the add"
+    : "delete, stops presenting the files");
   button.onclick = () => remove(id, action, button);
-  row.cells[7].append(button);
+  actions.append(button);
+  row.cells[7].append(actions);
   return row;
 }
 
@@ -463,7 +668,9 @@ function render(tbody, items, action, files = {}) {
     const archive = tr.cells[7].querySelector(".archive");
     if (archive) {
       const next = item.archived ? "restore" : "archive";
-      setText(archive, item.archived ? "Restore" : "Archive");
+      setAction(archive, next, item.archived
+        ? "restore to the list"
+        : "archive, hides it from the list");
       archive.onclick = () => remove(item.id, next, archive);
     }
     setText(tr.cells[1], item.category || "");
@@ -472,15 +679,19 @@ function render(tbody, items, action, files = {}) {
     setText(stage, stageLabels[item.stage] || item.stage);
     renderProgress(tr.cells[2], item);
     setSize(tr.cells[3], item.bytes, item.bytes_exact);
-    if (item.cached) setSize(tr.cells[4].firstElementChild, item.cached);
-    else setText(tr.cells[4].firstElementChild, "-");
-    setText(tr.cells[4].lastElementChild,
+    const cached = tr.cells[4].firstElementChild;
+    if (item.cached) setSize(cached.firstElementChild, item.cached);
+    else setText(cached.firstElementChild, "-");
+    setText(cached.lastElementChild,
       item.cached && item.bytes ? `(${percent(item.cached, item.bytes)})` : "");
     setText(tr.cells[5], age(item.added));
     setText(tr.cells[6], item.read ? age(item.read) : "-");
     if (tr !== position) tbody.insertBefore(tr, position);
-    if (action === "delete") updateFiles(tr, files[item.id] || [], item.id);
-    position = updateInfo(tr, item).nextElementSibling;
+    // A queue row presents as it builds, so it is only history that can be done
+    // and have nothing
+    const presented = files[item.id] || [];
+    if (action === "delete") updateFiles(tr, presented, item.id);
+    position = updateInfo(tr, item, action === "cancel" || presented.length > 0).nextElementSibling;
   }
   for (const row of existing.values()) removeRow(row);
 }
@@ -517,6 +728,10 @@ perPage.onchange = () => {
 };
 
 for (const button of document.querySelectorAll(".pager button")) {
+  // The chevron points the way the page moves, so it leads going back and
+  // follows going on
+  const back = Number(button.dataset.step) < 0;
+  button[back ? "prepend" : "append"](icon(back ? "prev" : "next"));
   button.onclick = () => {
     pages[button.closest(".pager").dataset.for] += Number(button.dataset.step);
     poll();
@@ -680,7 +895,7 @@ function renderInspect(head, target, file, data) {
   summary.textContent = `${data.files.length} posted files, ${data.segments} segments,`
     + ` ${estimated(data.bytes, data.exact)} from ${size(data.wire)} on the wire`
     + ` (${conventions[data.convention] || data.convention})`;
-  summary.title = "what a segment's bytes-attribute counts decides the sizes above";
+  summary.dataset.hint = "which size convention the numbers above use";
   head.append(heading, summary);
 
   for (const [kind, list] of [["error", data.errors], ["warning", data.warnings]]) {
@@ -705,7 +920,7 @@ function renderInspect(head, target, file, data) {
       if (/password/i.test(key)) {
         const reveal = document.createElement("button");
         reveal.className = "reveal";
-        reveal.textContent = "show";
+        reveal.append(icon("show"), "show");
         reveal.onclick = () => setBreakable(shown, value);
         shown.append(reveal);
       } else {
@@ -718,22 +933,21 @@ function renderInspect(head, target, file, data) {
   const table = document.createElement("table");
   table.className = "info-files";
   const header = table.createTHead().insertRow();
-  for (const [label, hint] of [["Posted file"], ["Size", "what it decodes to, which is what the file presents as"],
-    ["Wire", "what the nzb says is posted, yEnc overhead included"], ["Segments"], ["Date"]]) {
+  for (const [label, hint] of [["Posted file"], ["Size", "decoded size"],
+  ["Wire", "posted size, yEnc overhead included"], ["Segments"], ["Date"]]) {
     cell(header, label, "th");
-    if (hint) header.lastElementChild.title = hint;
+    if (hint) header.lastElementChild.dataset.hint = hint;
   }
   const body = table.createTBody();
-  for (const posted of data.files.slice().sort((a, b) => collator.compare(a.filename, b.filename))) {
+  for (const posted of data.files.slice().sort((a, b) => byPostedName(a.filename, b.filename))) {
     const row = body.insertRow();
     // The subject, the poster and the groups are what the name was read out of:
     // under it, since they are rarely what is being looked for
-    const name = row.insertCell();
+    const name = nameCell(row, posted.filename || posted.subject);
     const detail = document.createElement("small");
     detail.textContent = [posted.encoding, posted.poster, (posted.groups || []).join(", ")]
       .filter(Boolean).join(" - ");
-    detail.title = posted.subject;
-    setBreakable(name, posted.filename || posted.subject);
+    detail.dataset.hint = posted.subject;
     name.append(detail);
     sizeCell(row, posted.bytes, posted.exact);
     sizeCell(row, posted.wire);
@@ -746,6 +960,16 @@ function renderInspect(head, target, file, data) {
 }
 
 const inspectDialog = document.getElementById("inspect-dialog");
+
+// The backdrop reports the dialog as its target, so a click only dismisses when
+// it also landed outside the box the dialog draws
+inspectDialog.onclick = (event) => {
+  if (event.target !== inspectDialog) return;
+  const box = inspectDialog.getBoundingClientRect();
+  const inside = event.clientX >= box.left && event.clientX <= box.right &&
+    event.clientY >= box.top && event.clientY <= box.bottom;
+  if (!inside) inspectDialog.close();
+};
 
 document.getElementById("inspect").onclick = async () => {
   const form = document.getElementById("add");

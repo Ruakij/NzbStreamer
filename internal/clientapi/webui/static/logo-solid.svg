@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="3.25 3.25 25.5 25.5" width="1024" height="1024" role="img" aria-label="NzbStreamer">
+  <style>
+    :root { color-scheme: light dark }
+    rect { fill: light-dark(#0b62f0, #5aa8ff) }
+    .mid { fill: light-dark(#0f8fe0, #48c8f5) }
+    .far { fill: light-dark(#12c2d6, #35e6e6) }
+  </style>
+  <rect class="far" x="7.5"   y="5"     width="11"  height="3" rx="1.5"/>
+
+  <rect class="mid" x="5.75"  y="9.75"  width="10.5" height="3" rx="1.5"/>
+  <rect class="mid" x="17.75" y="9.75"  width="6.5"  height="3" rx="1.5"/>
+
+  <rect             x="4.25"  y="14.5"  width="7"   height="3" rx="1.5"/>
+  <rect             x="12.75" y="14.5"  width="6"   height="3" rx="1.5"/>
+  <rect             x="20.25" y="14.5"  width="7.5" height="3" rx="1.5"/>
+
+  <rect class="mid" x="6.25"  y="19.25" width="7.5" height="3" rx="1.5"/>
+  <rect class="mid" x="15.25" y="19.25" width="5.5" height="3" rx="1.5"/>
+
+  <rect class="far" x="8"     y="24"    width="8.5" height="3" rx="1.5"/>
+</svg>
