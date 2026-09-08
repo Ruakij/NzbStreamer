@@ -145,12 +145,22 @@ function strip(stats) {
 
   const cache = stats.cache;
   const reads = cache.hits + cache.misses;
+  const library = stats.library || {};
+  const activeWindow = duration(library.window || 0);
   const groups = [
+    // Nominal is everything added, active what of it was read within the window:
+    // the cache has to hold the second, not the first
+    ["library", [
+      ["nominal", (library.exact ? "" : "~") + size(library.bytes) + (library.max_bytes ? ` / ${size(library.max_bytes)}` : "")],
+      [`active ${activeWindow}`, size(library.active)],
+    ]],
     ["cache", [
       ["used", cache.max_bytes ? `${size(cache.bytes)} / ${size(cache.max_bytes)}` : size(cache.bytes)],
       ["segments", cache.items],
       ["hit rate", reads ? percent(cache.hits, reads) : "-"],
-      ["evictions", cache.evictions],
+      // What the cache being smaller than the active library cost, which the
+      // lifetime hit rate above cannot show once it has averaged out
+      [`refetched ${activeWindow}`, size(cache.refetched)],
     ]],
     ["usenet", [["servers up", `${stats.servers.up} / ${stats.servers.total}`]]],
   ];

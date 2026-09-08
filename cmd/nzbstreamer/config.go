@@ -88,6 +88,11 @@ type CacheConfig struct {
 	MaxSize Bytes  `env:"CACHE_MAX_SIZE, default=0"`  // Maximum cache size, if unset allows unlimited size (not recommended)
 }
 
+type LibraryConfig struct {
+	MaxBytes     Bytes         `env:"LIBRARY_MAX_BYTES, default=0"`        // Nominal size the library may reach before adds are refused; 0 is unlimited. The nominal size is what every nzb added describes, not what is on disk, so this is what bounds how far the library is overprovisioned against CACHE_MAX_SIZE
+	ActiveWindow time.Duration `env:"LIBRARY_ACTIVE_WINDOW, default=168h"` // How far back a read counts towards the active library, which is the working set a cache would have to hold to serve it without fetching the same bytes twice
+}
+
 type MetadataConfig struct {
 	Path string `env:"METADATA_PATH, default=.metadata/metadata.db"` // Path for the metadata database; WAL puts two sibling files next to it
 }
@@ -142,6 +147,7 @@ type Config struct {
 	Webdav        WebdavConfig
 	Sabnzbd       SabnzbdConfig
 	Cache         CacheConfig
+	Library       LibraryConfig
 	Metadata      MetadataConfig
 	Readahead     ReadaheadConfig
 	NzbConfig     NzbConfig

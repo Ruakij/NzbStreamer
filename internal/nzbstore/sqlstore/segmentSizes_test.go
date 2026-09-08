@@ -71,7 +71,7 @@ func TestSegmentActivityCountsWhatWasReadAndWhatWasFetchedTwice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SegmentActivitySince: %v", err)
 	}
-	if activity.WorkingSet != 1000 || activity.Refetched != 700 || activity.Thrashing != 0 {
+	if activity.WorkingSet != 1000 || activity.Refetched != 700 {
 		t.Errorf("activity: got %+v, want a working set of 1000 with 700 refetched", activity)
 	}
 

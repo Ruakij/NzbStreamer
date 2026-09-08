@@ -63,6 +63,9 @@ type Service struct {
 	// slots bounds the trees being built at once, whether by an add or by a
 	// restore; the ones it holds back sit in the queue as what they are
 	slots addSlots
+	// Read on every add and written once, so it is not another thing the queue
+	// lock covers
+	maxLibraryBytes atomic.Int64
 
 	// How fast the news servers are answering, which is what the work an item
 	// has left is turned into a time with. nil until a pool is wired to it

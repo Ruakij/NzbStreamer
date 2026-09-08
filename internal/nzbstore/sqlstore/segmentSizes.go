@@ -211,10 +211,8 @@ type SegmentActivity struct {
 	// is the size a cache would have to have to hold all of them
 	WorkingSet int64
 	// Refetched is the bytes among them that had to be downloaded again, which
-	// is what the cache being smaller than the working set cost
+	// a cache with room for the whole working set would have served instead
 	Refetched int64
-	// Thrashing counts the segments fetched more than twice over their lifetime
-	Thrashing int64
 }
 
 // SegmentActivitySince measures the reads since a point in time. It scans the
@@ -223,11 +221,10 @@ func (s *Store) SegmentActivitySince(since time.Time) (SegmentActivity, error) {
 	var a SegmentActivity
 	err := s.db.QueryRow(
 		"SELECT coalesce(sum(size), 0),"+
-			" coalesce(sum(CASE WHEN fetches > 1 AND fetched_at > ?1 THEN size END), 0),"+
-			" count(CASE WHEN fetches > 2 THEN 1 END)"+
+			" coalesce(sum(CASE WHEN fetches > 1 AND fetched_at > ?1 THEN size END), 0)"+
 			" FROM segment WHERE read_at > ?1",
 		since.Unix(),
-	).Scan(&a.WorkingSet, &a.Refetched, &a.Thrashing)
+	).Scan(&a.WorkingSet, &a.Refetched)
 	if err != nil {
 		return SegmentActivity{}, fmt.Errorf("failed measuring segment activity: %w", err)
 	}

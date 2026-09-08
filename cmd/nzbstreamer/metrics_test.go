@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore/sqlstore"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/service/nzbservice"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
 )
 
@@ -27,7 +29,15 @@ func TestMetricsServeWhatTheCacheHolds(t *testing.T) {
 		t.Fatalf("failed storing: %v", err)
 	}
 
-	handler, err := setupMetrics(cache)
+	library := newLibraryMeter(
+		func() nzbservice.Library { return nzbservice.Library{Nzbs: 2, Bytes: 4096} },
+		func(time.Time) (sqlstore.SegmentActivity, error) {
+			return sqlstore.SegmentActivity{WorkingSet: 1024}, nil
+		},
+		time.Hour,
+	)
+
+	handler, err := setupMetrics(cache, library)
 	if err != nil {
 		t.Fatalf("failed setting up metrics: %v", err)
 	}
@@ -36,7 +46,10 @@ func TestMetricsServeWhatTheCacheHolds(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
 	body := recorder.Body.String()
-	for _, want := range []string{`cache_items{[^}]*} 1`, `cache_bytes{[^}]*} 7`} {
+	for _, want := range []string{
+		`cache_items{[^}]*} 1`, `cache_bytes{[^}]*} 7`,
+		`library_bytes{[^}]*} 4096`, `library_active_bytes{[^}]*} 1024`,
+	} {
 		if !regexp.MustCompile(want).MatchString(body) {
 			t.Errorf("metrics do not report %q:\n%s", want, body)
 		}

@@ -207,6 +207,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager, c Config) {
 	service.SetExactSizeClasses(exactSizeClasses)
 	service.SetConcurrency(c.NzbConfig.Concurrency)
 	service.SetRate(nntpPool.Rate)
+	service.SetMaxLibraryBytes(int64(c.Library.MaxBytes))
 	service.SetTreeKey(treeKey(c))
 
 	// Mount before the service restores its tree: an inode only takes children
@@ -252,7 +253,9 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager, c Config) {
 		}
 	}
 
-	metrics, err := setupMetrics(segmentCache)
+	library := newLibraryMeter(service.Library, store.SegmentActivitySince, c.Library.ActiveWindow)
+
+	metrics, err := setupMetrics(segmentCache, library)
 	if err != nil {
 		slog.Error("Metrics setup failed", "error", err)
 		os.Exit(1)
@@ -260,8 +263,8 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager, c Config) {
 
 	db := watchDB(ctx, store.Ping)
 
-	ui := webui.NewHandler(service, healthComponents(c, db, segmentCache, mount, nntpPool, service)...)
-	ui.Stats = pageStats(segmentCache, nntpPool, service)
+	ui := webui.NewHandler(service, healthComponents(c, db, segmentCache, mount, nntpPool, service, library)...)
+	ui.Stats = pageStats(segmentCache, nntpPool, service, library)
 	ui.NzbStats = nzbStats(segmentCache, service)
 	ui.Live = db.alive
 

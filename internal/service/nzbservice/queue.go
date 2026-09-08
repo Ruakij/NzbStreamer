@@ -10,6 +10,7 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbfileanalyzer"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/bytesize"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
 
@@ -279,6 +280,16 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 	}
 
 	bytes, bytesExact := totalBytes(nzbData)
+
+	// Checked against what the library already holds rather than against the
+	// cache: what is on disk is bounded by the cache itself, while the library
+	// growing past what the cache can keep warm is what nothing else stops
+	if lib := s.library(); lib.MaxBytes > 0 && lib.Bytes+bytes > lib.MaxBytes {
+		s.queueMutex.Unlock()
+		return fmt.Errorf("%w: %s would take it to %s of %s", ErrLibraryFull,
+			nzbData.MetaName, bytesize.Bytes(lib.Bytes+bytes), bytesize.Bytes(lib.MaxBytes))
+	}
+
 	probeOps, buildOps := s.plannedOps(nzbData)
 	ctx, cancel := context.WithCancel(context.Background())
 	s.queue = append(s.queue, &QueueItem{

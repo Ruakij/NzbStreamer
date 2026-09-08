@@ -19,8 +19,31 @@ import (
 // news servers - with all of them unreachable the library still lists and the
 // cache still serves, and depooling or restarting a singleton over a provider
 // outage makes each of those worse.
-func healthComponents(c Config, db *dbWatchdog, cache *diskcache.Cache, mount *fusemount.FileSystem, pool *nntpclient.Pool, service *nzbservice.Service) []webui.Component {
+func healthComponents(c Config, db *dbWatchdog, cache *diskcache.Cache, mount *fusemount.FileSystem, pool *nntpclient.Pool, service *nzbservice.Service, library *libraryMeter) []webui.Component {
 	return []webui.Component{
+		// A full library serves everything it already holds and refuses what
+		// would be added to it, which is a reason to look rather than to take the
+		// process out of rotation
+		{Name: "library", Gates: false, Health: func() webui.Status {
+			stats := library.read()
+			details := map[string]any{
+				"nzbs":   stats.Nzbs,
+				"bytes":  bytesize.Bytes(stats.Bytes).String(),
+				"active": bytesize.Bytes(stats.WorkingSet).String(),
+				"window": stats.Window.String(),
+			}
+			if stats.MaxBytes > 0 {
+				details["max_bytes"] = bytesize.Bytes(stats.MaxBytes).String()
+			}
+
+			if stats.Full() {
+				details["error"] = "library is full, further nzbs are refused"
+				return webui.Status{Status: webui.StatusDegraded, Details: details}
+			}
+
+			return webui.Status{Status: webui.StatusUp, Details: details}
+		}},
+
 		{Name: "metadata-db", Gates: true, Health: func() webui.Status {
 			nzbs, err, since := db.state()
 			if err != nil {

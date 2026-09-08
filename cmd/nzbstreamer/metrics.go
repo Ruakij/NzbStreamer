@@ -19,7 +19,7 @@ import (
 // returns the handler that serves what it holds. This is the only place that
 // knows an exporter exists; until it runs, the instruments the packages declare
 // are the no-op the global provider hands out.
-func setupMetrics(cache *diskcache.Cache) (http.Handler, error) {
+func setupMetrics(cache *diskcache.Cache, library *libraryMeter) (http.Handler, error) {
 	exporter, err := prometheus.New()
 	if err != nil {
 		return nil, fmt.Errorf("failed creating the prometheus exporter: %w", err)
@@ -30,8 +30,59 @@ func setupMetrics(cache *diskcache.Cache) (http.Handler, error) {
 	if err := observeCache(cache); err != nil {
 		return nil, err
 	}
+	if err := observeLibrary(library); err != nil {
+		return nil, err
+	}
 
 	return promhttp.Handler(), nil
+}
+
+// observeLibrary reports what has been added against what of it is read. Both
+// are gauges: the active bytes are the distinct segments of a window and do not
+// add up over time, and the nominal size falls when an nzb is deleted.
+func observeLibrary(library *libraryMeter) error {
+	meter := otel.Meter("cmd/nzbstreamer")
+
+	var errs []error
+	gauge := func(name string, opts ...metric.Int64ObservableGaugeOption) metric.Int64ObservableGauge {
+		instrument, err := meter.Int64ObservableGauge(name, opts...)
+		errs = append(errs, err)
+		return instrument
+	}
+
+	nzbs := gauge("library.nzbs", metric.WithDescription("Nzbs presented"))
+	bytes := gauge("library.bytes",
+		metric.WithDescription("Bytes the presented nzbs describe, cached or not"),
+		metric.WithUnit("By"))
+	maxBytes := gauge("library.max_bytes",
+		metric.WithDescription("Bytes the library may describe before adds are refused; 0 is unlimited"),
+		metric.WithUnit("By"))
+	activeBytes := gauge("library.active_bytes",
+		metric.WithDescription("Bytes of the distinct segments read within LIBRARY_ACTIVE_WINDOW, which is what the cache would have to hold to serve them without a refetch"),
+		metric.WithUnit("By"))
+	refetchedBytes := gauge("cache.refetched_bytes",
+		metric.WithDescription("Bytes of the active library that had to be downloaded again within the window, which a cache with room for all of it would have served"),
+		metric.WithUnit("By"))
+
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("failed creating the library instruments: %w", err)
+	}
+
+	_, err := meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
+		stats := library.read()
+
+		observer.ObserveInt64(nzbs, int64(stats.Nzbs))
+		observer.ObserveInt64(bytes, stats.Bytes)
+		observer.ObserveInt64(maxBytes, stats.MaxBytes)
+		observer.ObserveInt64(activeBytes, stats.WorkingSet)
+		observer.ObserveInt64(refetchedBytes, stats.Refetched)
+		return nil
+	}, nzbs, bytes, maxBytes, activeBytes, refetchedBytes)
+	if err != nil {
+		return fmt.Errorf("failed registering the library metrics callback: %w", err)
+	}
+
+	return nil
 }
 
 // observeCache reads the numbers the cache keeps for its own eviction, at

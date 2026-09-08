@@ -12,9 +12,10 @@ import (
 // pageStats is what the strip on the page reports, plus what each row holds in
 // the cache. Per-nzb numbers are the reason this is not on /metrics: a label per
 // nzb is cardinality that grows with the library.
-func pageStats(cache *diskcache.Cache, pool *nntpclient.Pool, service *nzbservice.Service) func() any {
+func pageStats(cache *diskcache.Cache, pool *nntpclient.Pool, service *nzbservice.Service, library *libraryMeter) func() any {
 	return func() any {
 		stats := cache.Stats()
+		lib := library.read()
 
 		up := 0
 		servers := pool.Health()
@@ -48,6 +49,15 @@ func pageStats(cache *diskcache.Cache, pool *nntpclient.Pool, service *nzbservic
 				"hits":      stats.Hits,
 				"misses":    stats.Misses,
 				"evictions": stats.Evictions,
+				"refetched": lib.Refetched,
+			},
+			"library": map[string]any{
+				"nzbs":      lib.Nzbs,
+				"bytes":     lib.Bytes,
+				"exact":     lib.Exact,
+				"max_bytes": lib.MaxBytes,
+				"active":    lib.WorkingSet,
+				"window":    int(lib.Window.Seconds()),
 			},
 			"servers": map[string]any{"up": up, "total": len(servers)},
 			"cached":  cached,
