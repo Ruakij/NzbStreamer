@@ -291,10 +291,17 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 // addNzb builds the tree for an nzb. isNew separates an add from restoring what
 // the store already holds.
 func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
+	started := time.Now()
+
 	release := s.acquireAdd()
 	defer release()
 
 	slog.Debug("Adding nzb", "MetaName", nzbData.MetaName)
+
+	defer func() {
+		slog.Debug("Add done", "MetaName", nzbData.MetaName, "error", err,
+			"took", time.Since(started).Truncate(time.Millisecond))
+	}()
 
 	s.mutex.Lock()
 	if _, exists := s.nzbFiledata[nzbData.MetaName]; exists {
