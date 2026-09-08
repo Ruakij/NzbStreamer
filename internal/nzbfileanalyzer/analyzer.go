@@ -39,6 +39,7 @@ func (c SizeConvention) String() string {
 // 1024, which a yEnc-encoded length essentially never is, so a hint landing on
 // one of them identifies the convention.
 var knownSizes = []int{
+	512000,
 	655360,
 	716800,
 	768000,

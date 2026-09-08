@@ -60,19 +60,27 @@ func TestWireConventionResolvesEveryFullSegment(t *testing.T) {
 	}
 }
 
-// Hints from a real nzb of 655360-byte segments, which without that size known
+// Hints taken from real nzbs, each of a segment size that without being known
 // would have cost an add a probe.
-func TestWireConventionResolves640KiBSegments(t *testing.T) {
-	hints := []int{676284, 676267, 676270, 676233, 676281, 676673}
-	sizer := NewSegmentSizer(nzbWith(hints...))
-
-	if sizer.Convention() != ConventionWire {
-		t.Fatalf("convention = %v, want ConventionWire", sizer.Convention())
+func TestWireConventionResolvesRealSegmentSizes(t *testing.T) {
+	tests := []struct {
+		want  int
+		hints []int
+	}{
+		{512000, []int{528382, 528399, 528395, 528380, 528387, 528366}},
+		{655360, []int{676284, 676267, 676270, 676233, 676281, 676673}},
 	}
-	for _, hint := range hints {
-		size, exact := sizer.Size(hint)
-		if size != 655360 || !exact {
-			t.Errorf("Size(%d) = %d, %v; want 655360, true", hint, size, exact)
+
+	for _, test := range tests {
+		sizer := NewSegmentSizer(nzbWith(test.hints...))
+		if sizer.Convention() != ConventionWire {
+			t.Fatalf("convention of %d-byte segments = %v, want ConventionWire", test.want, sizer.Convention())
+		}
+		for _, hint := range test.hints {
+			size, exact := sizer.Size(hint)
+			if size != test.want || !exact {
+				t.Errorf("Size(%d) = %d, %v; want %d, true", hint, size, exact, test.want)
+			}
 		}
 	}
 }
