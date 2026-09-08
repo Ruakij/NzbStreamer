@@ -79,11 +79,11 @@ func (w *dbWatchdog) check(ctx context.Context) {
 }
 
 // state is the last answer and how long it has been since there was a good one.
-func (w *dbWatchdog) state() (nzbs int, err error, since time.Duration) {
+func (w *dbWatchdog) state() (nzbs int, since time.Duration, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	return w.nzbs, w.err, time.Since(w.answered)
+	return w.nzbs, time.Since(w.answered), w.err
 }
 
 // alive is what a liveness probe reads: a database that has not answered for
@@ -91,6 +91,6 @@ func (w *dbWatchdog) state() (nzbs int, err error, since time.Duration) {
 // nothing it presents can be read and nothing new can be added - so being
 // restarted is the only thing left that helps.
 func (w *dbWatchdog) alive() bool {
-	_, err, since := w.state()
+	_, since, err := w.state()
 	return err == nil || since < dbDeadAfter
 }

@@ -45,7 +45,7 @@ func healthComponents(c Config, db *dbWatchdog, cache *diskcache.Cache, mount *f
 		}},
 
 		{Name: "metadata-db", Gates: true, Health: func() webui.Status {
-			nzbs, err, since := db.state()
+			nzbs, since, err := db.state()
 			if err != nil {
 				return webui.Status{Status: webui.StatusDown, Details: map[string]any{
 					"path":           c.Metadata.Path,
