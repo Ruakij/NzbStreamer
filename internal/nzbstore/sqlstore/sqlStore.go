@@ -3,6 +3,7 @@ package sqlstore
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"embed"
 	"errors"
@@ -99,9 +100,11 @@ func (s *Store) Close() error {
 
 // Ping reports whether the database is still answering. It counts the nzbs it
 // holds rather than pinging the pool, since a query is what a caller needs to
-// work and the table is small.
-func (s *Store) Ping() (nzbs int, err error) {
-	if err := s.db.QueryRow("SELECT count(*) FROM nzb").Scan(&nzbs); err != nil {
+// work and the table is small. The context is what bounds the wait: a database
+// that has stopped answering is exactly the case this is asked about, so a
+// caller must never be left blocking in it.
+func (s *Store) Ping(ctx context.Context) (nzbs int, err error) {
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM nzb").Scan(&nzbs); err != nil {
 		return 0, fmt.Errorf("failed counting nzbs: %w", err)
 	}
 

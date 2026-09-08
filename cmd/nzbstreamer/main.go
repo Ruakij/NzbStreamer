@@ -260,9 +260,12 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		os.Exit(1)
 	}
 
-	ui := webui.NewHandler(service, healthComponents(c, store, segmentCache, mount, nntpPool, service)...)
+	db := watchDB(ctx, store.Ping)
+
+	ui := webui.NewHandler(service, healthComponents(c, db, segmentCache, mount, nntpPool, service)...)
 	ui.Stats = pageStats(segmentCache, nntpPool, service)
 	ui.NzbStats = nzbStats(segmentCache, service)
+	ui.Live = db.alive
 
 	mux := httpserver.NewMux(httpserver.Routes{
 		WebUI: ui,

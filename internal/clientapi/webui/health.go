@@ -81,5 +81,13 @@ func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
 // that can be temporarily wrong and heal on its own must never reach here, or a
 // probe restarts the process over its own healing.
 func (h *Handler) live(w http.ResponseWriter, _ *http.Request) {
+	if h.Live != nil && !h.Live() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		encode(w, map[string]any{"status": StatusDown})
+
+		return
+	}
+
 	writeJSON(w, map[string]any{"status": StatusUp})
 }

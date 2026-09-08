@@ -37,6 +37,10 @@ type Handler struct {
 	// which only the composition root sees; unset, the page shows neither.
 	Stats    func() any
 	NzbStats func(id string) any
+
+	// Live is what the liveness probe reads. Unset, the process answers alive as
+	// long as it serves the request at all.
+	Live func() bool
 }
 
 func NewHandler(service Service, components ...Component) *Handler {

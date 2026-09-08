@@ -2,13 +2,14 @@ package main
 
 import (
 	"os"
+	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/clientapi/webui"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/httpserver"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nntpclient"
-	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore/sqlstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation/fusemount"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/service/nzbservice"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/bytesize"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/diskcache"
 )
 
@@ -18,12 +19,16 @@ import (
 // news servers - with all of them unreachable the library still lists and the
 // cache still serves, and depooling or restarting a singleton over a provider
 // outage makes each of those worse.
-func healthComponents(c Config, store *sqlstore.Store, cache *diskcache.Cache, mount *fusemount.FileSystem, pool *nntpclient.Pool, service *nzbservice.Service) []webui.Component {
+func healthComponents(c Config, db *dbWatchdog, cache *diskcache.Cache, mount *fusemount.FileSystem, pool *nntpclient.Pool, service *nzbservice.Service) []webui.Component {
 	return []webui.Component{
 		{Name: "metadata-db", Gates: true, Health: func() webui.Status {
-			nzbs, err := store.Ping()
+			nzbs, err, since := db.state()
 			if err != nil {
-				return webui.Status{Status: webui.StatusDown, Details: map[string]any{"path": c.Metadata.Path, "error": err.Error()}}
+				return webui.Status{Status: webui.StatusDown, Details: map[string]any{
+					"path":           c.Metadata.Path,
+					"error":          err.Error(),
+					"unanswered_for": since.Round(time.Second).String(),
+				}}
 			}
 
 			// A tree still being rebuilt is a library that cannot be listed in
@@ -46,8 +51,8 @@ func healthComponents(c Config, store *sqlstore.Store, cache *diskcache.Cache, m
 			details := map[string]any{
 				"path":      c.Cache.Path,
 				"items":     stats.Items,
-				"bytes":     stats.Bytes,
-				"max_bytes": stats.MaxBytes,
+				"bytes":     bytesize.Bytes(stats.Bytes).String(),
+				"max_bytes": bytesize.Bytes(stats.MaxBytes).String(),
 			}
 
 			// Every read stores its segment before serving it, so a cache
