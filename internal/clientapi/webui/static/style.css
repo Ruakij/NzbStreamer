@@ -76,7 +76,7 @@ th[data-sorted="desc"]::after { border-top-color: currentColor; transform: trans
 td.name { overflow-wrap: anywhere; }
 td.name .title { font-weight: 500; }
 td:nth-child(4), td:nth-child(5) { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
-td:last-child { text-align: right; }
+tr[data-id] td:last-child { text-align: right; }
 
 .err { color: var(--bad); font-size: .85rem; margin-top: .2rem; }
 .empty { color: var(--muted); }
@@ -89,9 +89,23 @@ td:last-child { text-align: right; }
 .stage.failed, .stage.cancelled { color: var(--bad); }
 .stage.checking, .stage.building, .stage.rebuilding { color: var(--accent); }
 
-.file-list { margin-top: .4rem; font-size: .85rem; }
-.file-list > summary { color: var(--muted); cursor: pointer; width: fit-content; }
-.file-list > summary:hover { color: var(--fg); }
+/* The list is a row of its own so it gets the table width, and the item row
+   above it keeps the pair reading as one. */
+tr:has(+ tr.file-list:not([hidden])) td { border-bottom: 0; }
+tr:has(+ tr.file-list:not([hidden])):hover + tr.file-list, tr:has(+ tr.file-list:hover) { background: var(--hover); }
+tr.file-list td { padding-top: 0; font-size: .85rem; }
+
+.files-toggle {
+  display: block; margin-top: .2rem; padding: 0; border: 0;
+  font-size: .85rem; color: var(--muted);
+}
+.files-toggle:hover:not(:disabled) { background: none; color: var(--fg); }
+.files-toggle::before {
+  content: ""; display: inline-block; width: 0; height: 0; margin-right: .4rem;
+  border: .3rem solid transparent; border-left-color: currentColor;
+  transform: translateY(-1px); transition: transform .1s;
+}
+.files-toggle[data-open="true"]::before { transform: rotate(90deg) translateX(-1px); }
 
 .file-tree, .file-tree ul { list-style: none; margin: 0; padding: 0; }
 .file-tree { margin-top: .3rem; }

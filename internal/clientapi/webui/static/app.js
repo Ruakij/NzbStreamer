@@ -79,23 +79,48 @@ function reconcileTree(list, tree, prefix = "") {
   for (const item of existing.values()) item.remove();
 }
 
-function updateFiles(cell, paths, id) {
-  let details = cell.querySelector(".file-list");
+// The tree gets the full table width as a row of its own, and the toggle stays
+// under the name where it belongs - which a <details> spanning both cannot do.
+function updateFiles(row, paths, id) {
+  const name = row.cells[0];
+  let toggle = name.querySelector(".files-toggle");
   if (!paths.length) {
-    details?.remove();
-    return;
+    toggle?.remove();
+    row.filesRow?.remove();
+    row.filesRow = null;
+    return null;
   }
-  if (!details) {
-    details = document.createElement("details");
-    details.className = "file-list";
-    const summary = document.createElement("summary");
+  let filesRow = row.filesRow;
+  if (!filesRow) {
+    filesRow = document.createElement("tr");
+    filesRow.className = "file-list";
+    filesRow.hidden = true;
+    const cell = filesRow.insertCell();
+    cell.colSpan = cols;
     const tree = document.createElement("ul");
     tree.className = "file-tree";
-    details.append(summary, tree);
-    cell.append(details);
+    cell.append(tree);
+    row.filesRow = filesRow;
   }
-  setText(details.querySelector(":scope > summary"), paths.length + (paths.length === 1 ? " file" : " files"));
-  reconcileTree(details.querySelector(":scope > ul"), fileTree(paths, id));
+  if (!toggle) {
+    toggle = document.createElement("button");
+    toggle.className = "files-toggle";
+    toggle.onclick = () => {
+      filesRow.hidden = !filesRow.hidden;
+      toggle.dataset.open = !filesRow.hidden;
+    };
+    toggle.dataset.open = !filesRow.hidden;
+    name.append(toggle);
+  }
+  row.after(filesRow);
+  setText(toggle, paths.length + (paths.length === 1 ? " file" : " files"));
+  reconcileTree(filesRow.querySelector("ul"), fileTree(paths, id));
+  return filesRow;
+}
+
+function removeRow(row) {
+  row.filesRow?.remove();
+  row.remove();
 }
 
 function createRow(id, action) {
@@ -132,7 +157,7 @@ function render(tbody, items, action, files = {}) {
     const td = tr.insertCell();
     td.colSpan = cols;
     td.textContent = "nothing here";
-    for (const row of existing.values()) row.remove();
+    for (const row of existing.values()) removeRow(row);
     return;
   }
   let position = tbody.firstElementChild;
@@ -152,7 +177,6 @@ function render(tbody, items, action, files = {}) {
     } else {
       err?.remove();
     }
-    if (action === "delete") updateFiles(name, files[item.id] || [], item.id);
     const archive = tr.cells[5].querySelector(".archive");
     if (archive) {
       const next = item.archived ? "restore" : "archive";
@@ -166,9 +190,10 @@ function render(tbody, items, action, files = {}) {
     setText(tr.cells[3], size(item.bytes));
     setText(tr.cells[4], age(item.added));
     if (tr !== position) tbody.insertBefore(tr, position);
-    position = tr.nextElementSibling;
+    const filesRow = action === "delete" ? updateFiles(tr, files[item.id] || [], item.id) : null;
+    position = (filesRow || tr).nextElementSibling;
   }
-  for (const row of existing.values()) row.remove();
+  for (const row of existing.values()) removeRow(row);
 }
 
 // One poll carries every item, so a page is a slice of what is already here.
