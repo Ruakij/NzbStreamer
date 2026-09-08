@@ -67,7 +67,7 @@ type MountConfig struct {
 	// sequential read rather than the connections do
 	MaxBackground  int           `env:"MOUNT_MAX_BACKGROUND, default=64"`   // Reads the kernel may have in flight per mount
 	MaxReadAhead   Bytes         `env:"MOUNT_MAX_READAHEAD, default=8M"`    // Bytes the kernel reads ahead of a sequential reader; a request is capped at 1 MiB, so this is how many it issues
-	BatchDelay     time.Duration `env:"MOUNT_BATCH_DELAY, default=1ms"`     // How long an out-of-order read waits for the batch that delivers its stream positionally sorted
+	BatchDelay     time.Duration `env:"MOUNT_BATCH_DELAY, default=5ms"`     // How long an out-of-order read waits for the batch that delivers its stream positionally sorted
 	NarrowMissSize Bytes         `env:"MOUNT_NARROW_MISS_SIZE, default=8M"` // Largest backward seek warned about as a missed reorder
 }
 
