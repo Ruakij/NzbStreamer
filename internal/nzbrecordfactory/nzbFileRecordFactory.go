@@ -90,7 +90,7 @@ func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData
 	known := f.knownSizes(nzbData)
 	sizer := f.sizer(nzbData, known)
 
-	rawFiles := f.buildRawFiles(nzbData, sizer, known, cachePrefix(nzbData))
+	rawFiles := f.buildRawFiles(nzbData, sizer, known, CachePrefix(nzbData.MetaName))
 
 	files := make(map[string]presentation.Openable, len(rawFiles))
 	packed := f.expand(rawFiles, "", 0, nzbData.Meta["Password"], files)
@@ -127,7 +127,7 @@ func (f *NzbFileFactory) DiscardSegmentStackFromNzbData(nzbData *nzbparser.NzbDa
 	ids := segmentIDs(nzbData)
 
 	if f.cache != nil {
-		if err := f.cache.RemoveAll(diskcache.Key{cachePrefix(nzbData)}); err != nil {
+		if err := f.cache.RemoveAll(diskcache.Key{CachePrefix(nzbData.MetaName)}); err != nil {
 			slog.Warn("Failed removing cached segments", "nzb", nzbData.MetaName, "error", err)
 		}
 	}
@@ -139,8 +139,9 @@ func (f *NzbFileFactory) DiscardSegmentStackFromNzbData(nzbData *nzbparser.NzbDa
 	}
 }
 
-func cachePrefix(nzbData *nzbparser.NzbData) string {
-	return strings.ReplaceAll(nzbData.MetaName, "/", "_")
+// CachePrefix is the first key part every segment of an nzb is cached under.
+func CachePrefix(metaName string) string {
+	return strings.ReplaceAll(metaName, "/", "_")
 }
 
 func segmentIDs(nzbData *nzbparser.NzbData) []string {

@@ -80,6 +80,35 @@ func TestItems(t *testing.T) {
 	}
 }
 
+func TestStatsAndNzbDetail(t *testing.T) {
+	handler := webui.NewHandler(&fakeService{})
+	handler.Stats = func() any { return map[string]any{"cache": map[string]any{"items": 3}} }
+	handler.NzbStats = func(id string) any {
+		if id != "b" {
+			return nil
+		}
+		return map[string]any{"id": id, "cached_bytes": 7}
+	}
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/items", nil))
+	if !strings.Contains(recorder.Body.String(), `"items":3`) {
+		t.Errorf("items answered %s, want the stats provider's numbers", recorder.Body)
+	}
+
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/nzb?id=b", nil))
+	if !strings.Contains(recorder.Body.String(), `"cached_bytes":7`) {
+		t.Errorf("nzb answered %s, want the detail", recorder.Body)
+	}
+
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/nzb?id=gone", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Errorf("unknown nzb answered %d, want 404", recorder.Code)
+	}
+}
+
 func TestPageRevalidates(t *testing.T) {
 	handler := webui.NewHandler(&fakeService{})
 

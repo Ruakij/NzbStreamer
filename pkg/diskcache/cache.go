@@ -71,15 +71,15 @@ func (c *Cache) index() {
 		return
 	}
 
-	items, size, maxSize := c.Stats()
-	slog.Info("Cache indexed", "items", items, "bytes", size, "max bytes", maxSize, "took", time.Since(start))
+	stats := c.Stats()
+	slog.Info("Cache indexed", "items", stats.Items, "bytes", stats.Bytes, "max bytes", stats.MaxBytes, "took", time.Since(start))
 
-	if maxSize > 0 && size > maxSize {
+	if stats.MaxBytes > 0 && stats.Bytes > stats.MaxBytes {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
 		if err := c.maxSizeEvict(0); err != nil {
-			slog.Error("Failed evicting down to the cache size limit", "bytes", size, "max bytes", maxSize, "error", err)
+			slog.Error("Failed evicting down to the cache size limit", "bytes", stats.Bytes, "max bytes", stats.MaxBytes, "error", err)
 		}
 	}
 }
@@ -148,7 +148,7 @@ func (c *Cache) maxSizeEvict(requiredSpace int64) error {
 	if key == "" {
 		return ErrCouldNotMakeEnoughSpace
 	}
-	if err := c.removeFile(key); err != nil {
+	if err := c.evict(key); err != nil {
 		return err
 	}
 
@@ -160,7 +160,7 @@ func (c *Cache) maxSizeEvict(requiredSpace int64) error {
 		return c.items[a].ModTime.Compare(c.items[b].ModTime)
 	})
 	for _, key := range keys {
-		if err := c.removeFile(key); err != nil {
+		if err := c.evict(key); err != nil {
 			return err
 		}
 		if c.options.MaxSize-c.currentSize >= requiredSpace {
@@ -169,6 +169,16 @@ func (c *Cache) maxSizeEvict(requiredSpace int64) error {
 	}
 
 	return ErrCouldNotMakeEnoughSpace
+}
+
+// evict removes an item to make room, which is the removal worth counting: a
+// caller dropping what it stored itself is not the cache running out of space.
+func (c *Cache) evict(key string) error {
+	if err := c.removeFile(key); err != nil {
+		return err
+	}
+	c.evictions.Add(1)
+	return nil
 }
 
 // evictFor makes room for size bytes, blocking or in the background as
@@ -336,8 +346,10 @@ func (c *Cache) Open(key Key) (*os.File, int64, error) {
 	header, exists := c.items[key.String()]
 	if !exists {
 		c.mu.Unlock()
+		c.misses.Add(1)
 		return nil, 0, ErrItemNotFound
 	}
+	c.hits.Add(1)
 	header.ModTime = time.Now()
 	c.items[key.String()] = header
 	c.mu.Unlock()
@@ -360,13 +372,49 @@ func (c *Cache) Open(key Key) (*os.File, int64, error) {
 	return file, header.Size, nil
 }
 
-// Stats reports what the cache holds against what it may hold. Both numbers are
+// Stats reports what the cache holds against what it may hold. Every number is
 // tracked in memory, so this costs a lock and no syscalls.
-func (c *Cache) Stats() (items int, bytes, maxBytes int64) {
+func (c *Cache) Stats() Stats {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	return len(c.items), c.currentSize, c.options.MaxSize
+	return Stats{
+		Items:     len(c.items),
+		Bytes:     c.currentSize,
+		MaxBytes:  c.options.MaxSize,
+		Hits:      c.hits.Load(),
+		Misses:    c.misses.Load(),
+		Evictions: c.evictions.Load(),
+	}
+}
+
+// Groups reports what the cache holds per first key part, which is one entry
+// per nzb given a key of {nzb, message-id}. There is no index by prefix, so it
+// is one pass for every group rather than a pass per group.
+//
+// ponytail: O(items) per call, which is a poll of a page against a map of
+// segments; an index per prefix if that ever shows up in a profile
+func (c *Cache) Groups() map[string]GroupStats {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	groups := make(map[string]GroupStats)
+	for key, header := range c.items {
+		prefix, _, isGrouped := strings.Cut(key, "/")
+		if !isGrouped {
+			continue
+		}
+
+		group := groups[prefix]
+		group.Items++
+		group.Bytes += header.Size
+		if header.ModTime.After(group.LastRead) {
+			group.LastRead = header.ModTime
+		}
+		groups[prefix] = group
+	}
+
+	return groups
 }
 
 func (c *Cache) Exists(key Key) (bool, CacheItemHeader) {

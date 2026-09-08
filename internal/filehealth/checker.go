@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"sync"
+	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/filenameops"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
@@ -97,9 +98,12 @@ func (c *DefaultChecker) CheckFiles(nzbData *nzbparser.NzbData) []error {
 		return nil
 	}
 
+	started := time.Now()
 	limit := c.limit(nzbData)
 	counts := make([]int, len(content))
+	segments := 0
 	for i, file := range content {
+		segments += len(file.Segments)
 		counts[i] = clamp(
 			int(math.Round(float64(len(file.Segments))*c.config.InitialFilePercent/100)),
 			c.config.InitialFileMinSegments,
@@ -109,6 +113,7 @@ func (c *DefaultChecker) CheckFiles(nzbData *nzbparser.NzbData) []error {
 
 	results := c.probe(content, counts)
 	c.escalate(content, results, limit)
+	recordCheck(started, segments)
 
 	var errs []error
 	for i, result := range results {
@@ -207,11 +212,15 @@ func (c *DefaultChecker) probe(files []*nzbparser.File, counts []int) []fileResu
 				result.checked++
 				switch {
 				case err != nil:
+					recordProbe("error")
 					if result.err == nil {
 						result.err = err
 					}
 				case !exists:
+					recordProbe("missing")
 					result.missing++
+				default:
+					recordProbe("present")
 				}
 			}()
 		}

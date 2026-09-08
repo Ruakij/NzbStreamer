@@ -42,12 +42,12 @@ func healthComponents(c Config, store *sqlstore.Store, cache *diskcache.Cache, m
 		}},
 
 		{Name: "cache", Gates: true, Health: func() webui.Status {
-			items, bytes, maxBytes := cache.Stats()
+			stats := cache.Stats()
 			details := map[string]any{
 				"path":      c.Cache.Path,
-				"items":     items,
-				"bytes":     bytes,
-				"max_bytes": maxBytes,
+				"items":     stats.Items,
+				"bytes":     stats.Bytes,
+				"max_bytes": stats.MaxBytes,
 			}
 
 			// Every read stores its segment before serving it, so a cache

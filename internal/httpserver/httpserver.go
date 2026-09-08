@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/arl/statsviz"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // WebdavPrefix is the subtree webdav is served under, which its filesystem has
@@ -67,6 +68,15 @@ func registerDebug(mux *http.ServeMux) {
 	if err := statsviz.Register(mux, statsviz.Root("/debug/statsviz")); err != nil {
 		slog.Error("Failed registering statsviz", "error", err)
 	}
+}
+
+// Instrument gives everything on the mux request duration, size and count -
+// webdav, the web ui and the sabnzbd surface - for one wrapper and no
+// hand-written instrument. It is not per path: the measurement carries the
+// method and the status, which is what the presenters are read through, and a
+// path here is one label value per file the library holds.
+func Instrument(handler http.Handler) http.Handler {
+	return otelhttp.NewHandler(handler, "http")
 }
 
 // Listen serves until the context is cancelled. Read and write have no timeout:

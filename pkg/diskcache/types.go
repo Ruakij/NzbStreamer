@@ -2,6 +2,7 @@ package diskcache
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,6 +19,30 @@ type Cache struct {
 	items       map[string]CacheItemHeader
 	currentSize int64
 	indexed     chan struct{}
+
+	// Only a hit path can keep these, so they are counted rather than derived
+	hits      atomic.Int64
+	misses    atomic.Int64
+	evictions atomic.Int64
+}
+
+// Stats is what the cache holds against what it may hold, and what it has done
+// since the process started.
+type Stats struct {
+	Items    int
+	Bytes    int64
+	MaxBytes int64
+
+	Hits      int64
+	Misses    int64
+	Evictions int64
+}
+
+// GroupStats is what one key prefix holds.
+type GroupStats struct {
+	Items    int
+	Bytes    int64
+	LastRead time.Time
 }
 
 type CacheOptions struct {

@@ -108,6 +108,8 @@ Zip archives are not unpacked.
 | `/webdav/`                          | WebDAV, behind basic auth when `WEBDAV_USERNAME` is set                                                                       |
 | `/api/health`                       | Readiness: 200 when the store, cache and mount are up, 503 otherwise; the body reports every component, news servers included |
 | `/api/health/live`                  | Liveness: 200 while the process answers, looking at nothing else                                                              |
+| `/api/nzb?id=`                      | One nzb in detail: the files it posts, their sizes and segment counts, and how much of each is cached                         |
+| `/metrics`                          | Prometheus metrics: http, cache, news servers, health probes and adds                                                         |
 | `/debug/pprof/`, `/debug/statsviz/` | Debugging endpoints, off unless `HTTP_DEBUG`                                                                                  |
 
 # 5. Settings

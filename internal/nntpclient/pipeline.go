@@ -111,7 +111,9 @@ func (c *Client) pipelineFetch(group, id string) ([]byte, error) {
 // A dial runs in the background, so the fetch takes whichever connection has
 // room first: the new one, or an existing one that answered meanwhile.
 func (c *Client) dispatch(f *fetch) error {
-	deadline := time.Now().Add(c.config.Timeout)
+	started := time.Now()
+	deadline := started.Add(c.config.Timeout)
+	defer c.recordWait(started)
 
 	c.wait(1)
 	// top the headroom back up once this fetch is placed

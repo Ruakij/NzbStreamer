@@ -231,7 +231,9 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	// Start services. The restore walks archive headers over the network, so it
 	// runs in the background and the presenters are up while it fills in; what
 	// must not read a half-restored library waits for service.Ready
-	go func() {
+	// The nolint is the metrics the pool records on its own: a measurement is
+	// about the process, not about a request, so it takes no context from one
+	go func() { //nolint:contextcheck
 		nntpPool.Probe()
 
 		if err := service.Init(); err != nil {
@@ -251,8 +253,18 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 		}
 	}
 
+	metrics, err := setupMetrics(segmentCache)
+	if err != nil {
+		slog.Error("Metrics setup failed", "error", err)
+		os.Exit(1)
+	}
+
+	ui := webui.NewHandler(service, healthComponents(c, store, segmentCache, mount, nntpPool, service)...)
+	ui.Stats = pageStats(segmentCache, nntpPool, service)
+	ui.NzbStats = nzbStats(segmentCache, service)
+
 	mux := httpserver.NewMux(httpserver.Routes{
-		WebUI: webui.NewHandler(service, healthComponents(c, store, segmentCache, mount, nntpPool, service)...),
+		WebUI: ui,
 		Sabnzbd: sabnzbd.NewHandler(service, sabnzbd.Config{
 			APIKey:      c.Sabnzbd.APIKey,
 			CompleteDir: completeDir(c),
@@ -261,15 +273,16 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 
 			DeleteOnRemove: c.Sabnzbd.DeleteOnRemove,
 		}),
-		Webdav: webdav.BasicAuth(&gowebdav.Handler{FileSystem: webdavFS}, webdavAuth),
-		Debug:  c.HTTP.Debug,
+		Webdav:  webdav.BasicAuth(&gowebdav.Handler{FileSystem: webdavFS}, webdavAuth),
+		Metrics: metrics,
+		Debug:   c.HTTP.Debug,
 	})
 
 	sm.AddService()
 	go func() {
 		defer sm.ServiceDone()
 
-		if err := httpserver.Listen(ctx, c.HTTP.Address, mux); err != nil {
+		if err := httpserver.Listen(ctx, c.HTTP.Address, httpserver.Instrument(mux)); err != nil {
 			slog.Error("Error in http server", "error", err)
 			os.Exit(1)
 		}

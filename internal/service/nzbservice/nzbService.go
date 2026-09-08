@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"path"
 	"regexp"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/filehealth"
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbfileanalyzer"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbrecordfactory"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/presentation"
@@ -88,7 +90,7 @@ func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, prese
 		}
 	}
 
-	return &Service{
+	service := &Service{
 		store:            store,
 		factory:          factory,
 		presenters:       presenters,
@@ -99,6 +101,9 @@ func NewService(store nzbstore.NzbStore, factory nzbrecordfactory.Factory, prese
 		nzbFiles:         make(map[string][]string),
 		healthChecker:    healthChecker,
 	}
+	service.observeQueue()
+
+	return service
 }
 
 func (s *Service) SetBlacklist(blacklist []regexp.Regexp) {
@@ -256,7 +261,7 @@ func (s *Service) Init() error {
 	_ = group.Wait()
 
 	slog.Info("Restored nzbs", "restored", restored, "rebuilt", rebuilt,
-		"took", time.Since(started).Truncate(time.Millisecond))
+		"took", took(started))
 
 	slog.Debug("Registering at triggers")
 	for _, trigger := range s.triggers {
@@ -299,8 +304,9 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	slog.Debug("Adding nzb", "MetaName", nzbData.MetaName)
 
 	defer func() {
+		recordAdd(started, err)
 		slog.Debug("Add done", "MetaName", nzbData.MetaName, "error", err,
-			"took", time.Since(started).Truncate(time.Millisecond))
+			"took", took(started))
 	}()
 
 	s.mutex.Lock()
@@ -675,6 +681,76 @@ func (s *Service) unregister(metaName string) {
 
 	delete(s.nzbFiledata, metaName)
 	delete(s.nzbFiles, metaName)
+}
+
+// took reports how long since started at three significant digits, so a fast
+// one does not print as 0s and a slow one does not print its nanoseconds.
+func took(started time.Time) time.Duration {
+	elapsed := time.Since(started)
+	switch {
+	case elapsed > time.Minute:
+		return elapsed.Round(time.Second)
+	case elapsed > time.Second:
+		return elapsed.Round(10 * time.Millisecond)
+	case elapsed > time.Millisecond:
+		return elapsed.Round(10 * time.Microsecond)
+	default:
+		return elapsed.Round(10 * time.Nanosecond)
+	}
+}
+
+// Names lists the nzbs presented. Files answers the same keys, at the cost of
+// cloning and sorting every path of every one of them.
+func (s *Service) Names() []string {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	return slices.Collect(maps.Keys(s.nzbFiles))
+}
+
+// PostedFile is one file as it was posted. What a presenter shows is extracted
+// from these and does not map back to them, so this is the granularity anything
+// about segments is knowable at.
+type PostedFile struct {
+	Name     string
+	Segments []PostedSegment
+}
+
+// PostedSegment is one article of a posted file. Bytes is what it contributes to
+// the file decoded, which is what a cached segment weighs; the bytes-hint of the
+// nzb is not that number wherever the producer counted wire bytes.
+type PostedSegment struct {
+	ID    string
+	Bytes int64
+	// Exact says whether Bytes is the length or an upper-bounded estimate of it
+	Exact bool
+}
+
+// PostedFiles returns the files an nzb posts, with the message ids of each.
+func (s *Service) PostedFiles(id string) []PostedFile {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	nzbData, exists := s.nzbFiledata[id]
+	if !exists {
+		return nil
+	}
+
+	sizer := nzbfileanalyzer.NewSegmentSizer(nzbData)
+
+	files := make([]PostedFile, 0, len(nzbData.Files))
+	for _, file := range nzbData.Files {
+		posted := PostedFile{
+			Name:     file.Filename,
+			Segments: make([]PostedSegment, 0, len(file.Segments)),
+		}
+		for _, segment := range file.Segments {
+			size, exact := sizer.Size(segment.BytesHint)
+			posted.Segments = append(posted.Segments, PostedSegment{ID: segment.ID, Bytes: int64(size), Exact: exact})
+		}
+		files = append(files, posted)
+	}
+	return files
 }
 
 // Files returns the final paths exposed for each NZB.

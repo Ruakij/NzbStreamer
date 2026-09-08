@@ -378,7 +378,9 @@ func (c *Client) segmentExists(id string) (bool, error) {
 // one, reporting which. The slot is held until release or drop, which is what
 // bounds the client to MaxConns.
 func (c *Client) acquire() (*conn, bool, error) {
+	started := time.Now()
 	<-c.slots
+	defer c.recordWait(started)
 
 	cn, reused := c.takeIdle()
 	if cn == nil {

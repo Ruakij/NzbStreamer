@@ -39,7 +39,8 @@ func TestAnItemStoredTwiceIsCountedOnce(t *testing.T) {
 		}
 	}
 
-	items, bytes, _ := cache.Stats()
+	stats := cache.Stats()
+	items, bytes := stats.Items, stats.Bytes
 	if items != 1 || bytes != int64(len("payload")) {
 		t.Errorf("got %d items of %d bytes, want 1 of %d", items, bytes, len("payload"))
 	}
@@ -78,7 +79,8 @@ func TestExistingItemsAreFoundInSubdirectories(t *testing.T) {
 
 	restarted := newCache(t, dir)
 
-	items, bytes, _ := restarted.Stats()
+	stats := restarted.Stats()
+	items, bytes := stats.Items, stats.Bytes
 	if items != 1 || bytes != int64(len("payload")) {
 		t.Errorf("got %d items of %d bytes, want 1 of %d", items, bytes, len("payload"))
 	}
@@ -100,7 +102,8 @@ func TestRemoveAllDropsEveryItemOfAnNzb(t *testing.T) {
 		t.Fatalf("failed removing: %v", err)
 	}
 
-	items, bytes, _ := cache.Stats()
+	stats := cache.Stats()
+	items, bytes := stats.Items, stats.Bytes
 	if items != 1 || bytes != int64(len("payload")) {
 		t.Errorf("got %d items of %d bytes, want the one item of the other nzb", items, bytes)
 	}
@@ -124,6 +127,61 @@ func TestEvictingTheLastItemRemovesItsDirectory(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(dir, "an-nzb")); !os.IsNotExist(err) {
 		t.Errorf("empty directory was left behind: %v", err)
+	}
+}
+
+// Only a hit path can tell a hit from a miss, and only eviction separates the
+// items the cache dropped for space from the ones a caller removed.
+func TestStatsCountHitsMissesAndEvictions(t *testing.T) {
+	dir := t.TempDir()
+	cache, err := diskcache.NewCache(&diskcache.CacheOptions{CacheDir: dir, MaxSize: 10, MaxSizeEvictBlocking: true})
+	if err != nil {
+		t.Fatalf("failed creating cache: %v", err)
+	}
+	select {
+	case <-cache.Indexed():
+	case <-time.After(10 * time.Second):
+		t.Fatal("cache did not finish indexing")
+	}
+
+	if _, err := cache.Set(diskcache.Key{"an-nzb", "segment-a"}, []byte("payload")); err != nil {
+		t.Fatalf("failed storing: %v", err)
+	}
+	file, _, err := cache.Open(diskcache.Key{"an-nzb", "segment-a"})
+	if err != nil {
+		t.Fatalf("failed opening: %v", err)
+	}
+	file.Close()
+	if _, _, err := cache.Open(diskcache.Key{"an-nzb", "segment-b"}); !errors.Is(err, diskcache.ErrItemNotFound) {
+		t.Fatalf("got %v, want ErrItemNotFound", err)
+	}
+
+	// The limit leaves no room for a second item, so storing one drops the first
+	if _, err := cache.Set(diskcache.Key{"an-nzb", "segment-b"}, []byte("payload")); err != nil {
+		t.Fatalf("failed storing: %v", err)
+	}
+
+	stats := cache.Stats()
+	if stats.Hits != 1 || stats.Misses != 1 || stats.Evictions != 1 {
+		t.Errorf("got %d hits, %d misses, %d evictions, want 1 of each", stats.Hits, stats.Misses, stats.Evictions)
+	}
+}
+
+func TestGroupsCountPerPrefix(t *testing.T) {
+	cache := newCache(t, t.TempDir())
+
+	for _, key := range []diskcache.Key{{"one", "a"}, {"one", "b"}, {"two", "a"}} {
+		if _, err := cache.Set(key, []byte("payload")); err != nil {
+			t.Fatalf("failed storing: %v", err)
+		}
+	}
+
+	groups := cache.Groups()
+	if groups["one"].Items != 2 || groups["one"].Bytes != 14 {
+		t.Errorf("group one holds %d items of %d bytes, want 2 of 14", groups["one"].Items, groups["one"].Bytes)
+	}
+	if groups["two"].Items != 1 {
+		t.Errorf("group two holds %d items, want 1", groups["two"].Items)
 	}
 }
 

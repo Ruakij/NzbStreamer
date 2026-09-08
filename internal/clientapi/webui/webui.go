@@ -31,6 +31,12 @@ type Handler struct {
 	service    Service
 	components []Component
 	mux        *http.ServeMux
+
+	// Stats answers the strip on top of the page, NzbStats the info panel of one
+	// row. Both join what the service knows to what the cache and the pool know,
+	// which only the composition root sees; unset, the page shows neither.
+	Stats    func() any
+	NzbStats func(id string) any
 }
 
 func NewHandler(service Service, components ...Component) *Handler {
@@ -38,6 +44,7 @@ func NewHandler(service Service, components ...Component) *Handler {
 	h.mux.HandleFunc("GET /{$}", page)
 	h.mux.Handle("GET /static/", staticFiles())
 	h.mux.HandleFunc("GET /api/items", h.items)
+	h.mux.HandleFunc("GET /api/nzb", h.nzb)
 	h.mux.HandleFunc("POST /api/add", h.add)
 	h.mux.HandleFunc("POST /api/remove", h.remove)
 	h.mux.HandleFunc("GET /api/health", h.health)
@@ -50,12 +57,39 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) items(w http.ResponseWriter, _ *http.Request) {
+	stats := any(map[string]any{})
+	if h.Stats != nil {
+		stats = h.Stats()
+	}
+
 	writeJSON(w, map[string]any{
 		"queue":   h.service.Queue(),
 		"history": h.service.History(),
 		"files":   h.service.Files(),
-		"stats":   map[string]any{},
+		"stats":   stats,
 	})
+}
+
+// nzb answers the per-file detail of one nzb, which the page asks for when a row
+// is opened rather than on every poll: it walks every segment the nzb posts.
+func (h *Handler) nzb(w http.ResponseWriter, r *http.Request) {
+	id := r.FormValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "no id")
+		return
+	}
+	if h.NzbStats == nil {
+		writeError(w, http.StatusNotFound, "no stats available")
+		return
+	}
+
+	detail := h.NzbStats(id)
+	if detail == nil {
+		writeError(w, http.StatusNotFound, "unknown nzb: "+id)
+		return
+	}
+
+	writeJSON(w, detail)
 }
 
 func (h *Handler) add(w http.ResponseWriter, r *http.Request) {

@@ -1,6 +1,7 @@
 package nntpclient
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.opentelemetry.io/otel/metric"
 )
 
 var ErrNoServer = errors.New("no server available")
@@ -174,19 +177,24 @@ func (p *Pool) GetSegment(group, id string) ([]byte, error) {
 				continue
 			}
 
+			started := time.Now()
 			body, err := server.Server.GetSegment(group, id)
 			switch {
 			case err == nil:
+				p.measure(server, outcomeOK, started, int64(len(body)))
 				p.succeeded(server)
 				p.count(server, int64(len(body)))
 				return body, nil
 			case errors.Is(err, ErrArticleNotFound):
+				p.measure(server, outcomeMissing, started, 0)
 				p.succeeded(server)
 				missed = true
 			case errors.Is(err, ErrAuthFailed):
+				p.measure(server, outcomeError, started, 0)
 				p.failed(server, err)
 				return nil, fmt.Errorf("%s: %w", server.Name, err)
 			default:
+				p.measure(server, outcomeError, started, 0)
 				p.failed(server, err)
 				lastErr = fmt.Errorf("%s: %w", server.Name, err)
 			}
@@ -379,6 +387,7 @@ func (p *Pool) failed(s *poolServer, err error) {
 	}
 
 	s.disabledErr = err
+	breakerTrips.Add(context.Background(), 1, metric.WithAttributes(serverKey.String(s.Name)))
 	if permanent {
 		s.permanent = true
 		slog.Error("Disabling a news server that rejected its credentials; nothing here will fix that", "server", s.Name, "error", err)
@@ -417,6 +426,18 @@ func (p *Pool) noServer() error {
 		}
 	}
 	return ErrNoServer
+}
+
+// measure records one attempt against one server. The pool is where this
+// belongs: it is the only place that sees which server of the descent answered.
+func (p *Pool) measure(s *poolServer, outcome string, started time.Time, bytes int64) {
+	attributes := metric.WithAttributes(serverKey.String(s.Name), outcomeKey.String(outcome))
+
+	fetchDuration.Record(context.Background(), time.Since(started).Seconds(), attributes)
+	fetchedArticles.Add(context.Background(), 1, attributes)
+	if bytes > 0 {
+		fetchedBytes.Add(context.Background(), bytes, metric.WithAttributes(serverKey.String(s.Name)))
+	}
 }
 
 // count charges a fetch to the server that served it. Overshooting the allowance
