@@ -244,3 +244,80 @@ func TestSettlingLeavesAKnownConventionAlone(t *testing.T) {
 		t.Errorf("convention = %v, want ConventionContent", got.Convention())
 	}
 }
+
+func TestTotalSizeHintMakesTheTailExact(t *testing.T) {
+	const wireHint = 791000 // 768000 content bytes on the wire
+	nzbData := nzbWith(wireHint, wireHint, 412000)
+	file := &nzbData.Files[0]
+	file.TotalSizeHint = 768000*2 + 400000
+
+	sizes := NewSegmentSizer(nzbData).FileSizes(file)
+
+	if sizes[2].Size != 400000 || !sizes[2].Exact {
+		t.Errorf("tail = %d, %v; want 400000, true", sizes[2].Size, sizes[2].Exact)
+	}
+}
+
+func TestImplausibleTotalSizeHintIsIgnored(t *testing.T) {
+	const wireHint = 791000
+	nzbData := nzbWith(wireHint, wireHint, 412000)
+	file := &nzbData.Files[0]
+	// A hint leaving a tail larger than the wire bytes it was posted as
+	file.TotalSizeHint = 768000*2 + 500000
+
+	sizes := NewSegmentSizer(nzbData).FileSizes(file)
+
+	if sizes[2].Exact {
+		t.Errorf("tail = %d reported exact from an implausible total-size hint", sizes[2].Size)
+	}
+}
+
+// An nzb of a segment size the analyzer does not know, settled from what the
+// subject says the file holds.
+func TestTotalSizeHintSettlesTheConvention(t *testing.T) {
+	const fullSize = 1000 * 1024
+	nzbData := nzbWith(fullSize, fullSize, fullSize, 300000)
+	file := &nzbData.Files[0]
+	file.TotalSizeHint = int64(3*fullSize + 300000)
+	file.SegmentCountHint = len(file.Segments)
+
+	sizer := NewSegmentSizer(nzbData)
+
+	if sizer.Convention() != ConventionContent {
+		t.Fatalf("convention = %v, want ConventionContent", sizer.Convention())
+	}
+}
+
+func TestTotalSizeHintSettlesAWireConventionOfAnUnknownSize(t *testing.T) {
+	const fullSize = 1000 * 1024
+	// Full segments carry differing escape overhead, the tail its own
+	hints := []int{1045500, 1045400, 1045600, 306300}
+	nzbData := nzbWith(hints...)
+	file := &nzbData.Files[0]
+	file.TotalSizeHint = int64(3*fullSize + 300000)
+	file.SegmentCountHint = len(file.Segments)
+
+	sizer := NewSegmentSizer(nzbData)
+
+	if sizer.Convention() != ConventionWire {
+		t.Fatalf("convention = %v, want ConventionWire", sizer.Convention())
+	}
+	size, exact := sizer.Size(hints[0])
+	if size != fullSize || !exact {
+		t.Errorf("Size(%d) = %d, %v; want %d, true", hints[0], size, exact, fullSize)
+	}
+	if sizes := sizer.FileSizes(file); sizes[3].Size != 300000 || !sizes[3].Exact {
+		t.Errorf("tail = %d, %v; want 300000, true", sizes[3].Size, sizes[3].Exact)
+	}
+}
+
+func TestAnIncompleteFileDoesNotSettleTheWireConvention(t *testing.T) {
+	nzbData := nzbWith(1045500, 1045400, 1045600, 306300)
+	file := &nzbData.Files[0]
+	file.TotalSizeHint = int64(3*1000*1024 + 300000)
+	file.SegmentCountHint = len(file.Segments) + 1
+
+	if convention := NewSegmentSizer(nzbData).Convention(); convention != ConventionUnknown {
+		t.Errorf("convention = %v, want ConventionUnknown", convention)
+	}
+}

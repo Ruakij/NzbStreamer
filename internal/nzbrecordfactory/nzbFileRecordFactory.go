@@ -345,9 +345,10 @@ func (f *NzbFileFactory) BuildFileResourceFromNzbFile(nzbFiles *nzbparser.File, 
 		return a.Index - b.Index
 	})
 
+	sizes := sizer.FileSizes(nzbFiles)
 	for i := range nzbFiles.Segments {
 		nzbSegment := &nzbFiles.Segments[i]
-		segmentResource := f.BuildResourceFromNzbSegment(nzbSegment, nzbFiles.Groups[0], sizer, known)
+		segmentResource := f.BuildResourceFromNzbSegment(nzbSegment, nzbFiles.Groups[0], sizes[i], known)
 		cachedSegmentResource := fullcacheresource.NewFullCacheResource(
 			segmentResource,
 			diskcache.Key{cachePrefix, nzbSegment.ID},
@@ -377,14 +378,13 @@ func (f *NzbFileFactory) readRecorder(messageID string) func() {
 	return func() { f.sizeStore.RecordSegmentRead(messageID) }
 }
 
-func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbparser.Segment, groups string, sizer nzbfileanalyzer.SegmentSizer, known map[string]int64) *nzbpostresource.NzbPostResource {
+func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbparser.Segment, groups string, sized nzbfileanalyzer.SegmentSize, known map[string]int64) *nzbpostresource.NzbPostResource {
 	if size, ok := known[nzbSegment.ID]; ok {
 		// A measured length beats anything derived from the hint
 		return nzbpostresource.New(nzbSegment.ID, groups, size, true, f.getSegment)
 	}
 
-	size, sizeExact := sizer.Size(nzbSegment.BytesHint)
-	return nzbpostresource.New(nzbSegment.ID, groups, int64(size), sizeExact, f.getSegment)
+	return nzbpostresource.New(nzbSegment.ID, groups, int64(sized.Size), sized.Exact, f.getSegment)
 }
 
 // -- Special files --

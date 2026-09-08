@@ -73,6 +73,7 @@ func ParseNzb(inputStream io.Reader, filename string) (*NzbData, error) {
 		file.Displayname = result.Name
 		file.Filename = result.Filename
 		file.Encoding = result.Encoding
+		file.TotalSizeHint = result.TotalSizeHint
 		file.SegmentIndexHint = result.SegmentIndexHint
 		file.SegmentCountHint = result.SegmentCountHint
 	}
@@ -131,6 +132,7 @@ type ParseResult struct {
 	Name             string
 	Filename         string
 	Encoding         string
+	TotalSizeHint    int64
 	SegmentIndexHint int
 	SegmentCountHint int
 }
@@ -150,10 +152,15 @@ func parseSubject(subject string) (ParseResult, error) {
 			result.Filename = filename
 			result.Encoding = getRegexMatchOrDefault(match, regex.SubexpIndex("Encoding"), "yEnc")
 
+			totalSizeHintStr := getRegexMatchOrDefault(match, regex.SubexpIndex("TotalSizeHint"), "0")
 			segmentIndexHintStr := getRegexMatchOrDefault(match, regex.SubexpIndex("SegmentIndexHint"), "0")
 			segmentCountHintStr := getRegexMatchOrDefault(match, regex.SubexpIndex("SegmentCountHint"), "0")
 
 			var err error
+			result.TotalSizeHint, err = strconv.ParseInt(totalSizeHintStr, 10, 64)
+			if err != nil {
+				return result, fmt.Errorf("invalid total size hint: %w", err)
+			}
 			result.SegmentIndexHint, err = strconv.Atoi(segmentIndexHintStr)
 			if err != nil {
 				return result, fmt.Errorf("invalid segment index hint: %w", err)

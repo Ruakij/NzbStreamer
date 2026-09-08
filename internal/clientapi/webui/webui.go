@@ -153,11 +153,11 @@ func (h *Handler) inspect(w http.ResponseWriter, r *http.Request) {
 
 		wire, size := 0, 0
 		exact := true
-		for _, segment := range file.Segments {
+		sizes := sizer.FileSizes(file)
+		for i, segment := range file.Segments {
 			wire += segment.BytesHint
-			segmentSize, segmentExact := sizer.Size(segment.BytesHint)
-			size += segmentSize
-			exact = exact && segmentExact
+			size += sizes[i].Size
+			exact = exact && sizes[i].Exact
 		}
 		totalWire += wire
 		totalBytes += size

@@ -13,8 +13,7 @@ type File struct {
 	Displayname      string    `xml:"-"`
 	Filename         string    `xml:"-"`
 	Encoding         string    `xml:"-"`
-	PartIndexHint    int       `xml:"-"`
-	TotalPartsHint   int       `xml:"-"`
+	TotalSizeHint    int64     `xml:"-"`
 	SegmentIndexHint int       `xml:"-"`
 	SegmentCountHint int       `xml:"-"`
 	ParsedDate       time.Time `xml:"-"`

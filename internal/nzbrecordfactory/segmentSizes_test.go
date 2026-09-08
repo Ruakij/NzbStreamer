@@ -60,7 +60,7 @@ func TestAKnownSizeIsExactWithoutFetching(t *testing.T) {
 
 	segment := factory.BuildResourceFromNzbSegment(
 		&nzbData.Files[0].Segments[0], "alt.binaries.test",
-		nzbfileanalyzer.NewSegmentSizer(nzbData), factory.knownSizes(nzbData),
+		nzbfileanalyzer.NewSegmentSizer(nzbData).FileSizes(&nzbData.Files[0])[0], factory.knownSizes(nzbData),
 	)
 
 	size, err := segment.Size()
@@ -86,7 +86,7 @@ func TestFetchingRecordsTheDecodedLength(t *testing.T) {
 
 	segment := factory.BuildResourceFromNzbSegment(
 		&nzbData.Files[0].Segments[0], "alt.binaries.test",
-		nzbfileanalyzer.NewSegmentSizer(nzbData), nil,
+		nzbfileanalyzer.NewSegmentSizer(nzbData).FileSizes(&nzbData.Files[0])[0], nil,
 	)
 
 	if _, err := segment.Size(); err == nil {

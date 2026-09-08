@@ -44,6 +44,21 @@ func TestParseSubjectKeepsNonAsciiFilename(t *testing.T) {
 	}
 }
 
+func TestParseSubjectTotalSize(t *testing.T) {
+	const doc = `<nzb><file poster="p@example.com" date="1700000000" subject="Release &#34;file.rar&#34; yEnc 1024000000 (1/2)">
+	<groups><group>alt.binaries.test</group></groups>
+	<segments><segment bytes="100" number="1">a@example.com</segment></segments>
+	</file></nzb>`
+
+	nzb, err := nzbparser.ParseNzb(strings.NewReader(doc), "")
+	if err != nil {
+		t.Fatalf("ParseNzb: %v", err)
+	}
+	if got := nzb.Files[0].TotalSizeHint; got != 1024000000 {
+		t.Errorf("TotalSizeHint = %d, want 1024000000", got)
+	}
+}
+
 func TestParseSubjectUnquotedFilename(t *testing.T) {
 	tests := []struct {
 		subject      string

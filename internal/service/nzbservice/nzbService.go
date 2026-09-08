@@ -757,9 +757,9 @@ func (s *Service) PostedFiles(id string) []PostedFile {
 			Name:     file.Filename,
 			Segments: make([]PostedSegment, 0, len(file.Segments)),
 		}
-		for _, segment := range file.Segments {
-			size, exact := sizer.Size(segment.BytesHint)
-			posted.Segments = append(posted.Segments, PostedSegment{ID: segment.ID, Bytes: int64(size), Exact: exact})
+		sizes := sizer.FileSizes(&file)
+		for i, segment := range file.Segments {
+			posted.Segments = append(posted.Segments, PostedSegment{ID: segment.ID, Bytes: int64(sizes[i].Size), Exact: sizes[i].Exact})
 		}
 		files = append(files, posted)
 	}

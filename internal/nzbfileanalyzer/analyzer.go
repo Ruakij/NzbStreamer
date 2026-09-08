@@ -83,7 +83,101 @@ func NewSegmentSizer(nzbData *nzbparser.NzbData) SegmentSizer {
 	}
 
 	sizer.convention = ConventionUnknown
-	return sizer
+	return sizer.settleWithTotals(nzbData)
+}
+
+// Segment sizes are round: every size seen in the wild is a whole number of
+// 10 KiB. Assuming that is what makes one derivable rather than merely bounded,
+// since the escape overhead alone leaves a range of sizes that fit. A producer
+// cutting somewhere else derives nothing and stays unknown, which is where it
+// already was.
+const segmentAlignment = 10 * 1024
+
+// settleWithTotals identifies a convention the segment sizes alone could not,
+// from the total size a subject says its file holds decoded. Adding up the
+// bytes-hints of that file and comparing says which of the two the producer
+// counted: the sums agree where the hints count content, and the sum is larger
+// by the escape overhead where they count wire bytes.
+//
+// One file answers for the whole nzb, since a single tool built it.
+func (s SegmentSizer) settleWithTotals(nzbData *nzbparser.NzbData) SegmentSizer {
+	for i := range nzbData.Files {
+		file := &nzbData.Files[i]
+		total := file.TotalSizeHint
+		if total <= 0 || len(file.Segments) < 2 {
+			continue
+		}
+
+		var sum int64
+		for _, segment := range file.Segments {
+			sum += int64(segment.BytesHint)
+		}
+
+		if sum == total {
+			s.convention = ConventionContent
+			return s
+		}
+
+		// A file missing a segment sums short by about as much as the overhead
+		// the two conventions are told apart by, so the wire case needs the
+		// subject to confirm that all of them are here
+		if file.SegmentCountHint != len(file.Segments) {
+			continue
+		}
+		if sum < int64(float32(total)*(1+yEncOverheadMin)) || sum > int64(float32(total)*(1+yEncOverheadMax)) {
+			continue
+		}
+		if fullSize, ok := fullSizeFrom(file, total); ok {
+			s.convention = ConventionWire
+			s.fullSize = fullSize
+			return s
+		}
+	}
+
+	return s
+}
+
+// fullSizeFrom derives the decoded size of a wire-counted files full segments:
+// the one segment-aligned size that fits every full hint as a wire size and
+// leaves a tail fitting its own. Shifting it by one alignment step moves the
+// tail by a step per full segment, so the fit is unique for all but the shortest
+// files, and where it is not the file says nothing.
+func fullSizeFrom(file *nzbparser.File, total int64) (int, bool) {
+	tail := 0
+	for i := range file.Segments {
+		if file.Segments[i].Index > file.Segments[tail].Index {
+			tail = i
+		}
+	}
+
+	minHint, maxHint := 0, 0
+	for i := range file.Segments {
+		hint := file.Segments[i].BytesHint
+		if i == tail {
+			continue
+		}
+		if hint < minHint || minHint == 0 {
+			minHint = hint
+		}
+		if hint > maxHint {
+			maxHint = hint
+		}
+	}
+
+	fulls := int64(len(file.Segments) - 1)
+	tailHint := int64(file.Segments[tail].BytesHint)
+	lowest := int(float32(maxHint)/(1+yEncOverheadMax)) + segmentAlignment - 1
+
+	var found, matches int
+	for candidate := lowest - lowest%segmentAlignment; candidate < minHint; candidate += segmentAlignment {
+		derivedTail := total - int64(candidate)*fulls
+		if derivedTail <= 0 || derivedTail > tailHint || int64(float32(derivedTail)*(1+yEncOverheadMax)) < tailHint {
+			continue
+		}
+		found, matches = candidate, matches+1
+	}
+
+	return found, matches == 1
 }
 
 // Convention reports what the nzbs bytes-attribute was found to count.
@@ -109,6 +203,48 @@ func (s SegmentSizer) Size(hint int) (int, bool) {
 	// never larger than wire, so the low end of the overhead range is the
 	// smallest size the hint can stand for.
 	return int(float32(hint) * (1 - yEncOverheadMax)), false
+}
+
+// SegmentSize is what a segment contributes to its file decoded, and whether that
+// is exact rather than an upper-bounded estimate.
+type SegmentSize struct {
+	Size  int
+	Exact bool
+}
+
+// FileSizes sizes every segment of a file, in the order they are given.
+//
+// The total-size hint of the subject makes the last segment exact where every
+// other one already is: the tail is what the hint leaves over. It is taken only
+// when the length it yields fits the tails own bytes-hint, which rejects a hint
+// counting something else, and a file the nzb is missing segments of.
+func (s SegmentSizer) FileSizes(file *nzbparser.File) []SegmentSize {
+	sizes := make([]SegmentSize, len(file.Segments))
+	tail, sum := -1, 0
+	for i := range file.Segments {
+		size, exact := s.Size(file.Segments[i].BytesHint)
+		sizes[i] = SegmentSize{Size: size, Exact: exact}
+		sum += size
+		if tail < 0 || file.Segments[i].Index > file.Segments[tail].Index {
+			tail = i
+		}
+	}
+
+	if tail < 0 || sizes[tail].Exact || file.TotalSizeHint <= 0 {
+		return sizes
+	}
+	for i, size := range sizes {
+		if i != tail && !size.Exact {
+			return sizes
+		}
+	}
+
+	derived := file.TotalSizeHint - int64(sum-sizes[tail].Size)
+	if hint := int64(file.Segments[tail].BytesHint); derived > 0 && derived <= hint && int64(float32(derived)*(1+yEncOverheadMax)) >= hint {
+		sizes[tail] = SegmentSize{Size: int(derived), Exact: true}
+	}
+
+	return sizes
 }
 
 // SettleWith resolves a convention the nzb alone could not identify, from one

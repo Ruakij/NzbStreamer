@@ -538,16 +538,15 @@ func (s *Service) remove(id string) {
 
 // totalBytes is what the nzb presents decoded, which is not what its bytes-hints
 // add up to wherever the producer counted wire bytes. exact is false where a
-// segment of it could only be estimated, which is the last one of every file.
+// segment of it could only be estimated.
 func totalBytes(nzbData *nzbparser.NzbData) (bytes int64, exact bool) {
 	sizer := nzbfileanalyzer.NewSegmentSizer(nzbData)
 
 	exact = true
 	for i := range nzbData.Files {
-		for _, segment := range nzbData.Files[i].Segments {
-			size, segmentExact := sizer.Size(segment.BytesHint)
-			bytes += int64(size)
-			exact = exact && segmentExact
+		for _, size := range sizer.FileSizes(&nzbData.Files[i]) {
+			bytes += int64(size.Size)
+			exact = exact && size.Exact
 		}
 	}
 	return bytes, exact
