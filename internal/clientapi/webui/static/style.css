@@ -97,6 +97,7 @@ td.name .title { font-weight: 500; }
 tr[data-id] td:nth-child(n+4):not(:last-child) {
   font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted);
 }
+.share { font-size: .8rem; }
 /* The pair stacks, so it is aligned and kept slim rather than made to fit
    side by side in a cell the name column has already taken the width from. */
 tr[data-id] td:last-child { text-align: right; }

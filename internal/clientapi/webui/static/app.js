@@ -282,6 +282,9 @@ function createRow(id, action) {
   row.cells[0].append(inner);
   const stage = document.createElement("span");
   row.cells[2].append(stage);
+  const cachedShare = document.createElement("div");
+  cachedShare.className = "share";
+  row.cells[4].append(document.createElement("div"), cachedShare);
   if (action === "delete") {
     const archive = document.createElement("button");
     archive.className = "archive";
@@ -340,7 +343,9 @@ function render(tbody, items, action, files = {}) {
     stage.className = "stage " + item.stage;
     setText(stage, stageLabels[item.stage] || item.stage);
     setText(tr.cells[3], estimated(item.bytes, item.bytes_exact));
-    setText(tr.cells[4], item.cached ? size(item.cached) : "-");
+    setText(tr.cells[4].firstElementChild, item.cached ? size(item.cached) : "-");
+    setText(tr.cells[4].lastElementChild,
+      item.cached && item.bytes ? percent(item.cached, item.bytes) : "");
     setText(tr.cells[5], age(item.added));
     setText(tr.cells[6], item.read ? age(item.read) : "-");
     if (tr !== position) tbody.insertBefore(tr, position);
