@@ -25,6 +25,7 @@ type fakeService struct {
 	cancelErr  error
 	deleteErr  error
 	archiveErr error
+	added      []string
 	cancelled  []string
 	deleted    []string
 	archived   []string
@@ -34,6 +35,7 @@ func (s *fakeService) Add(nzbData *nzbparser.NzbData, _ string) (string, error) 
 	if s.addErr != nil {
 		return "", s.addErr
 	}
+	s.added = append(s.added, nzbData.MetaName)
 	return nzbData.MetaName, nil
 }
 
@@ -184,6 +186,70 @@ func TestStatsAndNzbDetail(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/nzb?id=gone", nil))
 	if recorder.Code != http.StatusNotFound {
 		t.Errorf("unknown nzb answered %d, want 404", recorder.Code)
+	}
+}
+
+const testNzb = `<?xml version="1.0"?>
+<nzb><head><meta type="name">Some.Release</meta></head>
+<file poster="p@example.com" date="1700000000" subject="[1/1] - &#34;file.rar&#34; yEnc (1/2)">
+<groups><group>alt.binaries.test</group></groups>
+<segments><segment bytes="10" number="1">a@n</segment><segment bytes="20" number="2">b@n</segment></segments>
+</file></nzb>`
+
+func TestInspectReportsTheParseWithoutAdding(t *testing.T) {
+	service := &fakeService{}
+
+	var upload bytes.Buffer
+	form := multipart.NewWriter(&upload)
+	part, err := form.CreateFormFile("file", "Some.Release.nzb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte(testNzb)); err != nil {
+		t.Fatal(err)
+	}
+	form.Close()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/inspect", &upload)
+	request.Header.Set("Content-Type", form.FormDataContentType())
+	recorder := httptest.NewRecorder()
+	webui.NewHandler(service).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("inspect answered %d: %s", recorder.Code, recorder.Body)
+	}
+
+	var body struct {
+		Name     string           `json:"name"`
+		Wire     int              `json:"wire"`
+		Bytes    int              `json:"bytes"`
+		Exact    bool             `json:"exact"`
+		Segments int              `json:"segments"`
+		Files    []map[string]any `json:"files"`
+		Errors   []string         `json:"errors"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response was not json: %v (%s)", err, recorder.Body)
+	}
+
+	if body.Name != "Some.Release" {
+		t.Errorf("name is %q, want Some.Release", body.Name)
+	}
+	if body.Wire != 30 || body.Segments != 2 {
+		t.Errorf("got %d wire bytes in %d segments, want 30 in 2", body.Wire, body.Segments)
+	}
+	// Nothing identifies the convention of this one, so the content size is an
+	// estimate below what the wire size says
+	if body.Exact || body.Bytes >= body.Wire {
+		t.Errorf("got %d bytes exact=%t, want an estimate under %d", body.Bytes, body.Exact, body.Wire)
+	}
+	if len(body.Files) != 1 || body.Files[0]["filename"] != "file.rar" {
+		t.Errorf("files are %v, want the one posted file", body.Files)
+	}
+	if len(body.Errors) != 0 {
+		t.Errorf("plausible nzb reported %v", body.Errors)
+	}
+	if len(service.added) != 0 {
+		t.Errorf("inspect added %v, want nothing added", service.added)
 	}
 }
 

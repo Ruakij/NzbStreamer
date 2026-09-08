@@ -23,8 +23,17 @@
 <form id="add">
   <input type="file" name="file" accept=".nzb" aria-label="nzb files" multiple required>
   <input type="text" name="category" placeholder="category" aria-label="category" size="10">
-  <button type="submit">Add</button>
+  <button type="submit" title="add the selected nzbs and start presenting them">Add</button>
+  <button type="button" id="inspect" title="show what the parser makes of the selected nzbs without adding them">Inspect</button>
 </form>
+
+<dialog id="inspect-dialog">
+  <div id="inspect-head">
+    <div id="inspect-title"></div>
+    <form method="dialog"><button aria-label="close" title="close">x</button></form>
+  </div>
+  <div id="inspect-body"></div>
+</dialog>
 
 <h2>Queue <span class="count" data-for="queue"></span></h2>
 <table><thead><tr>

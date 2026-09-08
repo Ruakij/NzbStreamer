@@ -1,10 +1,14 @@
 const cols = 8;
 
-function size(bytes) {
+function sizeParts(bytes) {
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
   let i = 0;
   while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
-  return bytes.toFixed(i ? 1 : 0) + " " + units[i];
+  return [bytes.toFixed(i ? 1 : 0), units[i]];
+}
+
+function size(bytes) {
+  return sizeParts(bytes).join(" ");
 }
 
 function duration(s) {
@@ -131,6 +135,7 @@ function updateFiles(row, paths, id) {
   if (!toggle) {
     toggle = document.createElement("button");
     toggle.className = "files-toggle tree-toggle";
+    toggle.title = "the files this nzb presents";
     toggle.onclick = () => {
       filesRow.hidden = !filesRow.hidden;
       toggle.dataset.open = !filesRow.hidden;
@@ -251,6 +256,26 @@ function cell(row, text, tag = "td") {
   row.append(cell);
 }
 
+// The unit is its own box of a fixed width, so what lines up down the column is
+// the number rather than the B of whichever unit each row happened to reach.
+function setSize(node, bytes, exact = true) {
+  const [number, unit] = sizeParts(bytes);
+  let suffix = node.querySelector(":scope > .unit");
+  if (!suffix) {
+    suffix = document.createElement("span");
+    suffix.className = "unit";
+    node.replaceChildren(document.createTextNode(""), suffix);
+  }
+  const text = (exact ? "" : "~") + number;
+  if (node.firstChild.nodeValue !== text) node.firstChild.nodeValue = text;
+  setText(suffix, unit);
+}
+
+function sizeCell(row, bytes, exact = true) {
+  cell(row, "");
+  setSize(row.lastElementChild, bytes, exact);
+}
+
 function renderInfo(target, data) {
   const total = document.createElement("div");
   total.className = "info-total";
@@ -273,8 +298,8 @@ function renderInfo(target, data) {
   for (const file of data.files.slice().sort((a, b) => collator.compare(a.name, b.name))) {
     const row = body.insertRow();
     setBreakable(row.insertCell(), file.name);
-    cell(row, estimated(file.bytes, file.exact));
-    cell(row, size(file.cached_bytes));
+    sizeCell(row, file.bytes, file.exact);
+    sizeCell(row, file.cached_bytes);
     cell(row, `(${percent(file.cached_bytes, file.bytes)})`);
     cell(row, file.cached_segments + " /");
     cell(row, file.segments);
@@ -310,6 +335,7 @@ function updateInfo(row, item) {
     const toggle = document.createElement("button");
     toggle.className = "files-toggle stats-toggle";
     toggle.textContent = "stats";
+    toggle.title = "what of this nzb is cached, per posted file";
     toggle.dataset.open = "false";
     toggle.onclick = () => {
       infoRow.hidden = !infoRow.hidden;
@@ -355,11 +381,15 @@ function createRow(id, action) {
   if (action === "delete") {
     const archive = document.createElement("button");
     archive.className = "archive";
+    archive.title = "hide this from the default listing; the files stay presented";
     row.cells[7].append(archive);
   }
   const button = document.createElement("button");
   button.className = action === "cancel" ? "" : "danger";
   button.textContent = action === "cancel" ? "Cancel" : "Delete";
+  button.title = action === "cancel"
+    ? "stop this add and take it off the queue"
+    : "take this off the mount and drop what it cached";
   button.onclick = () => remove(id, action, button);
   row.cells[7].append(button);
   return row;
@@ -410,8 +440,9 @@ function render(tbody, items, action, files = {}) {
     stage.className = "stage " + item.stage;
     setText(stage, stageLabels[item.stage] || item.stage);
     renderProgress(tr.cells[2], item);
-    setText(tr.cells[3], estimated(item.bytes, item.bytes_exact));
-    setText(tr.cells[4].firstElementChild, item.cached ? size(item.cached) : "-");
+    setSize(tr.cells[3], item.bytes, item.bytes_exact);
+    if (item.cached) setSize(tr.cells[4].firstElementChild, item.cached);
+    else setText(tr.cells[4].firstElementChild, "-");
     setText(tr.cells[4].lastElementChild,
       item.cached && item.bytes ? `(${percent(item.cached, item.bytes)})` : "");
     setText(tr.cells[5], age(item.added));
@@ -598,6 +629,118 @@ addForm.onsubmit = async (event) => {
   }
   form.reset();
   poll();
+};
+
+const conventions = {
+  content: "sizes count decoded bytes",
+  wire: "sizes count posted bytes",
+  unknown: "sizes could not be read from the hints, so they are estimates",
+};
+
+// Inspect runs the same parse an add does and reports it instead of acting on
+// it, so an nzb can be looked at before anything is built from it.
+function renderInspect(head, target, file, data) {
+  const heading = document.createElement("strong");
+  setBreakable(heading, data.name || file.name);
+  const summary = document.createElement("div");
+  summary.className = "info-total";
+  // Inspect does not probe, so an nzb whose hints identify nothing stays
+  // unknown here even though adding it would settle it
+  summary.textContent = `${data.files.length} posted files, ${data.segments} segments,`
+    + ` ${estimated(data.bytes, data.exact)} from ${size(data.wire)} on the wire`
+    + ` (${conventions[data.convention] || data.convention})`;
+  summary.title = "what a segment's bytes-attribute counts decides the sizes above";
+  head.append(heading, summary);
+
+  for (const [kind, list] of [["error", data.errors], ["warning", data.warnings]]) {
+    for (const message of list || []) {
+      const line = document.createElement("div");
+      line.className = "inspect-" + kind;
+      line.textContent = `${kind}: ${message}`;
+      target.append(line);
+    }
+  }
+
+  const meta = Object.entries(data.meta || {});
+  if (meta.length) {
+    const table = document.createElement("table");
+    table.className = "info-files inspect-meta";
+    const body = table.createTBody();
+    for (const [key, value] of meta.sort(([a], [b]) => collator.compare(a, b))) {
+      const row = body.insertRow();
+      cell(row, key);
+      const shown = row.insertCell();
+      // A password is over someones shoulder as easily as anything else here
+      if (/password/i.test(key)) {
+        const reveal = document.createElement("button");
+        reveal.className = "reveal";
+        reveal.textContent = "show";
+        reveal.onclick = () => setBreakable(shown, value);
+        shown.append(reveal);
+      } else {
+        setBreakable(shown, value);
+      }
+    }
+    target.append(table);
+  }
+
+  const table = document.createElement("table");
+  table.className = "info-files";
+  const header = table.createTHead().insertRow();
+  for (const [label, hint] of [["Posted file"], ["Size", "what it decodes to, which is what the file presents as"],
+    ["Wire", "what the nzb says is posted, yEnc overhead included"], ["Segments"], ["Date"]]) {
+    cell(header, label, "th");
+    if (hint) header.lastElementChild.title = hint;
+  }
+  const body = table.createTBody();
+  for (const posted of data.files.slice().sort((a, b) => collator.compare(a.filename, b.filename))) {
+    const row = body.insertRow();
+    // The subject, the poster and the groups are what the name was read out of:
+    // under it, since they are rarely what is being looked for
+    const name = row.insertCell();
+    const detail = document.createElement("small");
+    detail.textContent = [posted.encoding, posted.poster, (posted.groups || []).join(", ")]
+      .filter(Boolean).join(" - ");
+    detail.title = posted.subject;
+    setBreakable(name, posted.filename || posted.subject);
+    name.append(detail);
+    sizeCell(row, posted.bytes, posted.exact);
+    sizeCell(row, posted.wire);
+    // The subject says how many segments the post has; fewer listed is a gap
+    cell(row, posted.segment_hint && posted.segment_hint !== posted.segments
+      ? `${posted.segments} / ${posted.segment_hint}` : posted.segments);
+    cell(row, new Date(posted.date).toLocaleString());
+  }
+  target.append(table);
+}
+
+const inspectDialog = document.getElementById("inspect-dialog");
+
+document.getElementById("inspect").onclick = async () => {
+  const form = document.getElementById("add");
+  if (!form.file.files.length) return form.reportValidity();
+  const target = document.getElementById("inspect-body");
+  const title = document.getElementById("inspect-title");
+  target.replaceChildren();
+  title.replaceChildren();
+  inspectDialog.showModal();
+  // The first nzb names the dialog, next to the close button; any after it are
+  // headed inside the body, where their own table follows
+  for (const [i, file] of [...form.file.files].entries()) {
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      const response = await fetch("/api/inspect", { method: "POST", body });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      renderInspect(i === 0 ? title : target, target, file, data);
+    } catch (err) {
+      const line = document.createElement("div");
+      line.className = "inspect-error";
+      line.textContent = `${file.name}: ${err.message}`;
+      target.append(line);
+    }
+  }
 };
 
 setInterval(() => { if (!document.hidden) poll(); }, 2000);

@@ -1,8 +1,11 @@
+/* scrollbar-width does not inherit, so every scroller has to be named to get the
+   same thin bar the page has */
+* { scrollbar-width: thin; }
+
 html {
   /* The gutter is always there, so a page that grows past the fold does not
      shift sideways under the pointer */
   scrollbar-gutter: stable;
-  scrollbar-width: thin;
 }
 
 :root {
@@ -107,6 +110,9 @@ tr[data-id] td:nth-child(n+4):not(:last-child) {
   font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted);
 }
 .share { font-size: .8rem; opacity: .8; }
+/* The unit sits in a box of its own, so a column of sizes lines up on its digits
+   rather than on the B of whichever unit each row happened to reach */
+.unit { display: inline-block; min-width: 2.4em; text-align: left; padding-left: .35em; opacity: .8; }
 /* Size and cached line up on their last digit, as they do in the info table */
 table:has(#queue, #history) th:nth-child(4), table:has(#queue, #history) th:nth-child(5),
 tr[data-id] td:nth-child(4), tr[data-id] td:nth-child(5) { text-align: right; }
@@ -199,3 +205,49 @@ tr.info td { padding-top: 0; font-size: .85rem; }
   padding: 0 .4rem;
 }
 .file-tree .download:hover { color: var(--fg); background: var(--hover); }
+
+/* The close sits in a row of its own, so the body below it scrolls across the
+   whole width rather than around the button. */
+#inspect-dialog {
+  width: min(70rem, 92vw); max-height: 85vh;
+  color: var(--fg); background: var(--panel);
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem;
+}
+/* Only when open, so the closed dialog keeps its display: none */
+#inspect-dialog[open] { display: flex; flex-direction: column; }
+#inspect-dialog::backdrop { background: #0007; }
+#inspect-head { display: flex; align-items: flex-start; gap: .75rem; margin-bottom: .5rem; }
+#inspect-title { flex: 1; min-width: 0; }
+#inspect-head > form { margin-left: auto; }
+#inspect-head button {
+  border: 0; padding: 0 .3rem; line-height: 1; font-size: 1.2rem; color: var(--muted);
+}
+#inspect-head button:hover { color: var(--fg); background: transparent; }
+/* Right padding keeps the content clear of the scrollbar */
+#inspect-body { overflow: auto; padding-right: .5rem; display: flex; flex-direction: column; gap: .75rem; }
+/* The name of every nzb past the first, which is headed in the dialogs head */
+#inspect-body > strong { display: block; margin-top: .75rem; overflow-wrap: anywhere; }
+#inspect-body > strong:first-child { margin-top: 0; }
+/* Every column here stands on its own, none of them half of a pair */
+#inspect-body .info-files td:nth-child(n+3) { opacity: 1; }
+#inspect-body .info-files td, #inspect-body .info-files th { padding: .45rem .8rem; }
+#inspect-body .info-files th { text-align: left; }
+/* The numbers take only the width they need, so their heading sits over them and
+   the posted name gets the rest */
+#inspect-body .info-files:not(.inspect-meta) :is(td, th):not(:first-child) {
+  width: 1%; white-space: nowrap;
+}
+/* What the name was read out of, under it rather than run together with it */
+#inspect-body .info-files small {
+  display: block; color: var(--muted); font-size: .85em; font-family: system-ui, sans-serif;
+}
+/* A quarter to the key, the rest to the value */
+.inspect-meta td:first-child { color: var(--muted); font-family: inherit; width: 25%; }
+.inspect-meta td:last-child { text-align: left; white-space: normal; }
+.inspect-meta .reveal {
+  font-size: .75rem; color: var(--muted); background: transparent;
+  border: 1px solid var(--line); border-radius: 6px; padding: 0 .4rem;
+}
+.inspect-meta .reveal:hover { color: var(--fg); background: var(--hover); }
+.inspect-error { color: var(--bad); }
+.inspect-warning { color: var(--muted); }

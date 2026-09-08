@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbfileanalyzer"
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/service/nzbservice"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
@@ -51,6 +52,7 @@ func NewHandler(service Service, components ...Component) *Handler {
 	h.mux.HandleFunc("GET /api/items", h.items)
 	h.mux.HandleFunc("GET /api/nzb", h.nzb)
 	h.mux.HandleFunc("POST /api/add", h.add)
+	h.mux.HandleFunc("POST /api/inspect", h.inspect)
 	h.mux.HandleFunc("POST /api/remove", h.remove)
 	h.mux.HandleFunc("GET /api/health", h.health)
 	h.mux.HandleFunc("GET /api/health/live", h.live)
@@ -97,30 +99,114 @@ func (h *Handler) nzb(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, detail)
 }
 
-func (h *Handler) add(w http.ResponseWriter, r *http.Request) {
+// uploaded parses the nzb of a multipart request, answering the caller itself on
+// anything that stops it.
+func uploaded(w http.ResponseWriter, r *http.Request) *nzbparser.NzbData {
 	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "failed reading upload: "+err.Error())
-		return
+		return nil
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "no nzb file in request")
-		return
+		return nil
 	}
 	defer file.Close()
 
 	content, err := io.ReadAll(file)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed reading upload: "+err.Error())
-		return
+		return nil
 	}
 
 	nzbData, err := nzbparser.ParseNzb(bytes.NewReader(content), header.Filename)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed parsing nzb: "+err.Error())
+		return nil
+	}
+
+	return nzbData
+}
+
+// inspect answers what the parser makes of an upload without adding it: the
+// same parse an add does, reported rather than acted on, implausible ones
+// included since seeing why is the point.
+func (h *Handler) inspect(w http.ResponseWriter, r *http.Request) {
+	nzbData := uploaded(w, r)
+	if nzbData == nil {
 		return
 	}
+
+	warnings, errs := nzbData.CheckPlausability()
+
+	// What the nzb posts, sized the way an add would size it: without the probe
+	// and without what the store already measured, so an unknown convention stays
+	// unknown here and every size it yields is an estimate.
+	sizer := nzbfileanalyzer.NewSegmentSizer(nzbData)
+
+	files := make([]any, 0, len(nzbData.Files))
+	totalWire, totalBytes, totalSegments := 0, 0, 0
+	totalExact := true
+	for i := range nzbData.Files {
+		file := &nzbData.Files[i]
+
+		wire, size := 0, 0
+		exact := true
+		for _, segment := range file.Segments {
+			wire += segment.BytesHint
+			segmentSize, segmentExact := sizer.Size(segment.BytesHint)
+			size += segmentSize
+			exact = exact && segmentExact
+		}
+		totalWire += wire
+		totalBytes += size
+		totalExact = totalExact && exact
+		totalSegments += len(file.Segments)
+
+		files = append(files, map[string]any{
+			"filename":     file.Filename,
+			"subject":      file.Subject,
+			"poster":       file.Poster,
+			"groups":       file.Groups,
+			"encoding":     file.Encoding,
+			"date":         file.ParsedDate,
+			"wire":         wire,
+			"bytes":        size,
+			"exact":        exact,
+			"segments":     len(file.Segments),
+			"segment_hint": file.SegmentCountHint,
+		})
+	}
+
+	writeJSON(w, map[string]any{
+		"name":       nzbData.MetaName,
+		"meta":       nzbData.Meta,
+		"convention": sizer.Convention().String(),
+		"wire":       totalWire,
+		"bytes":      totalBytes,
+		"exact":      totalExact,
+		"segments":   totalSegments,
+		"files":      files,
+		"warnings":   messages(warnings),
+		"errors":     messages(errs),
+	})
+}
+
+func messages(errs []nzbparser.EncapsulatedError) []string {
+	out := make([]string, len(errs))
+	for i, err := range errs {
+		out[i] = err.Error()
+	}
+	return out
+}
+
+func (h *Handler) add(w http.ResponseWriter, r *http.Request) {
+	nzbData := uploaded(w, r)
+	if nzbData == nil {
+		return
+	}
+
 	if _, errs := nzbData.CheckPlausability(); len(errs) > 0 {
 		writeError(w, http.StatusBadRequest, "implausible nzb: "+errs[0].Error())
 		return
