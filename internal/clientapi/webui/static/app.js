@@ -175,7 +175,7 @@ function strip(stats) {
 
 // The stage values are the api's; the column only has room for the short form
 // of the long ones.
-const stageLabels = { completed: "done", cancelled: "stop", rebuilding: "rebuild" };
+const stageLabels = { completed: "done", cancelled: "stop", cancelling: "stopping", rebuilding: "rebuild" };
 
 // An add still running carries how far it has got and what the api estimates is
 // left of it, the wait for a slot included, so a queued one reads as a wait
@@ -183,7 +183,7 @@ const stageLabels = { completed: "done", cancelled: "stop", rebuilding: "rebuild
 // what an add says while the servers have answered nothing to measure them by.
 function renderProgress(cell, item) {
   const done = item.progress || 0;
-  const running = !["completed", "failed", "cancelled"].includes(item.stage);
+  const running = !["completed", "failed", "cancelled", "cancelling"].includes(item.stage);
   const bar = cell.querySelector(".bar");
   bar.firstElementChild.style.width = `${Math.round(done * 100)}%`;
   bar.hidden = !running;

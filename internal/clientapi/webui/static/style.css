@@ -114,7 +114,7 @@ tr[data-id] td:last-child button + button { margin-top: .1rem; }
   border: 1px solid currentColor; color: var(--muted); white-space: nowrap;
 }
 .stage.completed { color: var(--good); }
-.stage.failed, .stage.cancelled { color: var(--bad); }
+.stage.failed, .stage.cancelled, .stage.cancelling { color: var(--bad); }
 .stage.checking, .stage.building, .stage.rebuilding { color: var(--accent); }
 
 td.stage-cell { min-width: 6rem; }

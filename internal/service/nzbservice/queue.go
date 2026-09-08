@@ -1,6 +1,7 @@
 package nzbservice
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -28,6 +29,11 @@ const (
 	StageCompleted Stage = "completed"
 	StageFailed    Stage = "failed"
 	StageCancelled Stage = "cancelled"
+	// StageCancelling is an add that has been taken back and is still unwinding.
+	// A build is not interruptible, so it runs to the end of whatever read it
+	// was in; the item stays in the queue until it does, since the work is still
+	// running and the name is still its own
+	StageCancelling Stage = "cancelling"
 	// StageRebuilding is a finished add whose tree is being built again, which
 	// is what a settings change costs. The add is over and the item stays
 	// history; this says what is happening to the files it already has
@@ -61,10 +67,12 @@ type QueueItem struct {
 	Finished time.Time `json:"finished"`
 	Err      string    `json:"error"`
 
-	// Set by Cancel while the add runs, read by the add at its stage
-	// boundaries; closed by finish, which is what Cancel waits on
-	cancelled bool
-	done      chan struct{}
+	// Cancelled by Cancel, watched by the add at its stage boundaries and by
+	// every request the add has in flight. done is closed by finish, for
+	// whoever wants to wait for the add to have unwound
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
 
 	// When the running stage began, which is what a build is counted down from:
 	// an add that waited for a slot spent that wait queued, not building
@@ -194,11 +202,11 @@ func (s *Service) items(done bool) []QueueItem {
 // down, and the record of it stays, cancelled, because a client that asked is
 // owed the answer. Removing that record is what Delete is for.
 //
-// It blocks until the add is finished. Nothing in flight is interrupted: a
-// health check is STATs already issued, and stopping between them would need a
-// context through filehealth and the nntp client for the sake of a few
-// milliseconds. The add checks at its stage boundaries, so what is waited on is
-// at worst the pass that was already running.
+// It returns as soon as the add has been told, without waiting for it to unwind.
+// A build is one blocking read after another, each of them retried against every
+// server, so a caller made to wait for the one already in flight would sit there
+// for minutes. The add sees the cancelled context at its next stage boundary and
+// tears down what it has then, and nothing it produces after this is presented.
 func (s *Service) Cancel(id string) error {
 	s.queueMutex.Lock()
 	item := s.find(id)
@@ -207,21 +215,32 @@ func (s *Service) Cancel(id string) error {
 		return fmt.Errorf("%w: %s", ErrNzbNotFound, id)
 	}
 
+	item.cancel()
 	running := !item.Done()
-	done := item.done
-	item.cancelled = true
-	if !running {
+	if running {
+		item.Stage = StageCancelling
+	} else {
 		item.Stage = StageCancelled
 		item.Finished = time.Now()
 	}
 	s.queueMutex.Unlock()
 
-	// finish records the stage of one that was still running, since it is what
-	// sees the add end
-	if running {
-		<-done
+	// The record says cancelled either way, so a restart does not resume an add
+	// that was taken back while it was unwinding. One still running ends in
+	// finish, which tears down what it presented before it got there
+	if !running {
+		s.teardown(id)
 	}
 
+	if err := s.store.SetStage(id, string(StageCancelled), ""); err != nil {
+		return fmt.Errorf("failed recording cancelled nzb %s: %w", id, err)
+	}
+	return nil
+}
+
+// teardown takes back everything an nzb presented and the segment stack behind
+// it, leaving the name free for it to be added again.
+func (s *Service) teardown(id string) {
 	s.mutex.Lock()
 	nzbData := s.nzbFiledata[id]
 	s.unregister(id)
@@ -230,11 +249,6 @@ func (s *Service) Cancel(id string) error {
 	if nzbData != nil {
 		s.factory.DiscardSegmentStackFromNzbData(nzbData)
 	}
-
-	if err := s.store.SetStage(id, string(StageCancelled), ""); err != nil {
-		return fmt.Errorf("failed recording cancelled nzb %s: %w", id, err)
-	}
-	return nil
 }
 
 // enqueue records an accepted add, in memory and in the store, so one a restart
@@ -267,7 +281,10 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 
 	bytes, bytesExact := totalBytes(nzbData)
 	probeOps, buildOps := s.plannedOps(nzbData)
+	ctx, cancel := context.WithCancel(context.Background())
 	s.queue = append(s.queue, &QueueItem{
+		ctx:        ctx,
+		cancel:     cancel,
 		ID:         nzbData.MetaName,
 		Category:   category,
 		Stage:      StageQueued,
@@ -312,7 +329,10 @@ func (s *Service) restore(record nzbstore.Record) {
 
 	bytes, bytesExact := totalBytes(record.Data)
 	probeOps, buildOps := s.plannedOps(record.Data)
+	ctx, cancel := context.WithCancel(context.Background())
 	s.queue = append(s.queue, &QueueItem{
+		ctx:        ctx,
+		cancel:     cancel,
 		ID:         record.Data.MetaName,
 		probeOps:   probeOps,
 		buildOps:   buildOps,
@@ -380,13 +400,26 @@ func (s *Service) stage(id string, stage Stage) error {
 	if item == nil || item.Done() {
 		return nil
 	}
-	if item.cancelled {
+	if item.ctx.Err() != nil {
 		return fmt.Errorf("%w: %s", ErrAddCancelled, id)
 	}
 
 	item.Stage = stage
 	item.stageStarted = time.Now()
 	return nil
+}
+
+// addContext is what the add of this nzb is cancelled by. Restoring the store
+// walks the same path over a record that already ended, and nothing is tracking
+// that, so nothing cancels it either.
+func (s *Service) addContext(id string) context.Context {
+	s.queueMutex.Lock()
+	defer s.queueMutex.Unlock()
+
+	if item := s.find(id); item != nil {
+		return item.ctx
+	}
+	return context.Background()
 }
 
 // progress records how far the check of an add has got. It is called once per
@@ -413,8 +446,9 @@ func (s *Service) finish(id string, err error) {
 		return
 	}
 
+	cancelled := item.ctx.Err() != nil
 	switch {
-	case item.cancelled:
+	case cancelled:
 		item.Stage = StageCancelled
 	case err != nil:
 		item.Stage = StageFailed
@@ -427,6 +461,12 @@ func (s *Service) finish(id string, err error) {
 	close(item.done)
 
 	s.queueMutex.Unlock()
+
+	// A cancel does not wait for the add, so this is where one that was taken
+	// back mid-build gives up what it had got as far as presenting
+	if cancelled {
+		s.teardown(id)
+	}
 
 	if err := s.store.SetStage(id, string(stage), message); err != nil {
 		slog.Error("Failed recording how an add ended", "MetaName", id, "stage", stage, "error", err)

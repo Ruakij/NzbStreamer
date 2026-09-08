@@ -25,7 +25,7 @@ func remainingOps(item *QueueItem, rate float64) (left, total float64) {
 	total = float64(item.probeOps + item.buildOps)
 
 	switch {
-	case item.Done():
+	case item.Done() || item.Stage == StageCancelling:
 		return 0, total
 	case item.Stage == StageQueued:
 		return total, total
@@ -58,7 +58,7 @@ func progressOf(item *QueueItem, left, total float64) float64 {
 	switch {
 	case item.Stage == StageCompleted:
 		return 1
-	case item.Done():
+	case item.Done() || item.Stage == StageCancelling:
 		return 0
 	case total > 0:
 		return min(max(1-left/total, 0), 1)

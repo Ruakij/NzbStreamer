@@ -3,6 +3,7 @@
 package filehealth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -121,7 +122,7 @@ type fileResult struct {
 // A cheap pass covers every content file, which settles a dead post on its first
 // probe and a healthy one for the price of that pass. Only a file whose sample
 // leaves the answer genuinely open is probed again, harder.
-func (c *DefaultChecker) CheckFiles(nzbData *nzbparser.NzbData, progress ProgressFunc) []error {
+func (c *DefaultChecker) CheckFiles(ctx context.Context, nzbData *nzbparser.NzbData, progress ProgressFunc) []error {
 	if c.config.InitialFilePercent <= 0 {
 		return nil
 	}
@@ -140,9 +141,9 @@ func (c *DefaultChecker) CheckFiles(nzbData *nzbparser.NzbData, progress Progres
 	}
 
 	reporter := &progressReporter{report: progress}
-	results := c.probe(content, counts, reporter)
-	c.escalate(content, results, limit, reporter)
-	recordCheck(started, segments)
+	results := c.probe(ctx, content, counts, reporter)
+	c.escalate(ctx, content, results, limit, reporter)
+	recordCheck(ctx, started, segments)
 
 	var errs []error
 	for i, result := range results {
@@ -204,7 +205,7 @@ func (c *DefaultChecker) PlannedProbes(nzbData *nzbparser.NzbData) int {
 // first pass could not decide, and replaces its result. A widened sample is read
 // on its own rather than added to the first: what it measures is the same
 // fraction, only more precisely.
-func (c *DefaultChecker) escalate(content []*nzbparser.File, results []fileResult, limit float64, reporter *progressReporter) {
+func (c *DefaultChecker) escalate(ctx context.Context, content []*nzbparser.File, results []fileResult, limit float64, reporter *progressReporter) {
 	if c.config.ExtensiveFilePercent <= 0 {
 		return
 	}
@@ -237,7 +238,7 @@ func (c *DefaultChecker) escalate(content []*nzbparser.File, results []fileResul
 		return
 	}
 
-	for i, result := range c.probe(files, counts, reporter) {
+	for i, result := range c.probe(ctx, files, counts, reporter) {
 		if !c.config.UndecidedAccept && decide(result.missing, result.checked, limit, c.config.Confidence) == verdictUndecided {
 			result.err = fmt.Errorf("%w: %d of %d checked, still undecided", ErrSegmentsMissing, result.missing, result.checked)
 		}
@@ -246,7 +247,7 @@ func (c *DefaultChecker) escalate(content []*nzbparser.File, results []fileResul
 }
 
 // probe checks counts[i] segments of files[i], spread evenly.
-func (c *DefaultChecker) probe(files []*nzbparser.File, counts []int, reporter *progressReporter) []fileResult {
+func (c *DefaultChecker) probe(ctx context.Context, files []*nzbparser.File, counts []int, reporter *progressReporter) []fileResult {
 	results := make([]fileResult, len(files))
 
 	var (
@@ -275,6 +276,12 @@ func (c *DefaultChecker) probe(files []*nzbparser.File, counts []int, reporter *
 				defer wg.Done()
 				defer func() { <-sem }()
 
+				// The add this belongs to was taken back, so the answer is not
+				// worth the request
+				if ctx.Err() != nil {
+					return
+				}
+
 				exists, err := c.exists(id)
 
 				reporter.step()
@@ -285,15 +292,15 @@ func (c *DefaultChecker) probe(files []*nzbparser.File, counts []int, reporter *
 				result.checked++
 				switch {
 				case err != nil:
-					recordProbe("error")
+					recordProbe(ctx, "error")
 					if result.err == nil {
 						result.err = err
 					}
 				case !exists:
-					recordProbe("missing")
+					recordProbe(ctx, "missing")
 					result.missing++
 				default:
-					recordProbe("present")
+					recordProbe(ctx, "present")
 				}
 			}()
 		}

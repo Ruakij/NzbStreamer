@@ -292,6 +292,8 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	release := s.slots.acquire()
 	defer release()
 
+	ctx := s.addContext(nzbData.MetaName)
+
 	slog.Debug("Adding nzb", "MetaName", nzbData.MetaName)
 
 	defer func() {
@@ -316,7 +318,13 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	// point of reporting it that way, so it keeps them and the name, and is
 	// removed like a completed one
 	defer func() {
-		if err != nil && !errors.Is(err, nzbrecordfactory.ErrArchiveLeftPacked) {
+		switch {
+		case err == nil || errors.Is(err, nzbrecordfactory.ErrArchiveLeftPacked):
+		// One taken back gives up the segment stack as well: nothing is going to
+		// read it, and the cancel has already been answered
+		case errors.Is(err, ErrAddCancelled):
+			s.teardown(nzbData.MetaName)
+		default:
 			s.mutex.Lock()
 			s.unregister(nzbData.MetaName)
 			s.mutex.Unlock()
@@ -336,7 +344,7 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 		}
 
 		progress := func(done, total int) { s.progress(nzbData.MetaName, done, total) }
-		if healthErrors := s.healthChecker.CheckFiles(nzbData, progress); len(healthErrors) > 0 {
+		if healthErrors := s.healthChecker.CheckFiles(ctx, nzbData, progress); len(healthErrors) > 0 {
 			for _, err := range healthErrors {
 				slog.Warn("Unhealthy file detected",
 					"nzb", nzbData.MetaName,
@@ -359,6 +367,13 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	if len(tree) == 0 {
 		slog.Warn("After blacklist, no files left", "MetaName", nzbData.MetaName)
 		return packed
+	}
+
+	// The build was not interruptible, so this is where an add taken back while
+	// it ran stops: presenting the tree it went on to finish would leave a
+	// cancelled nzb in the filesystem
+	if ctx.Err() != nil {
+		return fmt.Errorf("%w: %s", ErrAddCancelled, nzbData.MetaName)
 	}
 
 	s.register(nzbData, tree)

@@ -66,7 +66,7 @@ func TestChecksOnlyFirstAndLastSegmentOfContent(t *testing.T) {
 	exists, checked := recorder()
 	checker := filehealth.NewDefaultChecker(config(0.5, 1), exists)
 
-	errs := checker.CheckFiles(nzbWith(
+	errs := checker.CheckFiles(t.Context(), nzbWith(
 		fileWith("a.rar", "s1", "s2", "s3", "s4"),
 		fileWith("a.vol00+01.par2", "p1", "p2"),
 		fileWith("a.nfo", "n1"),
@@ -85,7 +85,7 @@ func TestMissingSegmentWithoutPar2ReportsFile(t *testing.T) {
 	exists, _ := recorder("b1")
 	checker := filehealth.NewDefaultChecker(config(100, 100), exists)
 
-	errs := checker.CheckFiles(nzbWith(
+	errs := checker.CheckFiles(t.Context(), nzbWith(
 		fileWith("a.rar", "a1", "a2"),
 		fileWith("b.rar", "b1", "b2"),
 	), nil)
@@ -115,7 +115,7 @@ func TestDamageWithinPar2CapacityIsAccepted(t *testing.T) {
 	}, exists)
 
 	// Recovery as large as the content, so the limit is 90% missing
-	errs := checker.CheckFiles(nzbWith(
+	errs := checker.CheckFiles(t.Context(), nzbWith(
 		fileOf("a.rar", "a", 40),
 		fileOf("a.vol00+39.par2", "p", 40),
 	), nil)
@@ -140,7 +140,7 @@ func TestUndecidedFileIsProbedAgain(t *testing.T) {
 	exists, checked := recorder(halfGone()...)
 	checker := filehealth.NewDefaultChecker(config(0.5, 100), exists)
 
-	errs := checker.CheckFiles(nzbWith(
+	errs := checker.CheckFiles(t.Context(), nzbWith(
 		fileOf("a.rar", "a", 100),
 		fileOf("a.vol00+99.par2", "p", 100),
 	), nil)
@@ -160,7 +160,7 @@ func TestUndecidedFileIsReportedWhenNotAccepted(t *testing.T) {
 	config.UndecidedAccept = false
 	checker := filehealth.NewDefaultChecker(config, exists)
 
-	errs := checker.CheckFiles(nzbWith(
+	errs := checker.CheckFiles(t.Context(), nzbWith(
 		fileOf("a.rar", "a", 100),
 		fileOf("a.vol00+99.par2", "p", 100),
 	), nil)
@@ -173,7 +173,7 @@ func TestDisabledCheckDoesNothing(t *testing.T) {
 	exists, checked := recorder("s1")
 	checker := filehealth.NewDefaultChecker(config(0, 0), exists)
 
-	if errs := checker.CheckFiles(nzbWith(fileWith("a.rar", "s1")), nil); errs != nil {
+	if errs := checker.CheckFiles(t.Context(), nzbWith(fileWith("a.rar", "s1")), nil); errs != nil {
 		t.Fatalf("got errors %v, want none", errs)
 	}
 	if len(*checked) != 0 {
@@ -203,7 +203,7 @@ func TestProgressEndsAtEverythingItProbed(t *testing.T) {
 		reports++
 	}
 
-	if errs := checker.CheckFiles(nzbWith(
+	if errs := checker.CheckFiles(t.Context(), nzbWith(
 		fileOf("a.rar", "a", 100),
 		fileOf("a.vol00+99.par2", "p", 100),
 	), progress); len(errs) != 0 {

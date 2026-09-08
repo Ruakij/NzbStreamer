@@ -28,11 +28,11 @@ var resultKey = attribute.Key("result")
 
 // recordProbe counts one probed segment. The check is parallel, so this is called
 // from every probe goroutine.
-func recordProbe(result string) {
-	probedSegments.Add(context.Background(), 1, metric.WithAttributes(resultKey.String(result)))
+func recordProbe(ctx context.Context, result string) {
+	probedSegments.Add(ctx, 1, metric.WithAttributes(resultKey.String(result)))
 }
 
-func recordCheck(started time.Time, segments int) {
-	checkDuration.Record(context.Background(), time.Since(started).Seconds())
-	sampledSegments.Add(context.Background(), int64(segments))
+func recordCheck(ctx context.Context, started time.Time, segments int) {
+	checkDuration.Record(ctx, time.Since(started).Seconds())
+	sampledSegments.Add(ctx, int64(segments))
 }

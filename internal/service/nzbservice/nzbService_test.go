@@ -1,6 +1,7 @@
 package nzbservice_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -63,7 +64,9 @@ func (fakeFile) Open() (io.ReadSeekCloser, error) { return nil, errNoBytes }
 
 type healthyChecker struct{}
 
-func (healthyChecker) CheckFiles(_ *nzbparser.NzbData, _ filehealth.ProgressFunc) []error { return nil }
+func (healthyChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, _ filehealth.ProgressFunc) []error {
+	return nil
+}
 
 func (healthyChecker) PlannedProbes(_ *nzbparser.NzbData) int { return 0 }
 
@@ -177,7 +180,7 @@ type blockingChecker struct {
 	release chan struct{}
 }
 
-func (c blockingChecker) CheckFiles(_ *nzbparser.NzbData, progress filehealth.ProgressFunc) []error {
+func (c blockingChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, progress filehealth.ProgressFunc) []error {
 	progress(1, 2)
 	close(c.entered)
 	<-c.release
@@ -247,20 +250,17 @@ func TestAnAddIsVisibleWhileItRunsAndAfterItFinishes(t *testing.T) {
 	}
 }
 
-// A cancel is answered at the next stage boundary if there is one, and by
-// removing the finished add if there is not. Both end in the same place.
-func TestCancellingAnAddWaitsForItAndLeavesNothingBehind(t *testing.T) {
+// A cancel is answered at once, whatever the add is in the middle of, and the
+// add tears down what it had got as far as building when it unwinds.
+func TestCancellingAnAddIsAnsweredAtOnceAndLeavesNothingBehind(t *testing.T) {
 	for _, test := range []struct {
 		name string
-		// Where the add is held while the cancel arrives, and whether it gets
-		// far enough to build anything
-		hold  func(*fakeFactory) (chan struct{}, chan struct{})
-		built bool
+		// Where the add is held while the cancel arrives
+		hold func(*fakeFactory) (chan struct{}, chan struct{})
 	}{
 		{
-			name:  "before it builds anything",
-			hold:  nil,
-			built: false,
+			name: "before it builds anything",
+			hold: nil,
 		},
 		{
 			name: "after it has built",
@@ -268,7 +268,6 @@ func TestCancellingAnAddWaitsForItAndLeavesNothingBehind(t *testing.T) {
 				f.entered, f.release = make(chan struct{}), make(chan struct{})
 				return f.entered, f.release
 			},
-			built: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -297,29 +296,38 @@ func TestCancellingAnAddWaitsForItAndLeavesNothingBehind(t *testing.T) {
 			cancelled := make(chan error, 1)
 			go func() { cancelled <- service.Cancel(id) }()
 
+			// The add is held in a call nothing can interrupt, and the cancel is
+			// answered anyway rather than waiting for it
 			select {
 			case err := <-cancelled:
-				t.Fatalf("Cancel returned %v while the add was still running", err)
-			case <-time.After(20 * time.Millisecond):
+				if err != nil {
+					t.Fatalf("Cancel: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Cancel waited for an add that was still running")
+			}
+
+			// The store says cancelled before the add has unwound, so a restart
+			// in between does not resume it
+			if got := store.stage(id); got != string(nzbservice.StageCancelled) {
+				t.Errorf("a cancelled add is recorded in the store as %q", got)
+			}
+			if queue := service.Queue(); len(queue) != 1 || queue[0].Stage != nzbservice.StageCancelling {
+				t.Fatalf("an add still unwinding was reported as %+v", queue)
 			}
 
 			close(release)
 
-			if err := <-cancelled; err != nil {
-				t.Fatalf("Cancel: %v", err)
-			}
-
-			history := service.History()
+			history := waitForHistory(t, service)
 			if len(history) != 1 || history[0].Stage != nzbservice.StageCancelled {
 				t.Fatalf("cancelled add was recorded as %+v", history)
 			}
-			if got := store.stage(id); got != string(nzbservice.StageCancelled) {
-				t.Errorf("a cancelled add is recorded in the store as %q", got)
+			// Once, however many hands the teardown passes through
+			if len(factory.discarded) != 1 {
+				t.Errorf("a cancelled add discarded its segment data %d times, want once", len(factory.discarded))
 			}
-			if built := len(factory.discarded) == 1; test.built && !built {
-				t.Errorf("a cancelled add left its segment data behind")
-			} else if !test.built && built {
-				t.Errorf("a cancel caught before the build discarded something anyway")
+			if files := service.Files(); len(files) != 0 {
+				t.Errorf("a cancelled add is still presenting %v", files)
 			}
 		})
 	}
