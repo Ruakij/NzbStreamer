@@ -557,7 +557,36 @@ async function poll() {
   }
 }
 
-document.getElementById("add").onsubmit = async (event) => {
+const addForm = document.getElementById("add");
+let dragDepth = 0;
+
+function isFileDrag(event) {
+  return Array.from(event.dataTransfer?.types || []).includes("Files");
+}
+
+window.addEventListener("dragenter", (event) => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  dragDepth++;
+  document.body.classList.add("file-drag");
+});
+window.addEventListener("dragover", (event) => {
+  if (isFileDrag(event)) event.preventDefault();
+});
+window.addEventListener("dragleave", (event) => {
+  if (!isFileDrag(event)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) document.body.classList.remove("file-drag");
+});
+window.addEventListener("drop", (event) => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove("file-drag");
+  if (event.dataTransfer.files.length) addForm.elements.file.files = event.dataTransfer.files;
+});
+
+addForm.onsubmit = async (event) => {
   event.preventDefault();
   const form = event.target;
   for (const file of form.file.files) {

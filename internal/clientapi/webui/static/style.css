@@ -39,6 +39,15 @@ form {
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   padding: .75rem;
 }
+#add input[name=category] { margin-left: auto; }
+body.file-drag::after {
+  content: "Drop NZB files anywhere to add";
+  position: fixed; inset: 1rem; z-index: 10; pointer-events: none;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  border: 2px dashed var(--accent); border-radius: var(--radius);
+  color: var(--accent); font-size: 1.1rem; font-weight: 600;
+}
 input, button, select { font: inherit; color: inherit; }
 select { background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: .15rem .3rem; }
 input[type=text] {
