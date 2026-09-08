@@ -20,7 +20,7 @@ func TestUnopenableArchiveIsPresentedAsItsVolumes(t *testing.T) {
 
 	factory := NewNzbFileFactory(nil, nil, nil, 0, 2)
 	files := make(map[string]presentation.Openable)
-	err := factory.expand(entries, "", 0, "wrong-password", files)
+	err := factory.expand(entries, "", 0, "wrong-password", files, &buildProgress{})
 
 	if !errors.Is(err, ErrArchiveLeftPacked) {
 		t.Fatalf("want ErrArchiveLeftPacked, got %v", err)

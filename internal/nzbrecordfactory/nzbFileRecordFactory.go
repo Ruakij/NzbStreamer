@@ -86,14 +86,17 @@ var ErrArchiveLeftPacked = errors.New("archive left packed")
 
 // BuildSegmentStackFromNzbData returns the files an nzb presents. A returned
 // ErrArchiveLeftPacked comes with a usable tree; any other error does not.
-func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData) (map[string]presentation.Openable, error) {
+//
+// progress reports the volumes the header walks have opened, which is what the
+// build spends its time on; nil is a caller that does not want to know.
+func (f *NzbFileFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData, progress ProgressFunc) (map[string]presentation.Openable, error) {
 	known := f.knownSizes(nzbData)
 	sizer := f.sizer(nzbData, known)
 
 	rawFiles := f.buildRawFiles(nzbData, sizer, known, CachePrefix(nzbData.MetaName))
 
 	files := make(map[string]presentation.Openable, len(rawFiles))
-	packed := f.expand(rawFiles, "", 0, nzbData.Meta["Password"], files)
+	packed := f.expand(rawFiles, "", 0, nzbData.Meta["Password"], files, &buildProgress{report: progress})
 	for name, file := range files {
 		if _, windowed := file.(*readaheadresource.Resource); windowed {
 			continue // A raw file presented as it is carries its window already
@@ -253,7 +256,7 @@ func (f *NzbFileFactory) buildRawFiles(nzbData *nzbparser.NzbData, sizer nzbfile
 // than the limit is left presented as the volumes it is: a client sees an
 // archive it has to unpack itself, which is less than it wanted and more than
 // failing the add would have given it.
-func (f *NzbFileFactory) expand(entries map[string]resource.ReadSeekCloseableResource, prefix string, depth int, password string, files map[string]presentation.Openable) error {
+func (f *NzbFileFactory) expand(entries map[string]resource.ReadSeekCloseableResource, prefix string, depth int, password string, files map[string]presentation.Openable, report *buildProgress) error {
 	filenames := make([]string, 0, len(entries))
 	for filename := range entries {
 		filenames = append(filenames, filename)
@@ -269,14 +272,14 @@ func (f *NzbFileFactory) expand(entries map[string]resource.ReadSeekCloseableRes
 		}
 
 		archivePath := path.Join(prefix, groupFilename)
-		members, err := f.unpack(groupFilename, archivePath, volumes, depth, password)
+		members, err := f.unpack(groupFilename, archivePath, volumes, depth, password, report)
 		switch {
 		case err != nil:
 			slog.Warn("Archive could not be opened, leaving it packed",
 				"archive", archivePath, "error", err)
 			packed = append(packed, err)
 		case len(members) > 0:
-			if err := f.expand(members, archivePath, depth+1, password, files); err != nil {
+			if err := f.expand(members, archivePath, depth+1, password, files, report); err != nil {
 				packed = append(packed, err)
 			}
 			continue
@@ -291,7 +294,7 @@ func (f *NzbFileFactory) expand(entries map[string]resource.ReadSeekCloseableRes
 
 // unpack lists what an archive holds, or nothing where the group is not an
 // archive, is nested deeper than the limit, or turned out to be empty.
-func (f *NzbFileFactory) unpack(groupFilename, archivePath string, volumes []resource.ReadSeekCloseableResource, depth int, password string) (map[string]resource.ReadSeekCloseableResource, error) {
+func (f *NzbFileFactory) unpack(groupFilename, archivePath string, volumes []resource.ReadSeekCloseableResource, depth int, password string, report *buildProgress) (map[string]resource.ReadSeekCloseableResource, error) {
 	open := f.archiveOpener(path.Ext(groupFilename))
 	if open == nil {
 		return nil, nil
@@ -303,31 +306,16 @@ func (f *NzbFileFactory) unpack(groupFilename, archivePath string, volumes []res
 		return nil, nil
 	}
 
-	members, err := open(volumes, password)
+	members, err := open(volumes, password, report)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s: %w", ErrArchiveLeftPacked, archivePath, err)
 	}
 	return members, nil
 }
 
-// ArchiveGroups counts the archives these filenames hold, a set of volumes
-// being one of them. It is what a build costs before it has run: every archive
-// is a header walk over the news server, and everything else is presented as it
-// is. Archives nested in these are not in it, since nothing knows they are
-// there until their parent is open.
-func ArchiveGroups(filenames []string) int {
-	groups := 0
-	for groupFilename := range filenameops.GroupPartFilenames(filenames) {
-		if isArchive(path.Ext(groupFilename)) {
-			groups++
-		}
-	}
-	return groups
-}
-
 // archiveOpener is what unpacks a group of volumes, or nil where the group is
 // not an archive.
-func (f *NzbFileFactory) archiveOpener(extension string) func([]resource.ReadSeekCloseableResource, string) (map[string]resource.ReadSeekCloseableResource, error) {
+func (f *NzbFileFactory) archiveOpener(extension string) func([]resource.ReadSeekCloseableResource, string, *buildProgress) (map[string]resource.ReadSeekCloseableResource, error) {
 	switch {
 	case extension == ".rar":
 		return f.BuildRarFileFromFileResource
@@ -390,10 +378,10 @@ func (f *NzbFileFactory) BuildResourceFromNzbSegment(nzbSegment *nzbparser.Segme
 // it gets unpacked.
 const allMembers = -1
 
-func (f *NzbFileFactory) BuildRarFileFromFileResource(underlyingResources []resource.ReadSeekCloseableResource, password string) (map[string]resource.ReadSeekCloseableResource, error) {
+func (f *NzbFileFactory) BuildRarFileFromFileResource(underlyingResources []resource.ReadSeekCloseableResource, password string, report *buildProgress) (map[string]resource.ReadSeekCloseableResource, error) {
 	resources := make(map[string]resource.ReadSeekCloseableResource, 1)
 
-	fileheaders, err := rarfileresource.NewRarFileResource(underlyingResources, password, "", -1).GetRarFiles(allMembers)
+	fileheaders, err := rarfileresource.NewRarFileResource(headerVolumes(underlyingResources, report), password, "", -1).GetRarFiles(allMembers)
 	if err != nil {
 		return nil, fmt.Errorf("failed creating Rar resource: %w", err)
 	}
@@ -405,12 +393,13 @@ func (f *NzbFileFactory) BuildRarFileFromFileResource(underlyingResources []reso
 	return resources, nil
 }
 
-func (f *NzbFileFactory) Build7zFileFromFileResource(underlyingResources []resource.ReadSeekCloseableResource, password string) (map[string]resource.ReadSeekCloseableResource, error) {
+func (f *NzbFileFactory) Build7zFileFromFileResource(underlyingResources []resource.ReadSeekCloseableResource, password string, report *buildProgress) (map[string]resource.ReadSeekCloseableResource, error) {
 	resources := make(map[string]resource.ReadSeekCloseableResource, 1)
 
 	mergedResource := adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(underlyingResources)
+	headerResource := adaptiveparallelmergerresource.NewAdaptiveParallelMergerResource(headerVolumes(underlyingResources, report))
 
-	files, err := sevenzipfileresource.NewSevenzipFileResource(mergedResource, password, "").GetFiles()
+	files, err := sevenzipfileresource.NewSevenzipFileResource(headerResource, password, "").GetFiles()
 	if err != nil {
 		return nil, fmt.Errorf("failed creating 7z resource: %w", err)
 	}

@@ -1,13 +1,10 @@
 package nzbservice
 
-import (
-	"testing"
-	"time"
-)
+import "testing"
 
 func TestRemainingOpsCoversTheStagesAnItemHasNotReached(t *testing.T) {
 	queued := &QueueItem{Stage: StageQueued, probeOps: 100, buildOps: 40}
-	if left, total := remainingOps(queued, 10); left != 140 || total != 140 {
+	if left, total := remainingOps(queued); left != 140 || total != 140 {
 		t.Errorf("a queued add has %v of %v left, want the check and the build", left, total)
 	}
 
@@ -15,10 +12,10 @@ func TestRemainingOpsCoversTheStagesAnItemHasNotReached(t *testing.T) {
 		Stage:      StageChecking,
 		probeOps:   100,
 		buildOps:   40,
-		checkDone:  50,
-		checkTotal: 100,
+		stageDone:  50,
+		stageTotal: 100,
 	}
-	left, total := remainingOps(checking, 10)
+	left, total := remainingOps(checking)
 	if left != 90 || total != 140 {
 		t.Errorf("a half-done check has %v of %v left, want 90 of 140", left, total)
 	}
@@ -26,30 +23,31 @@ func TestRemainingOpsCoversTheStagesAnItemHasNotReached(t *testing.T) {
 	// Escalation: the same probes against a check that turned out to be twice
 	// the work leaves the add further from done than it looked
 	before := progressOf(checking, left, total)
-	checking.checkTotal = 200
-	after, afterTotal := remainingOps(checking, 10)
+	checking.stageTotal = 200
+	after, afterTotal := remainingOps(checking)
 	if progressOf(checking, after, afterTotal) >= before {
 		t.Errorf("progress did not fall when the check found more work: %v then %v",
 			before, progressOf(checking, after, afterTotal))
 	}
 }
 
-// A build reports nothing about itself, so it is counted down against the rate
-// the servers are answering at, and an overrun sits at nothing left
-func TestABuildCountsDownAgainstTheRate(t *testing.T) {
+// A build reports the volumes it has opened, and one that finds an archive
+// nested in the set grows past the plan rather than reporting itself done
+func TestABuildCountsTheVolumesItHasOpened(t *testing.T) {
 	building := &QueueItem{
-		Stage:        StageBuilding,
-		probeOps:     100,
-		buildOps:     40,
-		stageStarted: time.Now().Add(-2 * time.Second),
+		Stage:     StageBuilding,
+		probeOps:  100,
+		buildOps:  40,
+		stageDone: 10,
 	}
-	if left, _ := remainingOps(building, 10); left < 19 || left > 21 {
-		t.Errorf("2s of building at 10 ops/s has %v left, want about 20", left)
+	if left, total := remainingOps(building); left != 30 || total != 140 {
+		t.Errorf("10 of 40 volumes walked has %v of %v left, want 30 of 140", left, total)
 	}
 
-	building.stageStarted = time.Now().Add(-time.Minute)
-	if left, _ := remainingOps(building, 10); left != 0 {
-		t.Errorf("a build past its estimate has %v left, want 0", left)
+	building.stageDone, building.stageTotal = 40, 60
+	left, total := remainingOps(building)
+	if left != 20 || total != 160 {
+		t.Errorf("a build that found more volumes has %v of %v left, want 20 of 160", left, total)
 	}
 }
 

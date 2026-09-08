@@ -337,13 +337,14 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 		return nil
 	}
 
+	progress := func(done, total int) { s.progress(nzbData.MetaName, done, total) }
+
 	// Verify the posts still exist before building anything on top of them
 	if isNew {
 		if err := s.stage(nzbData.MetaName, StageChecking); err != nil {
 			return err
 		}
 
-		progress := func(done, total int) { s.progress(nzbData.MetaName, done, total) }
 		if healthErrors := s.healthChecker.CheckFiles(ctx, nzbData, progress); len(healthErrors) > 0 {
 			for _, err := range healthErrors {
 				slog.Warn("Unhealthy file detected",
@@ -360,7 +361,7 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 		return err
 	}
 
-	tree, packed := s.buildTree(nzbData)
+	tree, packed := s.buildTree(nzbData, progress)
 	if packed != nil && !errors.Is(packed, nzbrecordfactory.ErrArchiveLeftPacked) {
 		return packed
 	}
@@ -415,10 +416,10 @@ func (s *Service) filterNzbFiles(nzbData *nzbparser.NzbData) {
 //
 // A returned ErrArchiveLeftPacked comes with a usable tree, in which an archive
 // nothing could open is presented as the volumes it is; any other error does not.
-func (s *Service) buildTree(nzbData *nzbparser.NzbData) (map[string]presentation.Openable, error) {
+func (s *Service) buildTree(nzbData *nzbparser.NzbData, progress nzbrecordfactory.ProgressFunc) (map[string]presentation.Openable, error) {
 	s.filterNzbFiles(nzbData)
 
-	files, packed := s.factory.BuildSegmentStackFromNzbData(nzbData)
+	files, packed := s.factory.BuildSegmentStackFromNzbData(nzbData, progress)
 	if packed != nil && !errors.Is(packed, nzbrecordfactory.ErrArchiveLeftPacked) {
 		return nil, fmt.Errorf("failed building segment-stack for %s: %w", nzbData.MetaName, packed)
 	}

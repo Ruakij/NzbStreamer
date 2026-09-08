@@ -74,15 +74,14 @@ type QueueItem struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	// When the running stage began, which is what a build is counted down from:
-	// an add that waited for a slot spent that wait queued, not building
-	stageStarted time.Time
-	// Segments the check has probed against the ones it means to probe. The
-	// second grows when a file it cannot decide is escalated
-	checkDone  int
-	checkTotal int
+	// What the running stage has asked the news servers for against what it
+	// means to ask them for: probed segments while checking, opened volumes
+	// while building. The second grows where the work does - a file the check
+	// escalates, an archive nested in another one
+	stageDone  int
+	stageTotal int
 	// What the add costs the news servers, worked out from the nzb before any of
-	// it runs: the segments the check plans to probe, and the archive headers the
+	// it runs: the segments the check plans to probe, and the archive volumes the
 	// build walks
 	probeOps int
 	buildOps int
@@ -172,7 +171,7 @@ func (s *Service) items(done bool) []QueueItem {
 
 	items := make([]QueueItem, 0, len(s.queue))
 	for _, item := range s.queue {
-		left, total := remainingOps(item, perSec)
+		left, total := remainingOps(item)
 
 		if item.Done() == done {
 			copied := *item
@@ -307,15 +306,15 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 }
 
 // plannedOps is what the add will ask the news servers for: the segments the
-// check plans to probe, and the reads walking the header of every archive in it
-// costs. Both are read off the nzb, without asking the servers anything.
+// check plans to probe, and the volumes walking the header of every archive in
+// it opens. Both are read off the nzb, without asking the servers anything.
 func (s *Service) plannedOps(nzbData *nzbparser.NzbData) (probe, build int) {
 	filenames := make([]string, len(nzbData.Files))
 	for i := range nzbData.Files {
 		filenames[i] = nzbData.Files[i].Filename
 	}
 	return s.healthChecker.PlannedProbes(nzbData),
-		nzbrecordfactory.ArchiveGroups(filenames) * headerWalkOps
+		nzbrecordfactory.ArchiveVolumes(filenames)
 }
 
 // restore rebuilds a queue item from what the store kept of an add that ended
@@ -405,7 +404,7 @@ func (s *Service) stage(id string, stage Stage) error {
 	}
 
 	item.Stage = stage
-	item.stageStarted = time.Now()
+	item.stageDone, item.stageTotal = 0, 0
 	return nil
 }
 
@@ -422,16 +421,16 @@ func (s *Service) addContext(id string) context.Context {
 	return context.Background()
 }
 
-// progress records how far the check of an add has got. It is called once per
-// probed segment, so it is kept to what a lock and two writes cost; nothing
-// about it is written to the store, since an add a restart interrupts starts
-// its stage again.
+// progress records how far the running stage of an add has got. It is called
+// once per probed segment and once per opened volume, so it is kept to what a
+// lock and two writes cost; nothing about it is written to the store, since an
+// add a restart interrupts starts its stage again.
 func (s *Service) progress(id string, done, total int) {
 	s.queueMutex.Lock()
 	defer s.queueMutex.Unlock()
 
 	if item := s.find(id); item != nil {
-		item.checkDone, item.checkTotal = done, total
+		item.stageDone, item.stageTotal = done, total
 	}
 }
 

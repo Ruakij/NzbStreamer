@@ -120,7 +120,7 @@ func (t *lazyTree) open(fullPath string) (presentation.Openable, error) {
 
 	if t.files == nil {
 		// An archive left packed still built the volumes this is asked for
-		files, err := t.service.buildTree(t.data)
+		files, err := t.service.buildTree(t.data, nil)
 		if err != nil && !errors.Is(err, nzbrecordfactory.ErrArchiveLeftPacked) {
 			return nil, err
 		}

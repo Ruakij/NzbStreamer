@@ -42,7 +42,7 @@ func (f *fakeFactory) DiscardSegmentStackFromNzbData(nzbData *nzbparser.NzbData)
 	f.discarded = append(f.discarded, nzbData.MetaName)
 }
 
-func (f *fakeFactory) BuildSegmentStackFromNzbData(_ *nzbparser.NzbData) (map[string]presentation.Openable, error) {
+func (f *fakeFactory) BuildSegmentStackFromNzbData(_ *nzbparser.NzbData, _ nzbrecordfactory.ProgressFunc) (map[string]presentation.Openable, error) {
 	if f.entered != nil {
 		close(f.entered)
 		<-f.release

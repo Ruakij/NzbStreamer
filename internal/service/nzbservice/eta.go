@@ -1,27 +1,21 @@
 package nzbservice
 
-import "time"
-
 // An add is measured in the operations it asks the news servers for, since that
 // is the resource every add is queueing for and the only one that is scarce.
-// A check is STATs, one per probed segment; a build is the article reads an
-// archive header walk costs. Turning those into a time is one division by the
-// rate the pool is answering at, which every add on this installation shares.
-//
-// headerWalkOps is what opening one archive costs before it has been opened.
-// A plain rar set is its volume headers and little else; a solid or encrypted
-// one, or one holding another archive, is far more, and nothing sees that
-// coming. What it does instead is overrun the estimate, which building answers
-// for by counting down against the clock.
-//
-// ponytail: one constant for every archive, measure per-archive if the
-// estimates for nested sets turn out to matter.
-const headerWalkOps = 17
+// A check is STATs, one per probed segment; a build is the volume opens an
+// archive header walk costs, one per volume. Both are counted off the nzb before
+// the add runs and reported against as it runs. Turning what is left into a time
+// is one division by the rate the pool is answering at, which every add on this
+// installation shares.
 
 // remainingOps is the work the item has left and what the whole add looks like
 // it costs, both in server operations. Waiting for a slot is not in it: that is
 // not this items work, and only the queue knows how long it lasts.
-func remainingOps(item *QueueItem, rate float64) (left, total float64) {
+//
+// A stage that has reported more work than was planned for it is believed: a
+// check escalates files it could not decide, and a build walks archives nested
+// in the ones the nzb names.
+func remainingOps(item *QueueItem) (left, total float64) {
 	total = float64(item.probeOps + item.buildOps)
 
 	switch {
@@ -31,22 +25,15 @@ func remainingOps(item *QueueItem, rate float64) (left, total float64) {
 		return total, total
 
 	case item.Stage == StageChecking:
-		// What the check has reported of itself, and the plan until it has
-		// reported anything. It only ever reports more, since every file it
-		// escalates is probes the plan did not have, and the add grows with it
-		probes := max(item.checkTotal, item.probeOps)
+		probes := max(item.stageTotal, item.probeOps)
 		total = float64(probes + item.buildOps)
-		return float64(probes - item.checkDone + item.buildOps), total
+		return float64(probes - item.stageDone + item.buildOps), total
 
 	default:
-		// A build reports nothing about itself, so what is left of it is counted
-		// down against the rate the servers are answering at. An overrun sits at 0,
-		// which reads as an estimate that ran out rather than a build that stalled
-		done := 0.0
-		if !item.stageStarted.IsZero() {
-			done = time.Since(item.stageStarted).Seconds() * rate
-		}
-		return max(float64(item.buildOps)-done, 0), total
+		// The check is over, so what it cost is done whatever it turned out to be
+		volumes := max(item.stageTotal, item.buildOps)
+		total = float64(item.probeOps + volumes)
+		return float64(volumes - item.stageDone), total
 	}
 }
 
