@@ -114,28 +114,29 @@ Zip archives are not unpacked.
 
 # 5. Settings
 
-| Name                                                       | Default | Description                                                                                                |
-| ---------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------- |
+| Name                                                       | Default         | Description                                                                                                |
+| ---------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------- |
 | **Usenet server**, once per server, `n` counting up from 1 |
-| `USENET_n_HOST`*                                           |         | Usenet server host                                                                                         |
-| `USENET_n_PORT`                                            | 563     | Usenet server port                                                                                         |
-| `USENET_n_TLS`                                             | true    | Use TLS for Usenet connection                                                                              |
-| `USENET_n_USER`*                                           |         | Usenet username                                                                                            |
-| `USENET_n_PASS`*                                           |         | Usenet password                                                                                            |
-| `USENET_n_MAX_CONN`                                        | 20      | Maximum Usenet connections to use                                                                          |
-| `USENET_n_PRIORITY`                                        | n       | Priority, lower is chosen first; servers sharing a priority share the load round robin                     |
-| `USENET_n_QUOTA_BYTES`                                     | 0       | Bytes this server may serve per period; 0 is unmetered                                                     |
-| `USENET_n_QUOTA_PERIOD`                                    | 720h    | Quota-lifetime                                                                                             |
-| `USENET_n_PROBE`                                           | true    | Connect to the server at startup, so rejected credentials and an unreachable host are immediately detected |
+| `USENET_n_HOST`*                                           |                 | Usenet server host                                                                                         |
+| `USENET_n_NAME`                                            | `USENET_n_HOST` | What this server is called in logs, health and metrics                                                     |
+| `USENET_n_PORT`                                            | 563             | Usenet server port                                                                                         |
+| `USENET_n_TLS`                                             | true            | Use TLS for Usenet connection                                                                              |
+| `USENET_n_USER`*                                           |                 | Usenet username                                                                                            |
+| `USENET_n_PASS`*                                           |                 | Usenet password                                                                                            |
+| `USENET_n_MAX_CONN`                                        | 20              | Maximum Usenet connections to use                                                                          |
+| `USENET_n_PRIORITY`                                        | n               | Priority, lower is chosen first; servers sharing a priority share the load round robin                     |
+| `USENET_n_QUOTA_BYTES`                                     | 0               | Bytes this server may serve per period; 0 is unmetered                                                     |
+| `USENET_n_QUOTA_PERIOD`                                    | 720h            | Quota-lifetime                                                                                             |
+| `USENET_n_PROBE`                                           | true            | Connect to the server at startup, so rejected credentials and an unreachable host are immediately detected |
 | **Usenet**, shared by every server                         |
-| `USENET_MAX_ATTEMPTS`                                      | 3       | Attempts a request gets before its error is reported                                                       |
-| `USENET_RETRY_BACKOFF`                                     | 1s      | Wait after the first failed attempt, doubled after each further one                                        |
-| `USENET_TIMEOUT`                                           | 30s     | Timeout for connecting and for completing a single request                                                 |
-| `USENET_IDLE_TIMEOUT`                                      | 2m      | Time after which an unused connection is closed                                                            |
-| `NNTP_PIPELINE_SIZE`                                       | 4       | How many requests a connection may use at once; minimim 1; this optimizes the use of the connections       |
-| `NNTP_MIN_FREE_CONNS`                                      | 1       | Connections kept warm ahead of demand, so a request finds a warm connection; 0 only dials on demand        |
-| `USENET_BREAKER_FAILURES`                                  | 3       | Consecutive failures which disables uisng a server for cooldown-time; 0 never disables                     |
-| `USENET_BREAKER_COOLDOWN`                                  | 5m      | How long a disabled server waits for                                                                       |
+| `USENET_MAX_ATTEMPTS`                                      | 3               | Attempts a request gets before its error is reported                                                       |
+| `USENET_RETRY_BACKOFF`                                     | 1s              | Wait after the first failed attempt, doubled after each further one                                        |
+| `USENET_TIMEOUT`                                           | 30s             | Timeout for connecting and for completing a single request                                                 |
+| `USENET_IDLE_TIMEOUT`                                      | 2m              | Time after which an unused connection is closed                                                            |
+| `NNTP_PIPELINE_SIZE`                                       | 4               | How many requests a connection may use at once; minimim 1; this optimizes the use of the connections       |
+| `NNTP_MIN_FREE_CONNS`                                      | 1               | Connections kept warm ahead of demand, so a request finds a warm connection; 0 only dials on demand        |
+| `USENET_BREAKER_FAILURES`                                  | 3               | Consecutive failures which disables uisng a server for cooldown-time; 0 never disables                     |
+| `USENET_BREAKER_COOLDOWN`                                  | 5m              | How long a disabled server waits for                                                                       |
 
 One server is `USENET_1_HOST` and its siblings; add more by counting up. The
 unindexed form (`USENET_HOST`) is nr. 1 too.

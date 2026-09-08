@@ -29,11 +29,31 @@ func TestUsenetServersReadsIndexedServers(t *testing.T) {
 		t.Fatalf("first server is %+v; want the unindexed variables on priority 1 with the default connections", servers[0])
 	}
 	want := UsenetServerConfig{
-		Host: "block.example", Port: 563, TLS: true, User: "user", Password: "pass",
+		Host: "block.example", Name: "block.example", Port: 563, TLS: true, User: "user", Password: "pass",
 		MaxConn: 5, Priority: 2, QuotaBytes: 1000, QuotaPeriod: 24 * time.Hour, Probe: true,
 	}
 	if servers[1] != want {
 		t.Fatalf("second server is %+v; want %+v", servers[1], want)
+	}
+}
+
+// A name is what logs, health and metrics call the server, so it survives the
+// host it is configured against changing.
+func TestUsenetServerNameDefaultsToItsHost(t *testing.T) {
+	t.Setenv("USENET_1_HOST", "primary.example")
+	t.Setenv("USENET_1_USER", "user")
+	t.Setenv("USENET_1_PASS", "pass")
+	t.Setenv("USENET_2_HOST", "block.example")
+	t.Setenv("USENET_2_NAME", "block")
+	t.Setenv("USENET_2_USER", "user")
+	t.Setenv("USENET_2_PASS", "pass")
+
+	servers, err := usenetServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if servers[0].Name != "primary.example" || servers[1].Name != "block" {
+		t.Fatalf("names are %q and %q; want the host and the configured one", servers[0].Name, servers[1].Name)
 	}
 }
 

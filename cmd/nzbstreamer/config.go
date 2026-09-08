@@ -11,6 +11,7 @@ import (
 // of a single-server setup are unchanged.
 type UsenetServerConfig struct {
 	Host        string        `env:"HOST, required"`             // Usenet server host
+	Name        string        `env:"NAME"`                       // What this server is called in logs, health and metrics; defaults to its host
 	Port        int           `env:"PORT, default=563"`          // Usenet server port
 	TLS         bool          `env:"TLS, default=true"`          // Use TLS for Usenet connection
 	User        string        `env:"USER, required"`             // Usenet username

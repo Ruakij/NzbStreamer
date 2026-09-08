@@ -73,5 +73,9 @@ func usenetServer(ctx context.Context, prefix string) (UsenetServerConfig, error
 		return server, fmt.Errorf("failed reading config of server %s: %w", prefix, err)
 	}
 
+	if server.Name == "" {
+		server.Name = server.Host
+	}
+
 	return server, nil
 }

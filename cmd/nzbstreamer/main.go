@@ -117,7 +117,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 	poolServers := make([]nntpclient.ServerConfig, 0, len(servers))
 	totalConns := 0
 	for _, server := range servers {
-		slog.Info("Using news server", "host", server.Host, "priority", server.Priority, "connections", server.MaxConn)
+		slog.Info("Using news server", "name", server.Name, "host", server.Host, "priority", server.Priority, "connections", server.MaxConn)
 		poolServers = append(poolServers, nntpclient.ServerConfig{
 			Server: nntpclient.New(nntpclient.Config{
 				Host:     server.Host,
@@ -135,7 +135,7 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager) {
 				ConnectionPipeliningSize: c.Usenet.ConnectionPipeliningSize,
 				MinFreeConns:             c.Usenet.MinFreeConns,
 			}),
-			Name:        server.Host,
+			Name:        server.Name,
 			Priority:    server.Priority,
 			QuotaBytes:  int64(server.QuotaBytes),
 			QuotaPeriod: server.QuotaPeriod,
