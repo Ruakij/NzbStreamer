@@ -895,8 +895,11 @@ function renderInspect(head, target, file, data) {
   summary.className = "info-total";
   // Inspect does not probe, so an nzb whose hints identify nothing stays
   // unknown here even though adding it would settle it
+  // Only an nzb posting wire sizes says what went over the wire; under any other
+  // convention that is not in the file
+  const wire = data.wire != null;
   summary.textContent = `${data.files.length} posted files, ${data.segments} segments,`
-    + ` ${estimated(data.bytes, data.exact)} from ${size(data.wire)} on the wire`
+    + ` ${estimated(data.bytes, data.exact)}` + (wire ? ` from ${size(data.wire)} on the wire` : "")
     + ` (${conventions[data.convention] || data.convention})`;
   summary.dataset.hint = "which size convention the numbers above use";
   head.append(heading, summary);
@@ -937,7 +940,7 @@ function renderInspect(head, target, file, data) {
   table.className = "info-files";
   const header = table.createTHead().insertRow();
   for (const [label, hint] of [["Posted file"], ["Size", "decoded size"],
-  ["Wire", "posted size, yEnc overhead included"], ["Segments"], ["Date"]]) {
+  ...(wire ? [["Wire", "posted size, yEnc overhead included"]] : []), ["Segments"], ["Date"]]) {
     cell(header, label, "th");
     if (hint) header.lastElementChild.dataset.hint = hint;
   }
@@ -953,7 +956,7 @@ function renderInspect(head, target, file, data) {
     detail.dataset.hint = posted.subject;
     name.append(detail);
     sizeCell(row, posted.bytes, posted.exact);
-    sizeCell(row, posted.wire);
+    if (wire) sizeCell(row, posted.wire);
     // The subject says how many segments the post has; fewer listed is a gap
     cell(row, posted.segment_hint && posted.segment_hint !== posted.segments
       ? `${posted.segments} / ${posted.segment_hint}` : posted.segments);

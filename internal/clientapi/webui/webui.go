@@ -182,6 +182,11 @@ func (h *Handler) inspect(w http.ResponseWriter, r *http.Request) {
 	// unknown here and every size it yields is an estimate.
 	sizer := nzbfileanalyzer.NewSegmentSizer(nzbData)
 
+	// An nzb counting its bytes decoded says nothing about what went over the
+	// wire, and reporting the hints as one would print the same number twice.
+	// Every other convention, unknown included, reads them as wire sizes.
+	posted := sizer.Convention() != nzbfileanalyzer.ConventionContent
+
 	files := make([]any, 0, len(nzbData.Files))
 	totalWire, totalBytes, totalSegments := 0, 0, 0
 	totalExact := true
@@ -201,33 +206,40 @@ func (h *Handler) inspect(w http.ResponseWriter, r *http.Request) {
 		totalExact = totalExact && exact
 		totalSegments += len(file.Segments)
 
-		files = append(files, map[string]any{
+		entry := map[string]any{
 			"filename":     file.Filename,
 			"subject":      file.Subject,
 			"poster":       file.Poster,
 			"groups":       file.Groups,
 			"encoding":     file.Encoding,
 			"date":         file.ParsedDate,
-			"wire":         wire,
 			"bytes":        size,
 			"exact":        exact,
 			"segments":     len(file.Segments),
 			"segment_hint": file.SegmentCountHint,
-		})
+		}
+		if posted {
+			entry["wire"] = wire
+		}
+		files = append(files, entry)
 	}
 
-	writeJSON(w, map[string]any{
+	result := map[string]any{
 		"name":       nzbData.MetaName,
 		"meta":       nzbData.Meta,
 		"convention": sizer.Convention().String(),
-		"wire":       totalWire,
 		"bytes":      totalBytes,
 		"exact":      totalExact,
 		"segments":   totalSegments,
 		"files":      files,
 		"warnings":   messages(warnings),
 		"errors":     messages(errs),
-	})
+	}
+	if posted {
+		result["wire"] = totalWire
+	}
+
+	writeJSON(w, result)
 }
 
 func messages(errs []nzbparser.EncapsulatedError) []string {

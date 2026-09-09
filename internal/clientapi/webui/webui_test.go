@@ -241,8 +241,17 @@ const testNzb = `<?xml version="1.0"?>
 <segments><segment bytes="10" number="1">a@n</segment><segment bytes="20" number="2">b@n</segment></segments>
 </file></nzb>`
 
-func TestInspectReportsTheParseWithoutAdding(t *testing.T) {
-	service := &fakeService{}
+// contentNzb posts its sizes decoded: hints of exactly a segment size are what
+// identifies that, since a wire-counted one carries the yEnc overhead on top.
+const contentNzb = `<?xml version="1.0"?>
+<nzb><head><meta type="name">Some.Release</meta></head>
+<file poster="p@example.com" date="1700000000" subject="[1/1] - &#34;file.rar&#34; yEnc (1/3)">
+<groups><group>alt.binaries.test</group></groups>
+<segments><segment bytes="716800" number="1">a@n</segment><segment bytes="716800" number="2">b@n</segment><segment bytes="1024" number="3">c@n</segment></segments>
+</file></nzb>`
+
+func inspect(t *testing.T, service *fakeService, nzb string) *httptest.ResponseRecorder {
+	t.Helper()
 
 	var upload bytes.Buffer
 	form := multipart.NewWriter(&upload)
@@ -250,7 +259,7 @@ func TestInspectReportsTheParseWithoutAdding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := part.Write([]byte(testNzb)); err != nil {
+	if _, err := part.Write([]byte(nzb)); err != nil {
 		t.Fatal(err)
 	}
 	form.Close()
@@ -262,6 +271,41 @@ func TestInspectReportsTheParseWithoutAdding(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("inspect answered %d: %s", recorder.Code, recorder.Body)
 	}
+
+	return recorder
+}
+
+// An nzb counting its bytes decoded says nothing about what went over the wire,
+// so there is no wire size to report rather than the decoded one twice.
+func TestInspectLeavesOutTheWireSizeItCannotKnow(t *testing.T) {
+	recorder := inspect(t, &fakeService{}, contentNzb)
+
+	var body struct {
+		Convention string           `json:"convention"`
+		Wire       *int             `json:"wire"`
+		Bytes      int              `json:"bytes"`
+		Exact      bool             `json:"exact"`
+		Files      []map[string]any `json:"files"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response was not json: %v (%s)", err, recorder.Body)
+	}
+
+	if body.Convention != "content" || !body.Exact || body.Bytes != 716800*2+1024 {
+		t.Fatalf("read it as %s, %d bytes exact=%t; want the exact content sizes",
+			body.Convention, body.Bytes, body.Exact)
+	}
+	if body.Wire != nil {
+		t.Errorf("reported %d bytes on the wire", *body.Wire)
+	}
+	if _, ok := body.Files[0]["wire"]; ok {
+		t.Errorf("posted file reports %v on the wire", body.Files[0]["wire"])
+	}
+}
+
+func TestInspectReportsTheParseWithoutAdding(t *testing.T) {
+	service := &fakeService{}
+	recorder := inspect(t, service, testNzb)
 
 	var body struct {
 		Name     string           `json:"name"`
