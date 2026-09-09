@@ -444,14 +444,17 @@ function estimated(bytes, exact) {
 
 // rate turns a counter into what it grew by per second, from the poll before
 // this one. The server sends counters, so how fast they move is ours to work
-// out; the first poll of a counter has nothing to compare against.
+// out; the first poll of a counter has nothing to compare against and reads as
+// zero until the next one measures it.
 const counters = {};
 function rate(name, total) {
   const now = Date.now();
   const last = counters[name];
   counters[name] = { total, at: now };
-  if (!last || now === last.at) return "-";
-  return `${size(Math.max(total - last.total, 0) * 1000 / (now - last.at))}/s`;
+  const moved = last && now > last.at
+    ? Math.max(total - last.total, 0) * 1000 / (now - last.at)
+    : 0;
+  return `${size(moved)}/s`;
 }
 
 function percent(part, whole) {
