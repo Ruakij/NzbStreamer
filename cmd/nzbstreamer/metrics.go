@@ -290,6 +290,11 @@ func observeReadahead() error {
 	meter := otel.Meter("cmd/nzbstreamer")
 
 	var errs []error
+	gauge := func(name string, opts ...metric.Int64ObservableGaugeOption) metric.Int64ObservableGauge {
+		instrument, err := meter.Int64ObservableGauge(name, opts...)
+		errs = append(errs, err)
+		return instrument
+	}
 	counter := func(name string, opts ...metric.Int64ObservableCounterOption) metric.Int64ObservableCounter {
 		instrument, err := meter.Int64ObservableCounter(name, opts...)
 		errs = append(errs, err)
@@ -302,18 +307,30 @@ func observeReadahead() error {
 	discarded := counter("readahead.discarded.bytes",
 		metric.WithDescription("Bytes of those the window dropped without a single read touching them, from a seek past them or a file closed mid-stream; a chunk one byte was read from counts as read whole"),
 		metric.WithUnit("By"))
+	// Chunks rather than bytes on both of these: the chunk size is one setting
+	// for the process, so the bytes are the same number multiplied by it, and
+	// what is being asked here is how many reads run at once
+	inflight := gauge("readahead.inflight.chunks",
+		metric.WithDescription("Chunk reads the windows have outstanding underneath them, which is the parallelism the layers below are actually asked for rather than what a window is allowed"))
+	warm := counter("readahead.warm.chunks",
+		metric.WithDescription("Warm window summed over the reads it served; over readahead.warm.reads it is the mean window a read ran under, which against READAHEAD_MAX_SIZE over READAHEAD_CHUNK is whether the ramp reaches the configured width at all"))
+	warmReads := counter("readahead.warm.reads",
+		metric.WithDescription("Reads the warm window was summed over, which is the divisor that turns readahead.warm.chunks into the mean"))
 
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("failed creating the readahead instruments: %w", err)
 	}
 
 	_, err := meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
-		fetchedBytes, discardedBytes := readaheadresource.Stats()
+		counts := readaheadresource.Stats()
 
-		observer.ObserveInt64(fetched, fetchedBytes)
-		observer.ObserveInt64(discarded, discardedBytes)
+		observer.ObserveInt64(fetched, counts.FetchedBytes)
+		observer.ObserveInt64(discarded, counts.DiscardedBytes)
+		observer.ObserveInt64(inflight, counts.InflightChunks)
+		observer.ObserveInt64(warm, counts.WarmChunks)
+		observer.ObserveInt64(warmReads, counts.WarmReads)
 		return nil
-	}, fetched, discarded)
+	}, fetched, discarded, inflight, warm, warmReads)
 	if err != nil {
 		return fmt.Errorf("failed registering the readahead metrics callback: %w", err)
 	}

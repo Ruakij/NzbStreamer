@@ -238,7 +238,7 @@ func TestSeekKeepsHalfTheWindow(t *testing.T) {
 // Closing on the first chunk of a warm window throws the rest of it away, which
 // is the readahead the reader never asked for.
 func TestClosingCountsTheReadaheadNothingRead(t *testing.T) {
-	fetchedBefore, discardedBefore := readaheadresource.Stats()
+	before := readaheadresource.Stats()
 
 	underlying := &slowReader{data: make([]byte, 1024)}
 	opened, err := readaheadresource.New(underlying, 16, 64, 4, 1).Open()
@@ -252,11 +252,18 @@ func TestClosingCountsTheReadaheadNothingRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fetched, discarded := readaheadresource.Stats()
-	if fetched-fetchedBefore != 16 {
-		t.Errorf("fetched %d bytes, want the 4 warm chunks of the window", fetched-fetchedBefore)
+	after := readaheadresource.Stats()
+	if after.FetchedBytes-before.FetchedBytes != 16 {
+		t.Errorf("fetched %d bytes, want the 4 warm chunks of the window", after.FetchedBytes-before.FetchedBytes)
 	}
-	if discarded-discardedBefore != 12 {
-		t.Errorf("discarded %d bytes, want the 3 chunks no read touched", discarded-discardedBefore)
+	if after.DiscardedBytes-before.DiscardedBytes != 12 {
+		t.Errorf("discarded %d bytes, want the 3 chunks no read touched", after.DiscardedBytes-before.DiscardedBytes)
+	}
+	if after.WarmReads-before.WarmReads != 1 || after.WarmChunks-before.WarmChunks != 4 {
+		t.Errorf("warmed %d chunks over %d reads, want the one read that ran on the 4-chunk window", after.WarmChunks-before.WarmChunks, after.WarmReads-before.WarmReads)
+	}
+	// Close waits for every fetch, so nothing may still be counted as outstanding
+	if after.InflightChunks != 0 {
+		t.Errorf("%d chunks still inflight after the close", after.InflightChunks)
 	}
 }

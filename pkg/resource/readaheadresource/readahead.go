@@ -197,6 +197,11 @@ func (r *reader) chunkAt(base int64) (*chunk, error) {
 		r.warm = r.cooled()
 	}
 
+	// the window this read ran under, which is where the ramp is visible: it
+	// only ever moves here and in a seek
+	warmSum.Add(int64(r.warm))
+	warmReads.Add(1)
+
 	c := r.fetchLocked(base)
 	c.refs.Add(1) // held by the caller until it has copied out of it
 	for i := 1; i < r.warm; i++ {
@@ -238,10 +243,12 @@ func (r *reader) fetchLocked(offset int64) *chunk {
 	r.chunks[offset] = c
 	r.fetches.Add(1)
 
+	inflight.Add(1)
 	go func() {
 		defer r.fetches.Done()
 		// Held until the write is over
 		defer r.release(c)
+		defer inflight.Add(-1)
 
 		buf := c.buf
 		n, err := r.readerAt.ReadAt(buf, offset)
