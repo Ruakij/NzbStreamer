@@ -171,37 +171,80 @@ func (r *AdaptiveParallelMergerResourceReader) partSize(i int) (int64, error) {
 	return size, nil
 }
 
-// locate maps an absolute offset onto the resource holding it. The table it
-// walks is built from exact sizes only - an estimate would send a read to the
-// wrong byte - so a resource that does not know its own length is measured,
-// which for an uncached segment costs a download, the same price a seek across
-// it pays.
-func (r *AdaptiveParallelMergerResource) locate(off int64) (index int, inner int64, err error) {
+// offsetsCovering extends the offset table until it holds the resource off falls
+// in, or until every resource has been measured, and returns it. The table only
+// ever grows, so the returned slice stays valid without the lock.
+//
+// It is built from exact sizes only - an estimate would send a read to the wrong
+// byte - so a resource that does not know its own length is measured, which for
+// an uncached segment costs a download, the same price a seek across it pays.
+func (r *AdaptiveParallelMergerResource) offsetsCovering(off int64) ([]int64, error) {
 	r.offsetsMutex.Lock()
 	defer r.offsetsMutex.Unlock()
 
 	for len(r.offsets) <= len(r.resources) && r.offsets[len(r.offsets)-1] <= off {
-		i := len(r.offsets) - 1
+		first := len(r.offsets) - 1
 
+		sizes, err := r.sizesFrom(first, off)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, size := range sizes {
+			r.offsets = append(r.offsets, r.offsets[len(r.offsets)-1]+size)
+		}
+	}
+
+	return r.offsets, nil
+}
+
+// sizesFrom is the length of every resource from first up to the one the hints
+// put off in. Measuring is a download, so the ones the offset needs run together
+// rather than one after the other; where the hints came up short the caller asks
+// again for the next batch.
+func (r *AdaptiveParallelMergerResource) sizesFrom(first int, off int64) ([]int64, error) {
+	last := first
+	for estimate := r.offsets[first]; last < len(r.resources); {
+		hint, err := r.resources[last].SizeHint()
+		if err != nil {
+			return nil, fmt.Errorf("failed getting size-hint from resource %d: %w", last, err)
+		}
+
+		estimate += hint
+		last++
+		if estimate > off {
+			break
+		}
+	}
+
+	sizes := make([]int64, last-first)
+	var group errgroup.Group
+	for i := first; i < last; i++ {
 		size, known, err := knownSize(r.resources[i])
 		if err != nil {
-			return 0, 0, fmt.Errorf("failed getting size from resource %d: %w", i, err)
+			return nil, fmt.Errorf("failed getting size from resource %d: %w", i, err)
 		}
-		if !known {
-			if size, err = measure(r.resources[i]); err != nil {
-				return 0, 0, fmt.Errorf("failed measuring resource %d: %w", i, err)
+		if known {
+			sizes[i-first] = size
+			continue
+		}
+
+		group.Go(func() error {
+			size, err := measure(r.resources[i])
+			if err != nil {
+				return fmt.Errorf("failed measuring resource %d: %w", i, err)
 			}
-		}
+			sizes[i-first] = size
 
-		r.offsets = append(r.offsets, r.offsets[i]+size)
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		//nolint:wrapcheck // Already wrapped with the resource it came from
+		return nil, err
 	}
 
-	index = sort.Search(len(r.offsets), func(i int) bool { return r.offsets[i] > off }) - 1
-	if index < 0 || index >= len(r.resources) {
-		return 0, 0, io.EOF
-	}
-
-	return index, off - r.offsets[index], nil
+	return sizes, nil
 }
 
 // measure reads a resource to its end to settle its length, on a reader of its
@@ -227,6 +270,9 @@ func measure(res resource.ReadSeekCloseableResource) (int64, error) {
 // It opens a reader per resource it touches rather than borrowing the ones the
 // read head keeps, which would need reference counting to stay safe against
 // closeBehind. That is one cache-file open per resource per call.
+//
+// The offset table gives every resource the request spans its own slice of p, so
+// they are read at once rather than one after the other.
 func (r *AdaptiveParallelMergerResourceReader) ReadAt(p []byte, off int64) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -235,26 +281,77 @@ func (r *AdaptiveParallelMergerResourceReader) ReadAt(p []byte, off int64) (int,
 		return 0, resource.ErrInvalidSeek
 	}
 
-	index, inner, err := r.resource.locate(off)
+	end := off + int64(len(p))
+	offsets, err := r.resource.offsetsCovering(end)
 	if err != nil {
-		//nolint:wrapcheck // io.EOF has to reach the caller unwrapped
 		return 0, err
 	}
 
+	type part struct {
+		index int
+		inner int64
+		buf   []byte
+		n     int
+		err   error
+	}
+
+	var parts []part
+	for pos := off; pos < end; {
+		index := sort.Search(len(offsets), func(i int) bool { return offsets[i] > pos }) - 1
+		if index < 0 || index >= len(r.resource.resources) || index >= len(offsets)-1 {
+			break
+		}
+
+		partEnd := min(end, offsets[index+1])
+		parts = append(parts, part{
+			index: index,
+			inner: pos - offsets[index],
+			buf:   p[pos-off : partEnd-off],
+		})
+		pos = partEnd
+	}
+
+	switch len(parts) {
+	case 0:
+		return 0, io.EOF
+	case 1:
+		// A read inside one resource, which is the common one, stays on this goroutine
+		n, err := readResourceAt(r.resource.resources[parts[0].index], parts[0].buf, parts[0].inner)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return n, fmt.Errorf("failed reading resource %d at %d: %w", parts[0].index, parts[0].inner, err)
+		}
+		if n < len(p) {
+			return n, io.EOF
+		}
+
+		return n, nil
+	}
+
+	var group errgroup.Group
+	for i := range parts {
+		group.Go(func() error {
+			parts[i].n, parts[i].err = readResourceAt(r.resource.resources[parts[i].index], parts[i].buf, parts[i].inner)
+			return nil
+		})
+	}
+	//nolint:errcheck // Errors are kept per part, so a short one still yields its prefix
+	group.Wait()
+
+	// Only the contiguous prefix is readable: a part that came up short leaves a
+	// hole, whatever the parts behind it returned
 	totalRead := 0
-	for totalRead < len(p) {
-		if index >= len(r.resource.resources) {
+	for i := range parts {
+		totalRead += parts[i].n
+		if parts[i].err != nil && !errors.Is(parts[i].err, io.EOF) {
+			return totalRead, fmt.Errorf("failed reading resource %d at %d: %w", parts[i].index, parts[i].inner, parts[i].err)
+		}
+		if parts[i].n < len(parts[i].buf) {
 			return totalRead, io.EOF
 		}
+	}
 
-		n, err := readResourceAt(r.resource.resources[index], p[totalRead:], inner)
-		totalRead += n
-		if err != nil && !errors.Is(err, io.EOF) {
-			return totalRead, fmt.Errorf("failed reading resource %d at %d: %w", index, inner, err)
-		}
-
-		index++
-		inner = 0
+	if totalRead < len(p) {
+		return totalRead, io.EOF
 	}
 
 	return totalRead, nil
