@@ -110,21 +110,23 @@ func TestProbingReportsARejectedServerBeforeAnythingReadsFromIt(t *testing.T) {
 	}
 }
 
-func TestPoolRoundRobinsWithinAPriority(t *testing.T) {
-	first := &fakeServer{body: []byte("a")}
-	second := &fakeServer{body: []byte("b")}
+// Servers that perform alike are told apart only by measurement noise, which the
+// deadband is there to ignore, so the spread stays the rotation.
+func TestPoolSpreadsAcrossComparableServers(t *testing.T) {
+	first := &timedServer{delay: 2 * time.Millisecond, size: 716800}
+	second := &timedServer{delay: 2 * time.Millisecond, size: 716800}
 	pool := NewPool([]ServerConfig{
 		{Server: first, Name: "first", Priority: 1},
 		{Server: second, Name: "second", Priority: 1},
 	}, nil, BreakerConfig{})
 
-	for range 4 {
+	for range 10 {
 		if _, err := pool.GetSegment("group", "id"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if first.calls != 2 || second.calls != 2 {
-		t.Fatalf("spread %d/%d; want 2/2", first.calls, second.calls)
+	if first.calls.Load() != 5 || second.calls.Load() != 5 {
+		t.Fatalf("spread %d/%d; want 5/5", first.calls.Load(), second.calls.Load())
 	}
 }
 

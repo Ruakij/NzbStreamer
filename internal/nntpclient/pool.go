@@ -33,8 +33,8 @@ type QuotaStore interface {
 }
 
 // ServerConfig places one server in a pool. Priority orders the servers, lower
-// first; servers sharing a priority are one group a request spreads across round
-// robin. QuotaBytes of 0 is no quota.
+// first; servers sharing a priority are one group a request spreads across, by
+// which of them is expected to answer soonest. QuotaBytes of 0 is no quota.
 type ServerConfig struct {
 	Server      Server
 	Name        string
@@ -50,6 +50,12 @@ type poolServer struct {
 	ServerConfig
 	used        int64
 	periodStart time.Time
+
+	// What the server has been costing, and the articles it is answering right
+	// now. inflight is written on the hot path by every request, so it stands
+	// outside loadMutex.
+	load     load
+	inflight atomic.Int64
 
 	// consecutive failures, and until when the server is disabled for them.
 	// permanent is a failure no waiting will fix, so nothing re-enables it
@@ -84,6 +90,11 @@ type Pool struct {
 	// ponytail: one lock for every servers quota counter and breaker state;
 	// per-server locks if a pool ever grows past a handful
 	quotaMutex sync.Mutex
+
+	// The per-server cost estimates and the article size they are applied to.
+	// meanSize is pool-wide because it describes the workload, not a server.
+	loadMutex sync.Mutex
+	meanSize  float64
 
 	// Segment operations served, and what they were being served at when the
 	// rate was last worked out
@@ -165,6 +176,7 @@ func NewPool(servers []ServerConfig, store QuotaStore, breaker BreakerConfig) *P
 		return pool.priorities[i].servers[0].Priority < pool.priorities[j].servers[0].Priority
 	})
 	pool.observeServers()
+	pool.observeLoad()
 	return pool
 }
 
@@ -223,7 +235,7 @@ func (p *Pool) GetSegment(group, id string) ([]byte, error) {
 	missed := false
 
 	for _, pr := range p.priorities {
-		start := pr.start()
+		start := p.pick(pr)
 		for i := range pr.servers {
 			server := pr.servers[(start+i)%len(pr.servers)]
 			if !p.usable(server) {
@@ -231,15 +243,20 @@ func (p *Pool) GetSegment(group, id string) ([]byte, error) {
 			}
 
 			started := time.Now()
+			server.inflight.Add(1)
 			body, err := server.Server.GetSegment(group, id)
+			server.inflight.Add(-1)
+			elapsed := time.Since(started).Seconds()
 			switch {
 			case err == nil:
 				p.measure(server, outcomeOK, started, int64(len(body)))
+				p.recordLoad(server, elapsed, int64(len(body)))
 				p.succeeded(server)
 				p.count(server, int64(len(body)))
 				return body, nil
 			case errors.Is(err, ErrArticleNotFound):
 				p.measure(server, outcomeMissing, started, 0)
+				p.recordLoad(server, elapsed, 0)
 				p.succeeded(server)
 				missed = true
 			case errors.Is(err, ErrAuthFailed):
@@ -365,8 +382,8 @@ func (p *Pool) outOfRotation(s *poolServer) string {
 	}
 }
 
-// start picks where in a group this request begins, so servers of equal priority
-// spread the load across each other.
+// start is where in a group a request begins before what the servers cost is
+// taken into account, so servers that perform alike spread the load evenly.
 func (p *priority) start() int {
 	return int(p.next.Add(1)-1) % len(p.servers)
 }

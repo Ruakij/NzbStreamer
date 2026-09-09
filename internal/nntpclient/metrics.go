@@ -68,6 +68,13 @@ var (
 		metric.WithDescription("Commands outstanding on the deepest connection; against the mean it is how evenly the load sits, which a connection draining slower than the rest pulls apart"))
 	pipelineWindow, _ = meter.Int64ObservableGauge("nntp.pipeline.window",
 		metric.WithDescription("Commands one connection is allowed to have outstanding, which is the ceiling the inflight over connections is read against"))
+	selectionCost, _ = meter.Float64ObservableGauge("nntp.select.cost",
+		metric.WithDescription("Seconds a server is expected to take over the articles already in flight there and one more, which is what a request is routed by; a server whose measurement has expired reports what its group costs"),
+		metric.WithUnit("s"))
+	selectionInflight, _ = meter.Int64ObservableGauge("nntp.select.inflight",
+		metric.WithDescription("Article requests piled onto one server that have not been answered yet, which is the term that makes nntp.select.cost rise for a busy server rather than a slow one. Unlike nntp.pipeline.inflight it counts the ones still waiting for a connection, so it keeps climbing where that one flatlines at the window, and it is reported for a server that does not pipeline"))
+	selectionDisplaced, _ = meter.Int64Counter("nntp.select.displaced",
+		metric.WithDescription("Requests the rotation would have sent to a server that went to a cheaper one instead, labelled with the server that was passed over; where they went is nntp.fetch.articles, and this is the server costing enough to be worth avoiding"))
 )
 
 // recordCtx is what the record calls take. Nothing here is cancellable and no
