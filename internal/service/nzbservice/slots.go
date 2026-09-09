@@ -69,3 +69,11 @@ func (a *addSlots) count() int {
 	defer a.mu.Unlock()
 	return a.limit
 }
+
+// state reports the builds running against what is allowed, which is what
+// separates a queue held up by this limit from one held up downstream.
+func (a *addSlots) state() (held, limit int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.held, a.limit
+}

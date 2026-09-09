@@ -385,7 +385,7 @@ function strip(stats) {
       ["hit rate", reads ? percent(cache.hits, reads) : "-", "reads served from cache"],
       // What the cache being smaller than the active library cost, which the
       // lifetime hit rate above cannot show once it has averaged out
-      ["refetched", size(cache.refetched), `bytes downloaded more than once in the last ${window_}`],
+      ["refetched", size(cache.refetched), "bytes downloaded a second time since start"],
     ]],
     ["usenet", [
       ["connections", `${stats.servers.conns} / ${stats.servers.max_conns}`, "open server connections"],

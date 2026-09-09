@@ -86,6 +86,9 @@ type chunk struct {
 	err  error
 	buf  []byte
 	refs atomic.Int32
+	// served marks that a read copied out of this chunk, which is what separates
+	// a chunk the window earned from one it guessed wrong about
+	served atomic.Bool
 }
 
 type reader struct {
@@ -158,6 +161,7 @@ func (r *reader) ReadAt(p []byte, off int64) (int, error) {
 			r.release(c)
 			return read, io.EOF
 		}
+		c.served.Store(true)
 		read += copy(p[read:], c.data[inner:])
 		r.release(c)
 	}
@@ -245,6 +249,7 @@ func (r *reader) fetchLocked(offset int64) *chunk {
 			err = nil
 		}
 		c.data, c.err = buf[:n], err
+		fetched.Add(int64(n))
 		close(c.done)
 
 		if int64(n) < r.chunkSize && err == nil {
@@ -265,11 +270,16 @@ func (r *reader) fetchLocked(offset int64) *chunk {
 var bufs sync.Pool
 
 // release drops one hold on a chunk and pools its buffer once the last one goes.
+// The last hold going is also where the chunk is done for good, so it is where a
+// chunk nothing ever read is counted.
 func (r *reader) release(c *chunk) {
 	if c.buf == nil {
 		return
 	}
 	if c.refs.Add(-1) == 0 {
+		if !c.served.Load() {
+			discarded.Add(int64(len(c.data)))
+		}
 		bufs.Put(&c.buf)
 	}
 }

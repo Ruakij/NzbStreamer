@@ -91,8 +91,19 @@ type CacheConfig struct {
 }
 
 type LibraryConfig struct {
-	MaxBytes     Bytes         `env:"LIBRARY_MAX_BYTES, default=0"`        // Nominal size the library may reach before adds are refused; 0 is unlimited. The nominal size is what every nzb added describes, not what is on disk, so this is what bounds how far the library is overprovisioned against CACHE_MAX_SIZE
-	ActiveWindow time.Duration `env:"LIBRARY_ACTIVE_WINDOW, default=168h"` // How far back a read counts towards the active library, which is the working set a cache would have to hold to serve it without fetching the same bytes twice
+	MaxBytes Bytes `env:"LIBRARY_MAX_BYTES, default=0"` // Nominal size the library may reach before adds are refused; 0 is unlimited. The nominal size is what every nzb added describes, not what is on disk, so this is what bounds how far the library is overprovisioned against CACHE_MAX_SIZE
+}
+
+// MetricsConfig is what the process measures itself over, which is shared by
+// /metrics, the health details and the web ui rather than belonging to any one
+// of them.
+type MetricsConfig struct {
+	ActiveWindows []time.Duration `env:"METRICS_ACTIVE_WINDOWS, default=24h,168h,720h"` // Spans the working-set metrics are bucketed over, one window series each: library.active.bytes and library.active.segments. Health and the web ui show the widest
+
+	OTLPEndpoint string        `env:"METRICS_OTLP_ENDPOINT"`                     // Collector the metrics are pushed to, as scheme://host:port; unset only serves /metrics for scraping. Anything but https is sent unencrypted
+	OTLPProtocol string        `env:"METRICS_OTLP_PROTOCOL, default=grpc"`       // How they are pushed: grpc, or http for OTLP over HTTP with protobuf
+	OTLPInterval time.Duration `env:"METRICS_OTLP_INTERVAL, default=60s"`        // How often they are pushed; every push is a full collection, the same one a scrape does
+	ServiceName  string        `env:"METRICS_SERVICE_NAME, default=nzbstreamer"` // What the process calls itself to a collector, which is how one deployment is told from another
 }
 
 type MetadataConfig struct {
@@ -102,7 +113,7 @@ type MetadataConfig struct {
 type ReadaheadConfig struct {
 	MaxSize   Bytes   `env:"READAHEAD_MAX_SIZE, default=16M"`   // Bytes held warm ahead of each open file; 0 disables readahead
 	Chunk     Bytes   `env:"READAHEAD_CHUNK, default=1M"`       // Bytes fetched per chunk; SIZE/CHUNK is how many run at once, and one chunk is served segment by segment, so around one segment reads fastest
-	MinSize   Bytes   `env:"READAHEAD_MIN_SIZE, default=4M"`    // Bytes a reader opens its window on; 0 is the one chunk a read needs, MAX_SIZE is no ramp
+	MinSize   Bytes   `env:"READAHEAD_MIN_SIZE, default=0"`     // Bytes a reader opens its window on; 0 is the one chunk a read needs, MAX_SIZE is no ramp
 	RampSpeed float64 `env:"READAHEAD_RAMP_SPEED, default=2.0"` // What the warm window multiplies by per chunk read in order and divides by on a read landing past it; 1 or less keeps it at MIN_SIZE
 }
 
@@ -150,6 +161,7 @@ type Config struct {
 	Sabnzbd       SabnzbdConfig
 	Cache         CacheConfig
 	Library       LibraryConfig
+	Metrics       MetricsConfig
 	Metadata      MetadataConfig
 	Readahead     ReadaheadConfig
 	NzbConfig     NzbConfig

@@ -234,3 +234,29 @@ func TestSeekKeepsHalfTheWindow(t *testing.T) {
 		t.Fatal("the chunk after the seek was not warmed; the seek dropped the whole window")
 	}
 }
+
+// Closing on the first chunk of a warm window throws the rest of it away, which
+// is the readahead the reader never asked for.
+func TestClosingCountsTheReadaheadNothingRead(t *testing.T) {
+	fetchedBefore, discardedBefore := readaheadresource.Stats()
+
+	underlying := &slowReader{data: make([]byte, 1024)}
+	opened, err := readaheadresource.New(underlying, 16, 64, 4, 1).Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(opened, make([]byte, 4)); err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	fetched, discarded := readaheadresource.Stats()
+	if fetched-fetchedBefore != 16 {
+		t.Errorf("fetched %d bytes, want the 4 warm chunks of the window", fetched-fetchedBefore)
+	}
+	if discarded-discardedBefore != 12 {
+		t.Errorf("discarded %d bytes, want the 3 chunks no read touched", discarded-discardedBefore)
+	}
+}

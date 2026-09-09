@@ -29,8 +29,8 @@ func healthComponents(c Config, db *dbWatchdog, cache *diskcache.Cache, mount *f
 			details := map[string]any{
 				"nzbs":   stats.Nzbs,
 				"bytes":  bytesize.Bytes(stats.Bytes).String(),
-				"active": bytesize.Bytes(stats.WorkingSet).String(),
-				"window": stats.Window.String(),
+				"active": bytesize.Bytes(stats.Widest().WorkingSetBytes).String(),
+				"window": windowLabel(stats.Widest().Window),
 			}
 			if stats.MaxBytes > 0 {
 				details["max_bytes"] = bytesize.Bytes(stats.MaxBytes).String()

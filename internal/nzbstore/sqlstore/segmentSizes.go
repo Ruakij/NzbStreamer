@@ -168,9 +168,12 @@ func (s *Store) writeSegmentActivity(pending map[string]activity) (err error) {
 		}
 	}()
 
+	// The row count comes back so a second fetch of the same segment can be
+	// counted where it is the only place that can see it was one
 	fetch, err := tx.Prepare(
 		"INSERT INTO segment (message_id, size, fetched_at, fetches) VALUES (?, ?, ?, 1)" +
-			" ON CONFLICT (message_id) DO UPDATE SET size = excluded.size, fetched_at = excluded.fetched_at, fetches = segment.fetches + 1")
+			" ON CONFLICT (message_id) DO UPDATE SET size = excluded.size, fetched_at = excluded.fetched_at, fetches = segment.fetches + 1" +
+			" RETURNING fetches")
 	if err != nil {
 		return fmt.Errorf("failed preparing insert: %w", err)
 	}
@@ -188,8 +191,13 @@ func (s *Store) writeSegmentActivity(pending map[string]activity) (err error) {
 	now := time.Now().Unix()
 	for id, seen := range pending {
 		if seen.fetched {
-			if _, err = fetch.Exec(id, seen.size, now); err != nil {
+			var fetches int64
+			if err = fetch.QueryRow(id, seen.size, now).Scan(&fetches); err != nil {
 				return fmt.Errorf("failed storing size of %s: %w", id, err)
+			}
+			if fetches > 1 {
+				s.refetchedBytes.Add(seen.size)
+				s.refetchedSegments.Add(1)
 			}
 		}
 		if seen.read {
@@ -206,28 +214,62 @@ func (s *Store) writeSegmentActivity(pending map[string]activity) (err error) {
 }
 
 // SegmentActivity is what the segments read within a window say about the cache.
+// It is a window rather than a running total because it is a set: a segment read
+// a hundred times is one segment of the working set, and a cardinality cannot be
+// summed back out of per-scrape values the way a count of events can.
 type SegmentActivity struct {
-	// WorkingSet is the bytes of the distinct segments read in the window, which
-	// is the size a cache would have to have to hold all of them
-	WorkingSet int64
-	// Refetched is the bytes among them that had to be downloaded again, which
-	// a cache with room for the whole working set would have served instead
-	Refetched int64
+	// WorkingSetBytes is the bytes of the distinct segments read in the window,
+	// which is the size a cache would have to have to hold all of them
+	WorkingSetBytes int64
+	// WorkingSetSegments is the same measured in segments, which against the
+	// bytes is the mean size of what is being read
+	WorkingSetSegments int64
 }
 
-// SegmentActivitySince measures the reads since a point in time. It scans the
-// segment table, so it belongs behind a cached value rather than in a request.
-func (s *Store) SegmentActivitySince(since time.Time) (SegmentActivity, error) {
-	var a SegmentActivity
-	err := s.db.QueryRow(
-		"SELECT coalesce(sum(size), 0),"+
-			" coalesce(sum(CASE WHEN fetches > 1 AND fetched_at > ?1 THEN size END), 0)"+
-			" FROM segment WHERE read_at > ?1",
-		since.Unix(),
-	).Scan(&a.WorkingSet, &a.Refetched)
-	if err != nil {
-		return SegmentActivity{}, fmt.Errorf("failed measuring segment activity: %w", err)
+// SegmentActivitySince measures the reads since each of the given points in
+// time, returning one measurement per cutoff in the order they were asked for.
+// Every cutoff is a conditional sum over the same scan rather than a scan of its
+// own, and the scan is bounded by the oldest of them.
+//
+// It reads the whole segment table, so it belongs behind a cached value rather
+// than in a request.
+func (s *Store) SegmentActivitySince(cutoffs []time.Time) ([]SegmentActivity, error) {
+	if len(cutoffs) == 0 {
+		return nil, nil
 	}
 
-	return a, nil
+	args := make([]any, len(cutoffs)+1)
+	columns := make([]string, 0, len(cutoffs)*2)
+	oldest := cutoffs[0]
+	for i, cutoff := range cutoffs {
+		args[i] = cutoff.Unix()
+		columns = append(columns,
+			fmt.Sprintf("coalesce(sum(CASE WHEN read_at > ?%d THEN size END), 0)", i+1),
+			fmt.Sprintf("coalesce(sum(CASE WHEN read_at > ?%d THEN 1 END), 0)", i+1))
+		if cutoff.Before(oldest) {
+			oldest = cutoff
+		}
+	}
+	args[len(cutoffs)] = oldest.Unix()
+
+	activity := make([]SegmentActivity, len(cutoffs))
+	scan := make([]any, 0, len(cutoffs)*2)
+	for i := range activity {
+		scan = append(scan, &activity[i].WorkingSetBytes, &activity[i].WorkingSetSegments)
+	}
+
+	query := "SELECT " + strings.Join(columns, ", ") +
+		fmt.Sprintf(" FROM segment WHERE read_at > ?%d", len(cutoffs)+1)
+	if err := s.db.QueryRow(query, args...).Scan(scan...); err != nil {
+		return nil, fmt.Errorf("failed measuring segment activity: %w", err)
+	}
+
+	return activity, nil
+}
+
+// Refetches is what has been downloaded a second time since the process started.
+// Every refetch is an event with a size, so unlike the working set this counts
+// up and leaves the window to whatever reads it.
+func (s *Store) Refetches() (bytes, segments int64) {
+	return s.refetchedBytes.Load(), s.refetchedSegments.Load()
 }

@@ -315,7 +315,9 @@ func (c *Client) dialPipe() (*pipeConn, error) {
 }
 
 func (p *pipeConn) handshake() error {
+	started := time.Now()
 	code, msg, err := p.status()
+	p.c.recordResponse(responseGreeting, started)
 	if err != nil {
 		return fmt.Errorf("failed reading greeting: %w", err)
 	}
@@ -326,6 +328,9 @@ func (p *pipeConn) handshake() error {
 	if p.c.config.User == "" {
 		return nil
 	}
+
+	started = time.Now()
+	defer func() { p.c.recordResponse(responseAuth, started) }()
 
 	code, msg, err = p.command("AUTHINFO USER %s", p.c.config.User)
 	if err != nil {
@@ -441,7 +446,9 @@ func (p *pipeConn) reply(f *fetch) (body []byte, err error, fatal bool) {
 
 	var groupErr error
 	if f.needsGroup {
+		started := time.Now()
 		code, msg, err := p.status()
+		p.c.recordResponse(responseGroup, started)
 		if err != nil {
 			return nil, fmt.Errorf("failed reading group '%s' response: %w", f.group, err), true
 		}
@@ -460,7 +467,12 @@ func (p *pipeConn) reply(f *fetch) (body []byte, err error, fatal bool) {
 }
 
 func (p *pipeConn) article(f *fetch) (body []byte, err error, fatal bool) {
+	// The command went out before this connection's earlier responses were
+	// read, so this is the wait on the wire once the reader reached it rather
+	// than the time the whole request took.
+	started := time.Now()
 	code, msg, err := p.status()
+	p.c.recordResponse(responseArticle, started)
 	if err != nil {
 		return nil, fmt.Errorf("failed reading article '%s' response: %w", f.id, err), true
 	}
@@ -526,6 +538,7 @@ func (p *pipeConn) stop(err error) {
 		p.deadErr = err
 		close(p.quit)
 		if err != nil {
+			p.c.recordSocket(p.net)
 			p.net.Close()
 		}
 	})
@@ -552,10 +565,14 @@ func (p *pipeConn) failure(err error) error {
 // close is the last thing on a connection, called by the reader once nothing
 // is outstanding.
 func (p *pipeConn) close() {
-	p.net.Close()
+	c := p.c
+	if p.deadErr != nil {
+		c.closeConn(p.net, closeError)
+	} else {
+		c.closeConn(p.net, closeIdle)
+	}
 	p.retire()
 
-	c := p.c
 	c.mu.Lock()
 	c.pipeCount--
 	c.mu.Unlock()

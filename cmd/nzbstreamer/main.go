@@ -117,8 +117,12 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager, c Config) {
 	for _, server := range servers {
 		slog.Info("Using news server", "name", server.Name, "host", server.Host, "priority", server.Priority, "connections", server.MaxConn)
 		poolServers = append(poolServers, nntpclient.ServerConfig{
-			Server: nntpclient.New(nntpclient.Config{
+			// the nolint is the client's connection reaper recording metrics of
+			// its own: a connection it closed is about the process rather than
+			// about a request, so it takes no context from one
+			Server: nntpclient.New(nntpclient.Config{ //nolint:contextcheck
 				Host:     server.Host,
+				Name:     server.Name,
 				Port:     server.Port,
 				TLS:      server.TLS,
 				User:     server.User,
@@ -253,13 +257,23 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager, c Config) {
 		}
 	}
 
-	library := newLibraryMeter(service.Library, store.SegmentActivitySince, c.Library.ActiveWindow)
+	library := newLibraryMeter(service.Library, store.SegmentActivitySince, store.Refetches, c.Metrics.ActiveWindows)
 
-	metrics, err := setupMetrics(segmentCache, library)
+	metrics, flushMetrics, err := setupMetrics(ctx, c.Metrics, segmentCache, library)
 	if err != nil {
 		slog.Error("Metrics setup failed", "error", err)
 		os.Exit(1)
 	}
+	// A push exporter holds the last interval, so the shutdown is what gets the
+	// numbers of a restart out rather than losing them
+	sm.AddService()
+	go func() {
+		defer sm.ServiceDone()
+		<-ctx.Done()
+		if err := flushMetrics(context.WithoutCancel(ctx)); err != nil {
+			slog.Error("Failed flushing metrics", "error", err)
+		}
+	}()
 
 	db := watchDB(ctx, store.Ping)
 

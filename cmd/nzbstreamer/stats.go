@@ -56,19 +56,19 @@ func pageStats(cache *diskcache.Cache, pool *nntpclient.Pool, service *nzbservic
 				"hits":      stats.Hits,
 				"misses":    stats.Misses,
 				"evictions": stats.Evictions,
-				"refetched": lib.Refetched,
+				"refetched": lib.RefetchedBytes,
 			},
 			"library": map[string]any{
 				"nzbs":      lib.Nzbs,
 				"bytes":     lib.Bytes,
 				"exact":     lib.Exact,
 				"max_bytes": lib.MaxBytes,
-				"active":    lib.WorkingSet,
-				"window":    int(lib.Window.Seconds()),
+				"active":    lib.Widest().WorkingSetBytes,
+				"window":    int(lib.Widest().Window.Seconds()),
 			},
 			"servers": map[string]any{
 				"conns": conns, "max_conns": maxConns,
-				"fetched": pool.Fetched(),
+				"fetched": pool.FetchedBytes(),
 			},
 			"io": map[string]any{
 				"open":   mountOpen + davOpen,

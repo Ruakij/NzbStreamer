@@ -16,8 +16,11 @@ require (
 	github.com/sethvargo/go-envconfig v1.4.3
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0
 	go.opentelemetry.io/otel v1.46.0
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.46.0
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.46.0
 	go.opentelemetry.io/otel/exporters/prometheus v0.68.0
 	go.opentelemetry.io/otel/metric v1.46.0
+	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/sdk/metric v1.46.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
@@ -31,6 +34,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bodgit/plumbing v1.3.0 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
+	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
@@ -38,6 +42,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
@@ -55,10 +60,14 @@ require (
 	github.com/stangelandcl/ppmd v0.1.1 // indirect
 	github.com/ulikunitz/xz v0.5.16 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/otel/sdk v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
+	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go4.org v0.0.0-20260112195520-a5071408f32f // indirect
+	golang.org/x/net v0.58.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260831171406-18b4a7587f8a // indirect
+	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	modernc.org/libc v1.75.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

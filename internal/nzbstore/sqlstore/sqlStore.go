@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
@@ -34,6 +35,11 @@ type Store struct {
 	closing      chan struct{}
 	flusherDone  sync.WaitGroup
 	closeOnce    sync.Once
+
+	// Only the write of a fetch can tell that it was the second one for a
+	// segment, so the refetches are counted there as they happen
+	refetchedBytes    atomic.Int64
+	refetchedSegments atomic.Int64
 }
 
 // New opens the database at path, creating it and its directory if needed, and

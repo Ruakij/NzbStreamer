@@ -1,7 +1,6 @@
 package nntpclient
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -95,8 +94,8 @@ type Pool struct {
 	fetched atomic.Int64
 }
 
-// Fetched reports the bytes the servers have sent since the process started.
-func (p *Pool) Fetched() int64 {
+// FetchedBytes reports what the servers have sent since the process started.
+func (p *Pool) FetchedBytes() int64 {
 	return p.fetched.Load()
 }
 
@@ -165,6 +164,7 @@ func NewPool(servers []ServerConfig, store QuotaStore, breaker BreakerConfig) *P
 	sort.SliceStable(pool.priorities, func(i, j int) bool {
 		return pool.priorities[i].servers[0].Priority < pool.priorities[j].servers[0].Priority
 	})
+	pool.observeServers()
 	return pool
 }
 
@@ -445,7 +445,7 @@ func (p *Pool) failed(s *poolServer, err error) {
 	}
 
 	s.disabledErr = err
-	breakerTrips.Add(context.Background(), 1, metric.WithAttributes(serverKey.String(s.Name)))
+	breakerTrips.Add(recordCtx, 1, metric.WithAttributes(serverKey.String(s.Name)))
 	if permanent {
 		s.permanent = true
 		slog.Error("Disabling a news server that rejected its credentials; nothing here will fix that", "server", s.Name, "error", err)
@@ -491,11 +491,11 @@ func (p *Pool) noServer() error {
 func (p *Pool) measure(s *poolServer, outcome string, started time.Time, bytes int64) {
 	attributes := metric.WithAttributes(serverKey.String(s.Name), outcomeKey.String(outcome))
 
-	fetchDuration.Record(context.Background(), time.Since(started).Seconds(), attributes)
-	fetchedArticles.Add(context.Background(), 1, attributes)
+	fetchDuration.Record(recordCtx, time.Since(started).Seconds(), attributes)
+	fetchedArticles.Add(recordCtx, 1, attributes)
 	if bytes > 0 {
 		p.fetched.Add(bytes)
-		fetchedBytes.Add(context.Background(), bytes, metric.WithAttributes(serverKey.String(s.Name)))
+		fetchedBytes.Add(recordCtx, bytes, metric.WithAttributes(serverKey.String(s.Name)))
 	}
 }
 

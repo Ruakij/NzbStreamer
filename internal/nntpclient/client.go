@@ -64,6 +64,7 @@ func staleIf(reused bool, err error) error {
 
 type Config struct {
 	Host string
+	Name string
 	Port int
 	TLS  bool
 	User string
@@ -151,6 +152,9 @@ func New(config Config) *Client {
 	if config.ConnectionPipeliningSize < 1 {
 		config.ConnectionPipeliningSize = 1
 	}
+	if config.Name == "" {
+		config.Name = config.Host
+	}
 
 	client := &Client{
 		config: config,
@@ -170,6 +174,7 @@ func New(config Config) *Client {
 		client.pipes = make(map[*pipeConn]struct{})
 		client.freed = make(chan struct{}, 1)
 	}
+	client.observeState()
 
 	go client.reapIdle()
 	return client
@@ -204,10 +209,14 @@ func (c *Client) reapPass() time.Duration {
 		select {
 		case cn := <-c.idle:
 			idle := time.Since(cn.lastUsed)
-			if idle >= c.config.IdleTimeout || !cn.alive() {
+			if due := idle >= c.config.IdleTimeout; due || !cn.alive() {
 				// its slot went back at release, so closing only lowers the
 				// number of connections that exist
-				cn.net.Close()
+				if due {
+					c.closeConn(cn.net, closeIdle)
+				} else {
+					c.closeConn(cn.net, closeDead)
+				}
 				continue
 			}
 
@@ -282,7 +291,12 @@ func (c *Client) retry(what string, op func() error) error {
 
 	for attempt := 0; attempt < c.config.Attempts; {
 		err = op()
-		if err == nil || errors.Is(err, ErrArticleNotFound) || errors.Is(err, ErrAuthFailed) {
+		if err == nil || errors.Is(err, ErrArticleNotFound) {
+			return err
+		}
+		// every failure this client produces passes here, retried or not
+		c.recordError(err)
+		if errors.Is(err, ErrAuthFailed) {
 			return err
 		}
 
@@ -323,12 +337,20 @@ func (c *Client) getSegmentSync(group, id string) ([]byte, error) {
 		return nil, err
 	}
 
-	if err := cn.selectGroup(group); err != nil {
+	started := time.Now()
+	issued, err := cn.selectGroup(group)
+	if issued {
+		c.recordResponse(responseGroup, started)
+	}
+	if err != nil {
 		c.drop(cn)
 		return nil, staleIf(reused, err)
 	}
 
+	started = time.Now()
 	res, err := cn.Do("ARTICLE <%s>", id)
+	// the status line is here, the body is not: what follows is transfer
+	c.recordResponse(responseArticle, started)
 	if err != nil {
 		c.drop(cn)
 		return nil, staleIf(reused, fmt.Errorf("failed requesting article '%s': %w", id, err))
@@ -366,7 +388,9 @@ func (c *Client) segmentExists(id string) (bool, error) {
 		return false, err
 	}
 
+	started := time.Now()
 	res, err := cn.Do("STAT <%s>", id)
+	c.recordResponse(responseStat, started)
 	if err != nil {
 		c.drop(cn)
 		return false, staleIf(reused, fmt.Errorf("failed stat for '%s': %w", id, err))
@@ -417,7 +441,7 @@ func (c *Client) takeIdle() (*conn, bool) {
 			}
 			// its slot went back at release, so closing only lowers the number
 			// of connections that exist
-			cn.net.Close()
+			c.closeConn(cn.net, closeDead)
 
 		default:
 			return nil, false
@@ -436,8 +460,16 @@ func (c *Client) release(cn *conn) {
 // drop closes a connection whose position in the response stream is unknown.
 // Reusing one would read the remains of the previous response as the next one.
 func (c *Client) drop(cn *conn) {
-	cn.net.Close()
+	c.closeConn(cn.net, closeError)
 	c.slots <- struct{}{}
+}
+
+// closeConn takes the sockets counters before it closes it, since a closed
+// descriptor has none left to read, and records what ended it.
+func (c *Client) closeConn(netConn net.Conn, reason string) {
+	c.recordSocket(netConn)
+	netConn.Close()
+	c.recordClose(reason)
 }
 
 // dialNetwork opens the socket. It is the whole of what the two paths share:
@@ -447,15 +479,29 @@ func (c *Client) dialNetwork() (net.Conn, error) {
 	address := net.JoinHostPort(c.config.Host, strconv.Itoa(c.config.Port))
 	dialer := &net.Dialer{Timeout: c.config.Timeout}
 
-	var netConn net.Conn
-	var err error
-	if c.config.TLS {
-		netConn, err = tls.DialWithDialer(dialer, "tcp", address, nil)
-	} else {
-		netConn, err = dialer.Dial("tcp", address)
-	}
+	// The tcp connect and the tls handshake are timed apart, which is what tells
+	// a slow link from a provider slow to negotiate
+	started := time.Now()
+	netConn, err := dialer.Dial("tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("failed connecting to %s: %w", address, err)
+	}
+	c.recordConnect(phaseTCP, started)
+
+	if c.config.TLS {
+		started = time.Now()
+		tlsConn := tls.Client(netConn, &tls.Config{ServerName: c.config.Host, MinVersion: tls.VersionTLS12})
+		// the handshake is bounded the way the dialer bounds the connect; the
+		// caller sets the deadline that covers what follows
+		if c.config.Timeout > 0 {
+			_ = netConn.SetDeadline(time.Now().Add(c.config.Timeout))
+		}
+		if err := tlsConn.Handshake(); err != nil {
+			netConn.Close()
+			return nil, fmt.Errorf("failed the tls handshake with %s: %w", address, err)
+		}
+		c.recordConnect(phaseTLS, started)
+		netConn = tlsConn
 	}
 	return netConn, nil
 }
@@ -471,7 +517,9 @@ func (c *Client) dialServer() (*conn, error) {
 	cn := &conn{net: netConn}
 	cn.deadline(c.config.Timeout)
 
+	started := time.Now()
 	welcome, nntpConn, err := nntp.NewConn(netConn)
+	c.recordResponse(responseGreeting, started)
 	if err != nil {
 		netConn.Close()
 		return nil, fmt.Errorf("failed nntp handshake with %s: %w", netConn.RemoteAddr(), err)
@@ -483,7 +531,10 @@ func (c *Client) dialServer() (*conn, error) {
 	cn.Conn = nntpConn
 
 	if c.config.User != "" {
-		if err := cn.authenticate(c.config.User, c.config.Pass); err != nil {
+		started = time.Now()
+		err := cn.authenticate(c.config.User, c.config.Pass)
+		c.recordResponse(responseAuth, started)
+		if err != nil {
 			netConn.Close()
 			return nil, err
 		}
@@ -606,22 +657,24 @@ func (c *conn) deadline(timeout time.Duration) {
 	_ = c.net.SetDeadline(time.Now().Add(timeout))
 }
 
-// selectGroup issues GROUP only when the connection is not already on it.
-func (c *conn) selectGroup(group string) error {
+// selectGroup issues GROUP only when the connection is not already on it, and
+// reports whether it did, which is what keeps the ones it skipped out of the
+// command latency.
+func (c *conn) selectGroup(group string) (bool, error) {
 	if group == "" || c.group == group {
-		return nil
+		return false, nil
 	}
 
 	res, err := c.Do("GROUP %s", group)
 	if err != nil {
-		return fmt.Errorf("failed selecting group '%s': %w", group, err)
+		return true, fmt.Errorf("failed selecting group '%s': %w", group, err)
 	}
 	if res.Code != groupJoined {
-		return fmt.Errorf("%w to group '%s': %d %s", ErrUnexpectedResponse, group, res.Code, res.Message)
+		return true, fmt.Errorf("%w to group '%s': %d %s", ErrUnexpectedResponse, group, res.Code, res.Message)
 	}
 
 	c.group = group
-	return nil
+	return true, nil
 }
 
 // authenticate performs AUTHINFO. nntp.Conn.Auth reports success for a password

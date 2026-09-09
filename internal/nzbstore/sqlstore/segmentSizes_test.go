@@ -67,21 +67,22 @@ func TestSegmentActivityCountsWhatWasReadAndWhatWasFetchedTwice(t *testing.T) {
 	store.RecordSegmentRead("a@example.com")
 	store.flushSegmentSizes()
 
-	activity, err := store.SegmentActivitySince(time.Now().Add(-time.Hour))
+	// Every window is answered off one scan, and one whose cutoff is in the
+	// future has nothing read within it
+	activity, err := store.SegmentActivitySince([]time.Time{
+		time.Now().Add(-time.Hour), time.Now().Add(time.Hour),
+	})
 	if err != nil {
 		t.Fatalf("SegmentActivitySince: %v", err)
 	}
-	if activity.WorkingSet != 1000 || activity.Refetched != 700 {
-		t.Errorf("activity: got %+v, want a working set of 1000 with 700 refetched", activity)
+	if activity[0] != (SegmentActivity{WorkingSetBytes: 1000, WorkingSetSegments: 2}) {
+		t.Errorf("activity: got %+v, want a working set of 1000 bytes over 2 segments", activity[0])
 	}
-
-	// Nothing was read in the window, so nothing is in the working set
-	activity, err = store.SegmentActivitySince(time.Now().Add(time.Hour))
-	if err != nil {
-		t.Fatalf("SegmentActivitySince: %v", err)
+	if activity[1] != (SegmentActivity{}) {
+		t.Errorf("activity outside the window: got %+v", activity[1])
 	}
-	if activity != (SegmentActivity{}) {
-		t.Errorf("activity outside the window: got %+v", activity)
+	if bytes, segments := store.Refetches(); bytes != 700 || segments != 1 {
+		t.Errorf("refetches: got %d bytes over %d segments, want 700 over 1", bytes, segments)
 	}
 }
 
