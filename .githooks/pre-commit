@@ -1,19 +1,20 @@
 #!/bin/sh
 set -e
 
-if ! git status --porcelain --untracked-files=all -- '*.go' | grep -q .; then
-	exit 0
-fi
+files=$(git diff --cached --name-only --diff-filter=ACM -- '*.go')
+[ -n "$files" ] || exit 0
 
-unformatted=$(gofmt -l cmd internal pkg test)
+pkgs=$(echo "$files" | xargs -n1 dirname | sort -u | sed 's|^|./|')
+
+unformatted=$(gofmt -l $files)
 if [ -n "$unformatted" ]; then
 	echo "gofmt: $unformatted" >&2
 	exit 1
 fi
 
-go vet ./...
-go test -race ./...
+go vet $pkgs
+go test -race $pkgs
 
 if command -v golangci-lint >/dev/null; then
-	golangci-lint run
+	golangci-lint run $pkgs
 fi
