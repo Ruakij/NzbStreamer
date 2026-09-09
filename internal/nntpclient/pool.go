@@ -368,6 +368,12 @@ func (p *Pool) outOfRotation(s *poolServer) string {
 	p.quotaMutex.Lock()
 	defer p.quotaMutex.Unlock()
 
+	return outOfRotationLocked(s)
+}
+
+// outOfRotationLocked is outOfRotation for a caller that already holds
+// quotaMutex. Requires it.
+func outOfRotationLocked(s *poolServer) string {
 	quotaLive := s.QuotaPeriod <= 0 || time.Since(s.periodStart) < s.QuotaPeriod
 
 	switch {

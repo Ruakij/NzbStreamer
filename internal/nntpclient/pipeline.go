@@ -76,6 +76,9 @@ type pipeConn struct {
 	// between connections sees all of them at once, so both are under c.mu.
 	load     int
 	lastUsed time.Time
+
+	// socket is this connection in the set the collection reads
+	socket *socket
 }
 
 // pipelineFetch runs one segment through a pipelined connection. Retrying is
@@ -346,6 +349,7 @@ func (c *Client) dialPipe() (*pipeConn, error) {
 	}
 	p.deadline(0)
 
+	p.socket = c.track(netConn)
 	return p, nil
 }
 
@@ -582,7 +586,8 @@ func (p *pipeConn) stop(err error) {
 		p.deadErr = err
 		close(p.quit)
 		if err != nil {
-			p.c.recordSocket(p.net)
+			p.c.recordSocket(recordCtx, p.socket)
+			p.c.untrack(p.socket)
 			p.net.Close()
 		}
 	})
@@ -611,9 +616,9 @@ func (p *pipeConn) failure(err error) error {
 func (p *pipeConn) close() {
 	c := p.c
 	if p.deadErr != nil {
-		c.closeConn(p.net, closeError)
+		c.closeConn(p.socket, closeError)
 	} else {
-		c.closeConn(p.net, closeIdle)
+		c.closeConn(p.socket, closeIdle)
 	}
 	p.retire()
 

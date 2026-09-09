@@ -153,6 +153,32 @@ func TestQuotaIsObservedAgainstItsAllowance(t *testing.T) {
 	}
 }
 
+// A server is out of rotation for as long as its cooldown lasts, and the trip
+// that put it there is one event minutes before. What a scrape has to answer is
+// whether it is still out.
+func TestServersReportWhetherTheyAreInRotation(t *testing.T) {
+	pool := NewPool([]ServerConfig{
+		{Server: &fakeServer{err: ErrArticleNotFound}, Name: "rotating", Priority: 1},
+		{Server: &fakeServer{err: ErrAuthFailed}, Name: "rejected", Priority: 2},
+	}, nil, BreakerConfig{Failures: 1, Cooldown: time.Hour})
+
+	if up := gauges(t, "nntp.server.up"); up["rotating"] != 1 || up["rejected"] != 1 {
+		t.Fatalf("servers read %v before anything failed; want both in rotation", up)
+	}
+
+	if _, err := pool.GetSegment("group", "id"); err == nil {
+		t.Fatal("the auth failure did not reach the caller")
+	}
+
+	up := gauges(t, "nntp.server.up")
+	if up["rejected"] != 0 {
+		t.Errorf("a server whose credentials were rejected reads %d; want 0", up["rejected"])
+	}
+	if up["rotating"] != 1 {
+		t.Errorf("the server still in rotation reads %d; want 1", up["rotating"])
+	}
+}
+
 // The connection gauges are the pair a queueing request is read against, so
 // they have to be there whether or not the client pipelines.
 func TestConnectionsAreObservedAgainstTheirLimit(t *testing.T) {
@@ -198,6 +224,86 @@ func TestSocketStatsReadsALiveConnection(t *testing.T) {
 	client.Close()
 	if _, ok := socketStats(client); ok {
 		t.Error("a closed connection still answered, so a sample can be taken too late")
+	}
+}
+
+// A pipelined connection is held for as long as the download lasts, so the
+// counters are only of use if a collection takes them off a connection that is
+// still open rather than waiting for it to close.
+func TestSocketIsSampledWhileTheConnectionIsOpen(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skipf("no TCP_INFO on %s", runtime.GOOS)
+	}
+
+	s := newFakeNNTP(t)
+	host, port, err := net.SplitHostPort(s.ln.Addr().String())
+	if err != nil {
+		t.Fatalf("addr: %v", err)
+	}
+	number, _ := strconv.Atoi(port)
+
+	const server = "socket-test"
+	c := New(Config{Host: host, Name: server, Port: number, MaxConns: 2, ConnectionPipeliningSize: 4, Attempts: 1})
+
+	f := newFetches(t, c)
+	f.start("a")
+
+	fc := s.conn()
+	fc.expect("GROUP " + testGroup)
+	fc.groupOK(testGroup)
+	fc.article()
+	fc.respond([]byte("body-a"))
+
+	f.wait()
+	f.assertBody("a", "body-a")
+
+	// nothing closed the connection, so a sample can only have come from the
+	// collection reading it where it stands
+	if rtt := samples(t, server, "nntp.socket.rtt", serverKey); rtt[server] == 0 {
+		t.Error("an open connection reported no round trip")
+	}
+}
+
+// A connection that runs commands one at a time is out of every pool while it
+// carries one, so the set the collection reads has to be the client's own rather
+// than whatever a given path keeps reachable.
+func TestSocketIsSampledOnAConnectionThatIsNotPipelined(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skipf("no TCP_INFO on %s", runtime.GOOS)
+	}
+
+	const server = "plain-socket-test"
+	c := New(Config{Host: "plain", Name: server, MaxConns: 1})
+	withFakeDial(t, c)
+
+	// held rather than released, which is where a command would have it
+	cn, _, err := c.acquire()
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	if _, err := cn.net.Write([]byte("something to count\r\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if rtt := samples(t, server, "nntp.socket.rtt", serverKey); rtt[server] == 0 {
+		t.Error("a connection out on a command reported no round trip")
+	}
+}
+
+// Sampling an open connection means reading the same per-socket totals again,
+// so what reaches the counters has to be what arrived since the last reading.
+func TestSocketReportsTheDeltaSinceTheLastReading(t *testing.T) {
+	var s socket
+
+	if retransmits, packets := s.since(socketInfo{retransmits: 2, packets: 10}); retransmits != 2 || packets != 10 {
+		t.Errorf("the first reading gave %d retransmits over %d packets; want the totals 2 over 10", retransmits, packets)
+	}
+	if retransmits, packets := s.since(socketInfo{retransmits: 3, packets: 25}); retransmits != 1 || packets != 15 {
+		t.Errorf("the second reading gave %d retransmits over %d packets; want the growth 1 over 15", retransmits, packets)
+	}
+	// which is what a connection that sent nothing since is skipped on
+	if retransmits, packets := s.since(socketInfo{retransmits: 3, packets: 25}); retransmits != 0 || packets != 0 {
+		t.Errorf("an unchanged socket counted %d retransmits over %d packets again", retransmits, packets)
 	}
 }
 

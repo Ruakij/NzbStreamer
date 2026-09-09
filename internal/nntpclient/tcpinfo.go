@@ -3,6 +3,7 @@ package nntpclient
 import (
 	"crypto/tls"
 	"net"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -15,6 +16,29 @@ type socketInfo struct {
 	rtt         time.Duration
 	retransmits int64
 	packets     int64
+}
+
+// socket is one live connection and what has already been read off it. Every
+// connection past its handshake is one of these, whichever path holds it, which
+// is what lets a collection read all of them from one place.
+type socket struct {
+	net net.Conn
+
+	mu          sync.Mutex
+	retransmits int64
+	packets     int64
+}
+
+// since reports what the kernel counted beyond the last reading. The counters it
+// keeps are per-socket totals, so a connection can be read as often as a scrape
+// asks and each packet is still counted once.
+func (s *socket) since(info socketInfo) (retransmits, packets int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	retransmits, packets = info.retransmits-s.retransmits, info.packets-s.packets
+	s.retransmits, s.packets = info.retransmits, info.packets
+	return retransmits, packets
 }
 
 // rawSocket reaches the descriptor under a connection, through tls where there

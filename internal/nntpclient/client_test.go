@@ -60,7 +60,8 @@ func withPeerTrackingDial(t testing.TB, client *Client) (dialed *int, peers *[]n
 		count++
 		netConn, peer := loopback(t)
 		kept = append(kept, peer)
-		return &conn{net: netConn}, nil
+		// tracked as the real dial leaves it, so closing one reads its counters
+		return &conn{net: netConn, socket: client.track(netConn)}, nil
 	}
 	return &count, &kept
 }

@@ -120,6 +120,13 @@ type Client struct {
 	dialErr error
 	freed   chan struct{}
 	canPipe bool
+
+	// sockets is every connection past its handshake, so a collection reads the
+	// kernel's counters off all of them rather than only the ones a given path
+	// keeps reachable. It has its own lock: a scrape must not queue behind the
+	// dispatch, and holding a connection open is what makes reading it late.
+	socketMutex sync.Mutex
+	sockets     map[*socket]struct{}
 }
 
 // Conns reports how many connections this client may have open at once.
@@ -157,9 +164,10 @@ func New(config Config) *Client {
 	}
 
 	client := &Client{
-		config: config,
-		idle:   make(chan *conn, config.MaxConns),
-		slots:  make(chan struct{}, config.MaxConns),
+		config:  config,
+		idle:    make(chan *conn, config.MaxConns),
+		slots:   make(chan struct{}, config.MaxConns),
+		sockets: make(map[*socket]struct{}, config.MaxConns),
 	}
 	client.dialNet = client.dialNetwork
 	client.dial = client.dialServer
@@ -213,9 +221,9 @@ func (c *Client) reapPass() time.Duration {
 				// its slot went back at release, so closing only lowers the
 				// number of connections that exist
 				if due {
-					c.closeConn(cn.net, closeIdle)
+					c.closeConn(cn.socket, closeIdle)
 				} else {
-					c.closeConn(cn.net, closeDead)
+					c.closeConn(cn.socket, closeDead)
 				}
 				continue
 			}
@@ -460,7 +468,7 @@ func (c *Client) takeIdle() (*conn, bool) {
 			}
 			// its slot went back at release, so closing only lowers the number
 			// of connections that exist
-			c.closeConn(cn.net, closeDead)
+			c.closeConn(cn.socket, closeDead)
 
 		default:
 			return nil, false
@@ -479,15 +487,16 @@ func (c *Client) release(cn *conn) {
 // drop closes a connection whose position in the response stream is unknown.
 // Reusing one would read the remains of the previous response as the next one.
 func (c *Client) drop(cn *conn) {
-	c.closeConn(cn.net, closeError)
+	c.closeConn(cn.socket, closeError)
 	c.slots <- struct{}{}
 }
 
 // closeConn takes the sockets counters before it closes it, since a closed
 // descriptor has none left to read, and records what ended it.
-func (c *Client) closeConn(netConn net.Conn, reason string) {
-	c.recordSocket(netConn)
-	netConn.Close()
+func (c *Client) closeConn(s *socket, reason string) {
+	c.recordSocket(recordCtx, s)
+	c.untrack(s)
+	s.net.Close()
 	c.recordClose(reason)
 }
 
@@ -558,6 +567,8 @@ func (c *Client) dialServer() (*conn, error) {
 			return nil, err
 		}
 	}
+
+	cn.socket = c.track(netConn)
 	return cn, nil
 }
 
@@ -625,6 +636,8 @@ type conn struct {
 	net      net.Conn
 	group    string
 	lastUsed time.Time
+	// socket is this connection in the set the collection reads
+	socket *socket
 }
 
 // alive reports whether the connection can still carry a command. A server

@@ -33,6 +33,8 @@ var (
 		metric.WithUnit("s"))
 	breakerTrips, _ = meter.Int64Counter("nntp.breaker.trips",
 		metric.WithDescription("Times a server was taken out of rotation"))
+	serverUp, _ = meter.Int64ObservableGauge("nntp.server.up",
+		metric.WithDescription("1 while a server is in rotation, 0 while something holds it out: rejected credentials, an open breaker or a spent quota. The trips count when a server dropped out, this is whether it is still out, which is what a server left disabled for an hour looks like and what a cooldown ending or a quota period rolling changes with no event to count"))
 	responseLatency, _ = meter.Float64Histogram("nntp.response.latency",
 		metric.WithDescription("Time the server took to answer with a status line, by what it was answering; the body transfer that follows an ARTICLE is not in it, which is what separates it from nntp.fetch.duration. On a pipelined connection a command is written long before its response is read, so what is timed is the wait once the reader reaches it"),
 		metric.WithUnit("s"))
@@ -52,7 +54,7 @@ var (
 		metric.WithDescription("Bytes a server may serve per period before it is skipped; 0 is unmetered"),
 		metric.WithUnit("By"))
 	socketRTT, _ = meter.Float64Histogram("nntp.socket.rtt",
-		metric.WithDescription("Round trip the kernel measured over a connection's life, taken as it closes, which unlike the tcp connect phase is measured under load"),
+		metric.WithDescription("Round trip the kernel measured over a connection, sampled at every scrape while it is open and once more as it closes, which unlike the tcp connect phase is measured under load"),
 		metric.WithUnit("s"))
 	socketRetransmits, _ = meter.Int64Counter("nntp.socket.retransmits",
 		metric.WithDescription("Packets a connection had to send again, over the packets it sent, which is a lossy path and is invisible above tcp"))
@@ -149,20 +151,66 @@ func (c *Client) recordClose(reason string) {
 		metric.WithAttributes(serverKey.String(c.config.Name), reasonKey.String(reason)))
 }
 
-// recordSocket takes what the kernel counted for a connection before it is
-// closed, since a closed descriptor has nothing to read. A connection that
-// never closes is never counted; the reaper turns idle ones over within
-// IdleTimeout, so a busy connection is the one that reports late.
-func (c *Client) recordSocket(netConn net.Conn) {
-	info, ok := socketStats(netConn)
+// track takes a connection into the set a collection reads, once its handshake
+// has made it one. A dial that failed never enters it, so nothing has to take it
+// back out.
+func (c *Client) track(netConn net.Conn) *socket {
+	s := &socket{net: netConn}
+
+	c.socketMutex.Lock()
+	defer c.socketMutex.Unlock()
+
+	c.sockets[s] = struct{}{}
+	return s
+}
+
+// untrack drops a connection that is about to be closed, so a collection does
+// not read a descriptor that is on its way out.
+func (c *Client) untrack(s *socket) {
+	c.socketMutex.Lock()
+	defer c.socketMutex.Unlock()
+
+	delete(c.sockets, s)
+}
+
+// recordSockets reads every connection this client holds open. Which path holds
+// one makes no difference to the kernel, and a connection carrying a download is
+// held for as long as the download lasts, so reading them where they stand is
+// what the counters are worth having for at all.
+func (c *Client) recordSockets(ctx context.Context) {
+	c.socketMutex.Lock()
+	live := make([]*socket, 0, len(c.sockets))
+	for s := range c.sockets {
+		live = append(live, s)
+	}
+	c.socketMutex.Unlock()
+
+	for _, s := range live {
+		c.recordSocket(ctx, s)
+	}
+}
+
+// recordSocket takes what the kernel counted for one connection, which is what
+// has arrived since the last reading of it. The last reading is the one before
+// it closes, since a closed descriptor has nothing left to read.
+//
+// A connection that sent nothing since it was last read is skipped: its round
+// trip is the same measurement again, which is a sample of nothing rather than
+// of an idle link, and there is nothing for the counters to add.
+func (c *Client) recordSocket(ctx context.Context, s *socket) {
+	info, ok := socketStats(s.net)
 	if !ok {
+		return
+	}
+	retransmits, packets := s.since(info)
+	if packets == 0 {
 		return
 	}
 
 	server := metric.WithAttributes(serverKey.String(c.config.Name))
-	socketRTT.Record(recordCtx, info.rtt.Seconds(), server)
-	socketRetransmits.Add(recordCtx, info.retransmits, server)
-	socketPackets.Add(recordCtx, info.packets, server)
+	socketRTT.Record(ctx, info.rtt.Seconds(), server)
+	socketRetransmits.Add(ctx, retransmits, server)
+	socketPackets.Add(ctx, packets, server)
 }
 
 // recordError counts one failed attempt. It sits on the retry, which every
@@ -174,7 +222,8 @@ func (c *Client) recordError(err error) {
 }
 
 // observeState reads what the client holds at collection time, the way the
-// reaper and the dispatch see it. One callback per client, so the lock is taken
+// reaper and the dispatch see it, and takes the kernel's counters off the
+// connections that are open. One callback per client, so the lock is taken
 // once per scrape. The pipeline gauges are only observed by a client that
 // pipelines, since a zero there would read as a window nothing is using rather
 // than as a path that is not running.
@@ -186,9 +235,15 @@ func (c *Client) observeState() {
 		instruments = append(instruments, pipelineConnections, pipelineInflight, pipelineMaxLoad, pipelineWindow)
 	}
 
-	_, err := meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
+	_, err := meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
 		observer.ObserveInt64(connectionsOpen, int64(c.OpenConns()), server)
 		observer.ObserveInt64(connectionsLimit, int64(c.config.MaxConns), server)
+		// The sockets are read here rather than only as a connection closes. The
+		// sync instruments are written from inside the callback, which the sdk
+		// runs before it reads the aggregations, so a sample reaches the scrape
+		// that took it.
+		c.recordSockets(ctx)
+
 		if !c.canPipe {
 			return nil
 		}
@@ -215,8 +270,9 @@ func (c *Client) observeState() {
 
 // observeServers reports each server's quota against its allowance, which is
 // what turns a server dropping out of rotation into something visible before it
-// happens. A period that has run out reads as zero used, the way the next fetch
-// will roll it.
+// happens, and whether it is in rotation at all. A period that has run out reads
+// as zero used, the way the next fetch will roll it, and the rotation is read
+// the way the descent reads it, without ending a cooldown by looking.
 func (p *Pool) observeServers() {
 	_, err := meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
 		p.quotaMutex.Lock()
@@ -232,10 +288,16 @@ func (p *Pool) observeServers() {
 				}
 				observer.ObserveInt64(quotaUsed, used, server)
 				observer.ObserveInt64(quotaLimit, s.QuotaBytes, server)
+
+				up := int64(1)
+				if outOfRotationLocked(s) != "" {
+					up = 0
+				}
+				observer.ObserveInt64(serverUp, up, server)
 			}
 		}
 		return nil
-	}, quotaUsed, quotaLimit)
+	}, quotaUsed, quotaLimit, serverUp)
 	if err != nil {
 		slog.Warn("Failed registering the nntp server metrics", "error", err)
 	}
