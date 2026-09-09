@@ -298,7 +298,7 @@ func (f *fetches) assertErr(id string) error {
 // has arrived, and the fourth waits for a slot.
 func TestPipelineFillsWindowAheadOfResponses(t *testing.T) {
 	s := newFakeNNTP(t)
-	c := pipelineClient(t, s, Config{MaxConns: 2, ConnectionPipeliningSize: 3})
+	c := pipelineClient(t, s, Config{MaxConns: 1, ConnectionPipeliningSize: 3})
 
 	f := newFetches(t, c)
 	for _, id := range []string{"a", "b", "c", "d"} {
@@ -335,7 +335,7 @@ func TestPipelineFillsWindowAheadOfResponses(t *testing.T) {
 // written back in that order reach the right callers.
 func TestPipelineAnswersInOrder(t *testing.T) {
 	s := newFakeNNTP(t)
-	c := pipelineClient(t, s, Config{MaxConns: 2, ConnectionPipeliningSize: 4})
+	c := pipelineClient(t, s, Config{MaxConns: 1, ConnectionPipeliningSize: 4})
 
 	f := newFetches(t, c)
 	for _, id := range []string{"a", "b", "c"} {
@@ -361,7 +361,7 @@ func TestPipelineAnswersInOrder(t *testing.T) {
 // was, so the connection carries on serving what was already asked for.
 func TestPipelineMissingArticleKeepsConnection(t *testing.T) {
 	s := newFakeNNTP(t)
-	c := pipelineClient(t, s, Config{MaxConns: 2, ConnectionPipeliningSize: 3})
+	c := pipelineClient(t, s, Config{MaxConns: 1, ConnectionPipeliningSize: 3})
 
 	f := newFetches(t, c)
 	f.start("missing")
@@ -392,7 +392,7 @@ func TestPipelineMissingArticleKeepsConnection(t *testing.T) {
 // else, which matters because the group is only sent for one fetch in a burst.
 func TestPipelineRejectedGroupFailsOnlyItsFetch(t *testing.T) {
 	s := newFakeNNTP(t)
-	c := pipelineClient(t, s, Config{MaxConns: 2, ConnectionPipeliningSize: 3})
+	c := pipelineClient(t, s, Config{MaxConns: 1, ConnectionPipeliningSize: 3})
 
 	f := newFetches(t, c)
 	f.start("a")
@@ -422,7 +422,7 @@ func TestPipelineRejectedGroupFailsOnlyItsFetch(t *testing.T) {
 // position in the response stream is gone with it.
 func TestPipelineLostConnectionFailsEverythingInflight(t *testing.T) {
 	s := newFakeNNTP(t)
-	c := pipelineClient(t, s, Config{MaxConns: 2, ConnectionPipeliningSize: 3})
+	c := pipelineClient(t, s, Config{MaxConns: 1, ConnectionPipeliningSize: 3})
 
 	f := newFetches(t, c)
 	f.start("a")
@@ -450,7 +450,7 @@ func TestPipelineLostConnectionFailsEverythingInflight(t *testing.T) {
 // an idle one, which the retry loop replaces without spending an attempt.
 func TestPipelineFailureOnUsedConnectionIsStale(t *testing.T) {
 	s := newFakeNNTP(t)
-	c := pipelineClient(t, s, Config{MaxConns: 2, ConnectionPipeliningSize: 3})
+	c := pipelineClient(t, s, Config{MaxConns: 1, ConnectionPipeliningSize: 3})
 
 	f := newFetches(t, c)
 	f.start("a")
@@ -566,9 +566,8 @@ func TestPipelinePrefersAnIdleConnectionToANewOne(t *testing.T) {
 // a fetch goes to the least loaded of them.
 func TestPipelineChoosesTheLeastLoadedConnection(t *testing.T) {
 	s := newFakeNNTP(t)
-	// two pipelined connections, the third of the account held back for the
-	// synchronous commands, and a window of two so four fetches fill them
-	c := pipelineClient(t, s, Config{MaxConns: 3, ConnectionPipeliningSize: 2})
+	// two connections and a window of two, so four fetches fill both
+	c := pipelineClient(t, s, Config{MaxConns: 2, ConnectionPipeliningSize: 2})
 
 	f := newFetches(t, c)
 	f.start("a")
@@ -714,19 +713,112 @@ func TestOpenConnsCountsPipesOnce(t *testing.T) {
 	}
 }
 
-// Pipelining needs a window worth having and a connection to hold back for the
-// synchronous commands, so anything less takes the plain path.
+// Pipelining needs a window worth having, so anything less takes the plain
+// path. The connection count does not come into it: one connection pipelines
+// like any other.
 func TestPipeliningOffWhenItCannotHelp(t *testing.T) {
 	for _, cfg := range []Config{
 		{MaxConns: 4, ConnectionPipeliningSize: 1},
 		{MaxConns: 4, ConnectionPipeliningSize: 0},
-		{MaxConns: 1, ConnectionPipeliningSize: 8},
 	} {
 		if New(cfg).canPipe {
 			t.Errorf("%+v pipelines, want the plain path", cfg)
 		}
 	}
-	if !New(Config{MaxConns: 2, ConnectionPipeliningSize: 2}).canPipe {
-		t.Error("MaxConns 2 with a window of 2 does not pipeline")
+	for _, cfg := range []Config{
+		{MaxConns: 2, ConnectionPipeliningSize: 2},
+		{MaxConns: 1, ConnectionPipeliningSize: 8},
+	} {
+		if !New(cfg).canPipe {
+			t.Errorf("%+v does not pipeline", cfg)
+		}
+	}
+}
+
+// A pipelined connection holds its slot for as long as it lives, so with every
+// slot pipelined a synchronous command has nothing to acquire. One of the idle
+// pipes gives way rather than the command waiting out the reaper.
+func TestSyncCommandTakesTheSlotBackFromAnIdlePipe(t *testing.T) {
+	s := newFakeNNTP(t)
+	c := pipelineClient(t, s, Config{MaxConns: 1, ConnectionPipeliningSize: 2})
+
+	f := newFetches(t, c)
+	f.start("a")
+	pipe := s.conn()
+	pipe.expect("GROUP " + testGroup)
+	pipe.article()
+	pipe.groupOK(testGroup)
+	pipe.respond([]byte("body"))
+	f.wait()
+	f.assertBody("a", "body")
+
+	// the pipe carries nothing now and still holds the account's only slot
+	done := make(chan error, 1)
+	go func() { done <- c.Probe() }()
+
+	probe := s.conn()
+	probe.silent("a probe that took the slot back")
+
+	if err := <-done; err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+}
+
+// STAT rides a pipelined connection like an article does, so a health check
+// costs a status line on a connection that already exists rather than a
+// handshake of its own.
+func TestPipelinesStat(t *testing.T) {
+	s := newFakeNNTP(t)
+	c := pipelineClient(t, s, Config{MaxConns: 1, ConnectionPipeliningSize: 4})
+
+	f := newFetches(t, c)
+	f.start("a")
+	pipe := s.conn()
+	pipe.expect("GROUP " + testGroup)
+	pipe.article()
+
+	exists := make(chan bool, 1)
+	go func() {
+		got, err := c.SegmentExists("here")
+		if err != nil {
+			t.Errorf("stat: %v", err)
+		}
+		exists <- got
+	}()
+
+	// no group, and out on the same connection while the article is unanswered
+	pipe.expect("STAT <here>")
+	s.noConn("a second connection for the stat")
+
+	pipe.groupOK(testGroup)
+	pipe.respond([]byte("body"))
+	pipe.write("223 0 <here> article exists\r\n")
+
+	f.wait()
+	f.assertBody("a", "body")
+	if !<-exists {
+		t.Fatal("stat reported the segment missing")
+	}
+}
+
+func TestPipelinedStatReportsMissing(t *testing.T) {
+	s := newFakeNNTP(t)
+	c := pipelineClient(t, s, Config{MaxConns: 1, ConnectionPipeliningSize: 2})
+
+	got := make(chan bool, 1)
+	go func() {
+		exists, err := c.SegmentExists("gone")
+		if err != nil {
+			t.Errorf("stat: %v", err)
+		}
+		got <- exists
+	}()
+
+	pipe := s.conn()
+	pipe.expect("STAT <gone>")
+	pipe.write("430 no such article\r\n")
+
+	if <-got {
+		t.Fatal("stat reported a missing segment as present")
 	}
 }

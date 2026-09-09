@@ -2,6 +2,7 @@ package nntpclient
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -28,8 +29,12 @@ const freedPoll = 50 * time.Millisecond
 // costs a syscall per 30 or so yenc lines.
 const readBufferSize = 64 << 10
 
-// fetch is one segment waiting on a pipelined connection.
+// fetch is one command waiting on a pipelined connection. cmd is what is asked
+// of the server, which is also what the response is recorded as; only an
+// ARTICLE is answered by a body, so the rest cost a status line and nothing
+// else and are worth pipelining for exactly that reason.
 type fetch struct {
+	cmd       string
 	group, id string
 	// needsGroup tells the reader a GROUP response comes first; the writer sets
 	// it and hands it over through inflight
@@ -76,7 +81,23 @@ type pipeConn struct {
 // pipelineFetch runs one segment through a pipelined connection. Retrying is
 // the caller's.
 func (c *Client) pipelineFetch(group, id string) ([]byte, error) {
-	f := &fetch{group: group, id: id, result: make(chan fetchResult, 1)}
+	return c.pipelineCmd(responseArticle, group, id)
+}
+
+// pipelineStat asks whether a segment is there over a pipelined connection. It
+// needs no group: a STAT by message id is answered from anywhere.
+func (c *Client) pipelineStat(id string) (bool, error) {
+	_, err := c.pipelineCmd(responseStat, "", id)
+	if errors.Is(err, ErrArticleNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// pipelineCmd runs one command through a pipelined connection. Retrying is the
+// caller's.
+func (c *Client) pipelineCmd(cmd, group, id string) ([]byte, error) {
+	f := &fetch{cmd: cmd, group: group, id: id, result: make(chan fetchResult, 1)}
 	if err := c.dispatch(f); err != nil {
 		return nil, err
 	}
@@ -89,7 +110,7 @@ func (c *Client) pipelineFetch(group, id string) ([]byte, error) {
 	case res := <-f.result:
 		return res.body, res.err
 	case <-time.After(c.config.Timeout):
-		return nil, fmt.Errorf("timed out getting segment '%s'", id)
+		return nil, fmt.Errorf("timed out on %s '%s'", cmd, id)
 	}
 }
 
@@ -192,13 +213,27 @@ func (c *Client) offer(f *fetch, idleOnly bool) bool {
 	return true
 }
 
-// pipeCap is all but one of the account's connections. The one held back keeps
-// STAT and Probe from queueing behind a full set of busy ones.
-func (c *Client) pipeCap() int {
-	if n := c.config.MaxConns - 1; n >= 1 {
-		return n
+// yieldPipe stops one pipelined connection that has nothing outstanding, so
+// that its slot comes back for a command that runs synchronously. A pipe holds
+// its slot for its whole life, so with every slot pipelined there is otherwise
+// nothing for a Probe to acquire until the reaper comes round. It reports
+// whether one was found; the slot arrives once the connection has wound down.
+func (c *Client) yieldPipe() bool {
+	c.mu.Lock()
+	var spare *pipeConn
+	for p := range c.pipes {
+		if p.load == 0 {
+			spare = p
+			break
+		}
 	}
-	return 1
+	c.mu.Unlock()
+
+	if spare == nil {
+		return false
+	}
+	spare.stop(nil)
+	return true
 }
 
 func (c *Client) pipesOpen() int {
@@ -246,7 +281,7 @@ func (c *Client) needsPipe() bool {
 // overshoot the cap, and the handshake runs in the background.
 func (c *Client) startPipe() bool {
 	c.mu.Lock()
-	if c.pipeCount >= c.pipeCap() {
+	if c.pipeCount >= c.config.MaxConns {
 		c.mu.Unlock()
 		return false
 	}
@@ -393,20 +428,20 @@ func (p *pipeConn) shutdown() {
 	}
 }
 
-// send writes the ARTICLE, prefixed by a GROUP in the same write where the
+// send writes the command, prefixed by a GROUP in the same write where the
 // connection is not on the fetch's group already, so selecting one costs no
 // round trip.
 func (p *pipeConn) send(f *fetch) error {
 	p.writeDeadline(p.c.config.Timeout)
 
-	cmd := fmt.Sprintf("ARTICLE <%s>\r\n", f.id)
+	cmd := fmt.Sprintf("%s <%s>\r\n", f.cmd, f.id)
 	if f.group != "" && (f.group != p.group || p.regroup.Swap(false)) {
 		f.needsGroup = true
 		cmd = fmt.Sprintf("GROUP %s\r\n", f.group) + cmd
 	}
 
 	if _, err := io.WriteString(p.net, cmd); err != nil {
-		return fmt.Errorf("failed requesting article '%s': %w", f.id, err)
+		return fmt.Errorf("failed sending %s '%s': %w", f.cmd, f.id, err)
 	}
 	if f.needsGroup {
 		p.group = f.group
@@ -459,26 +494,29 @@ func (p *pipeConn) reply(f *fetch) (body []byte, err error, fatal bool) {
 		}
 	}
 
-	body, err, fatal = p.article(f)
+	body, err, fatal = p.respond(f)
 	if groupErr != nil && !fatal {
 		return nil, groupErr, false
 	}
 	return body, err, fatal
 }
 
-func (p *pipeConn) article(f *fetch) (body []byte, err error, fatal bool) {
+// respond reads the command's own response. Only an ARTICLE is followed by a
+// body; the rest are the status line and nothing more, which is what makes them
+// worth pipelining at all.
+func (p *pipeConn) respond(f *fetch) (body []byte, err error, fatal bool) {
 	// The command went out before this connection's earlier responses were
 	// read, so this is the wait on the wire once the reader reached it rather
 	// than the time the whole request took.
 	started := time.Now()
 	code, msg, err := p.status()
-	p.c.recordResponse(responseArticle, started)
+	p.c.recordResponse(f.cmd, started)
 	if err != nil {
-		return nil, fmt.Errorf("failed reading article '%s' response: %w", f.id, err), true
+		return nil, fmt.Errorf("failed reading %s '%s' response: %w", f.cmd, f.id, err), true
 	}
 
-	switch code {
-	case articleFollows, articleFollowsBody:
+	switch {
+	case f.cmd == responseArticle && (code == articleFollows || code == articleFollowsBody):
 		// Decoding off this connection's buffer as the lines arrive costs the
 		// transfer rather than following it
 		decoded, err := yenc.Decode(p.br)
@@ -489,11 +527,17 @@ func (p *pipeConn) article(f *fetch) (body []byte, err error, fatal bool) {
 		}
 		return decoded, nil, false
 
-	case noArticleWithID:
+	case f.cmd == responseStat && code == articleExists:
+		return nil, nil, false
+
+	case code == noArticleWithID:
 		return nil, fmt.Errorf("%w: '%s'", ErrArticleNotFound, f.id), false
 
 	default:
-		return nil, fmt.Errorf("%w to article '%s': %d %s", ErrUnexpectedResponse, f.id, code, msg), false
+		// A body this command was not expecting is left in the stream, and
+		// everything read after it is a response out of step
+		unread := code == articleFollows || code == articleFollowsBody
+		return nil, fmt.Errorf("%w to %s '%s': %d %s", ErrUnexpectedResponse, f.cmd, f.id, code, msg), unread
 	}
 }
 

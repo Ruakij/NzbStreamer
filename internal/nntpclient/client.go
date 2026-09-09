@@ -166,10 +166,10 @@ func New(config Config) *Client {
 	for range config.MaxConns {
 		client.slots <- struct{}{}
 	}
-	// Pipelining needs a window of at least two to be one, and a connection to
-	// hold back for the commands that stay synchronous, so a single-connection
-	// account uses the plain path whatever the window is set to.
-	if config.ConnectionPipeliningSize >= 2 && config.MaxConns >= 2 {
+	// Pipelining needs a window of at least two to be one. A single-connection
+	// account pipelines like any other: a synchronous command takes the slot back
+	// off an idle pipe rather than needing one kept aside for it.
+	if config.ConnectionPipeliningSize >= 2 {
 		client.canPipe = true
 		client.pipes = make(map[*pipeConn]struct{})
 		client.freed = make(chan struct{}, 1)
@@ -382,7 +382,16 @@ func (c *Client) getSegmentSync(group, id string) ([]byte, error) {
 	return body, nil
 }
 
+// segmentExists asks whether a segment is there, over a pipelined connection
+// where the config asked for one and over a connection of its own otherwise.
 func (c *Client) segmentExists(id string) (bool, error) {
+	if c.canPipe {
+		return c.pipelineStat(id)
+	}
+	return c.segmentExistsSync(id)
+}
+
+func (c *Client) segmentExistsSync(id string) (bool, error) {
 	cn, reused, err := c.acquire()
 	if err != nil {
 		return false, err
@@ -412,7 +421,17 @@ func (c *Client) segmentExists(id string) (bool, error) {
 // bounds the client to MaxConns.
 func (c *Client) acquire() (*conn, bool, error) {
 	started := time.Now()
-	<-c.slots
+	select {
+	case <-c.slots:
+	default:
+		// Every slot may be held by a pipelined connection, which keeps its own
+		// for as long as it lives, so one of the idle ones gives way rather than
+		// this waiting out the reaper
+		if c.canPipe {
+			c.yieldPipe()
+		}
+		<-c.slots
+	}
 	defer c.recordWait(started)
 
 	cn, reused := c.takeIdle()
