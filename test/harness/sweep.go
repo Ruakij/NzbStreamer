@@ -105,9 +105,6 @@ func (r *Runner) runAllAtOnce(ctx context.Context, client *http.Client, tests []
 	if err := r.StreamerHealthy(ctx); err != nil {
 		return nil, err
 	}
-	// Capability probe first: its result gates cap-unsupported notes and
-	// fuse-* skips for every cell that follows.
-	r.Probe(ctx).PrintCapabilities()
 	if err := r.AddNzbs(ctx, nil); err != nil {
 		return nil, err
 	}
@@ -118,6 +115,11 @@ func (r *Runner) runAllAtOnce(ctx context.Context, client *http.Client, tests []
 			}
 		}
 	}
+	// Capability probe last before the sweep: its result gates cap-unsupported
+	// notes and fuse-* skips for the cells that follow, and nothing between the
+	// streamer coming up and here needs it. keepServing=false: the first cell
+	// recreates the streamer anyway, which lands the cleared probe cap.
+	r.Probe(ctx, cells, false).PrintCapabilities()
 	results, err := r.runCells(ctx, client, tests, cells, opts)
 	if err != nil {
 		return results, err
@@ -266,9 +268,17 @@ func (r *Runner) runCell(ctx context.Context, client *http.Client, t Test, cell 
 	cellpath := opts.Matrix.Row(cell)
 	for rep := 0; rep < opts.repeats(); rep++ {
 		switch {
-		case hasCold:
-			// A fresh cache per repetition: dropping the cache is the point.
+		case hasCold && rep == 0:
+			// First repetition: a full recreate, so the cell's env and throttle
+			// override land and the cache volume is fresh.
 			if err := r.ColdStart(ctx); err != nil {
+				return out, err
+			}
+		case hasCold:
+			// Later repetitions: the container config cannot change inside a
+			// cell, so an emptied cache plus a restarted process is the same
+			// fresh-cache start without a recreate.
+			if err := r.FastColdStart(ctx); err != nil {
 				return out, err
 			}
 		case rep == 0:

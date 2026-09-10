@@ -3,6 +3,8 @@ package harness
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,6 +43,7 @@ type Runner struct {
 	BaseURL     string
 	NewsPort    int           // published news port on the host
 	NewsCid     string        // cached news container id, from NewsID
+	StreamerCid string        // cached streamer container id, from StreamerID
 	Override    []string      // extra compose files merged after ComposeFile
 	ProbeResult *Probe        // capability probe, set by Probe()
 	Ram         bool          // memory-backed rig override loaded (-ram)
@@ -180,6 +183,26 @@ func (r *Runner) NewsID(ctx context.Context) (string, error) {
 	return id, nil
 }
 
+// StreamerID returns the id of the streamer container, cached after the first
+// lookup.
+func (r *Runner) StreamerID(ctx context.Context) (string, error) {
+	if r.StreamerCid != "" {
+		return r.StreamerCid, nil
+	}
+	cmd := composeCmd(ctx, r, "ps", "-q", "streamer")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("get streamer container id: %w", err)
+	}
+	id := strings.TrimSpace(out.String())
+	if id == "" {
+		return "", fmt.Errorf("streamer container not running?")
+	}
+	r.StreamerCid = id
+	return id, nil
+}
+
 // StreamerHealthy polls the streamer health endpoint until it answers 200.
 func (r *Runner) StreamerHealthy(ctx context.Context) error {
 	return r.waitHTTP(ctx, r.BaseURL+"/api/health", 120*time.Second, 1*time.Second,
@@ -248,6 +271,7 @@ func (r *Runner) addNzb(ctx context.Context, path string) error {
 // follows measures a first-touch full download.
 func (r *Runner) ColdStart(ctx context.Context) error {
 	r.NewsCid = ""
+	r.StreamerCid = ""
 	if err := r.Compose(ctx, "rm", "-sf", "streamer"); err != nil {
 		return err
 	}
@@ -258,10 +282,35 @@ func (r *Runner) ColdStart(ctx context.Context) error {
 	return r.StreamerHealthy(ctx)
 }
 
+// FastColdStart is ColdStart for a container whose config cannot have changed
+// since its last recreate: empty the cache in the running container and restart
+// the process, which is the same fresh-cache start without the compose
+// rm/up cycle. Falls back to ColdStart when the container is not running.
+func (r *Runner) FastColdStart(ctx context.Context) error {
+	id, err := r.StreamerID(ctx)
+	if err != nil {
+		return r.ColdStart(ctx)
+	}
+	// -mindepth 1: /app/.cache is the mount itself, which has to survive.
+	// docker exec (not compose exec): the cached id is the point of this path.
+	cmd := exec.CommandContext(ctx, "docker", "exec", id, "sh", "-c",
+		"find /app/.cache -mindepth 1 -delete")
+	var out bytes.Buffer
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("empty cache: %w: %s", err, strings.TrimSpace(out.String()))
+	}
+	if err := exec.CommandContext(ctx, "docker", "restart", id).Run(); err != nil {
+		return fmt.Errorf("restart streamer: %w", err)
+	}
+	return r.StreamerHealthy(ctx)
+}
+
 // WarmRestart recreates the streamer with the current env but keeps the cache
 // volume, so the read that follows is a carried-over warm read.
 func (r *Runner) WarmRestart(ctx context.Context) error {
 	r.NewsCid = ""
+	r.StreamerCid = ""
 	if err := r.UpWithEnv(ctx, "streamer"); err != nil {
 		return err
 	}
@@ -279,6 +328,7 @@ func (r *Runner) rmVolume(ctx context.Context, name string) {
 // the host bind mounts (payloads, nzbs).
 func (r *Runner) DropFixtureVolumes(ctx context.Context) error {
 	r.NewsCid = ""
+	r.StreamerCid = ""
 	return r.Compose(ctx, "down", "-v")
 }
 
@@ -288,6 +338,25 @@ func (r *Runner) DropFixtureVolumes(ctx context.Context) error {
 // archives.sh would otherwise never be reposted.
 func (r *Runner) PostSets(ctx context.Context, sets []string) error {
 	r.NewsCid = ""
+	r.StreamerCid = ""
+	// An unchanged fixture set already in the spool needs no repost: the stamp
+	// says the inputs could not produce anything different, and the running
+	// healthy news server is where the articles are (a ram-flavor spool is
+	// tmpfs and dies with its container, so "running" is the proof). Only the
+	// streamer side is refreshed, giving the run the same empty-metadata point
+	// a fresh post would, at no INN2 posting cost.
+	if r.postedAlready(ctx, sets) {
+		fmt.Println("spool already holds the current fixtures, skipping the repost...")
+		if err := r.writeEnv(RigDefaults); err != nil {
+			return err
+		}
+		if err := r.Compose(ctx, "rm", "-sf", "streamer"); err != nil {
+			return err
+		}
+		r.rmVolume(ctx, "metadata")
+		r.rmVolume(ctx, "cache")
+		return nil
+	}
 	// A previous run's nzbs linger in build/nzb; a set removed from the builder
 	// leaves its nzb behind, and AddNzbs would upload one nothing serves
 	// anymore. Clean the dir before posting.
@@ -329,7 +398,80 @@ func (r *Runner) PostSets(ctx context.Context, sets []string) error {
 	if err := r.Compose(ctx, "--env-file", r.EnvFile, "up", "-d", "--force-recreate", "news"); err != nil {
 		return err
 	}
-	return r.WaitNewsHealthy(ctx)
+	if err := r.WaitNewsHealthy(ctx); err != nil {
+		return err
+	}
+	// A repost stamps only once it is actually in: postedAlready trusts the
+	// stamp plus the running server it was written under.
+	return r.writePostedStamp(sets)
+}
+
+// postedStampPath is the host-side record of what the running spool was filled
+// with, among the other generated artifacts in build/.
+func (r *Runner) postedStampPath() string {
+	return filepath.Join(filepath.Dir(r.ComposeFile), "build", "posted.stamp")
+}
+
+// postedStamp hashes every input a posting depends on: the fixture builder and
+// news scripts, the payload shapes (bytes are deterministic per name and size),
+// the storage flavor (the ram spool is tmpfs, the disk one a named volume), and
+// the fixture sets the post is filtered to.
+func (r *Runner) postedStamp(sets []string) (string, error) {
+	dir := filepath.Dir(r.ComposeFile)
+	files := []string{
+		filepath.Join(dir, "archives", "Dockerfile"),
+		filepath.Join(dir, "archives", "archives.sh"),
+		filepath.Join(dir, "inn", "Dockerfile"),
+		filepath.Join(dir, "inn", "entrypoint.sh"),
+		filepath.Join(dir, "inn", "post.sh"),
+	}
+	h := sha256.New()
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00%s\x00", f, len(b), b)
+	}
+	for _, s := range payload.Sources() {
+		fmt.Fprintf(h, "payload %s %d\x00", s.Name, s.Size)
+	}
+	fmt.Fprintf(h, "ram %v\x00sets %s", r.Ram, strings.Join(sets, ","))
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// postedAlready reports whether the rig already serves exactly what PostSets
+// would produce: the stamp matches and the news container is running healthy.
+func (r *Runner) postedAlready(ctx context.Context, sets []string) bool {
+	want, err := r.postedStamp(sets)
+	if err != nil {
+		return false
+	}
+	got, err := os.ReadFile(r.postedStampPath())
+	if err != nil || strings.TrimSpace(string(got)) != want {
+		return false
+	}
+	return r.newsHealthy(ctx)
+}
+
+// writePostedStamp records the hash of a completed post.
+func (r *Runner) writePostedStamp(sets []string) error {
+	want, err := r.postedStamp(sets)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(r.postedStampPath(), []byte(want+"\n"), 0o644)
+}
+
+// newsHealthy reports whether the news container is running and reporting
+// healthy.
+func (r *Runner) newsHealthy(ctx context.Context) bool {
+	id, err := r.NewsID(ctx)
+	if err != nil {
+		return false
+	}
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Health.Status}}", id).Output()
+	return err == nil && strings.TrimSpace(string(out)) == "healthy"
 }
 
 // WaitNewsHealthy blocks until the news container reports healthy, i.e. it has
@@ -360,9 +502,13 @@ func (r *Runner) WaitNewsHealthy(ctx context.Context) error {
 
 // items is /api/items cut down to what the rig waits on.
 type items struct {
-	Queue   []queueItem         `json:"queue"`
-	History []queueItem         `json:"history"`
-	Files   map[string][]string `json:"files"`
+	Queue   []queueItem           `json:"queue"`
+	History []queueItem           `json:"history"`
+	Files   map[string][]fileItem `json:"files"`
+}
+
+type fileItem struct {
+	Path string `json:"path"`
 }
 
 type queueItem struct {
@@ -373,8 +519,8 @@ type queueItem struct {
 
 // presents reports whether any nzb presents this path.
 func (it items) presents(path string) bool {
-	for _, paths := range it.Files {
-		if slices.Contains(paths, path) {
+	for _, files := range it.Files {
+		if slices.ContainsFunc(files, func(f fileItem) bool { return f.Path == path }) {
 			return true
 		}
 	}

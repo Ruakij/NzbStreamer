@@ -14,7 +14,10 @@ go run ./test/plot                  # summary.csv -> summary.svg
 Needs Docker, a few GiB of free memory, and for the fuse tests a daemon granting
 `/dev/fuse` and `SYS_ADMIN`. A run generates payloads and archives, posts them
 and writes one nzb per set, then per cell restarts the streamer, adds the nzbs
-and reads. Interrupting cancels rather than kills, so the CSVs still get written.
+and reads. Posting is skipped when the spool already holds the current fixtures
+(the `build/posted.stamp` hash matches and the news server is still healthy), so
+a `-keep` rig is refilled with metadata only. Interrupting cancels rather than
+kills, so the CSVs still get written.
 
 ## Fixtures
 

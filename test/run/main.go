@@ -170,7 +170,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		runner.Probe(ctx).PrintCapabilities()
+		// nil cells: the report is about this host, not about a sweep, so every
+		// mechanism is probed. keepServing leaves a -keep stack usable without
+		// the probe cap.
+		runner.Probe(ctx, nil, true).PrintCapabilities()
 		if !*keep {
 			if err := runner.DropFixtureVolumes(ctx); err != nil {
 				fmt.Fprintln(os.Stderr, err)
