@@ -259,6 +259,13 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request, query map[stri
 	// again, so anything left listed for it is a row nothing will ever clear
 	case h.config.AddWait > 0:
 		if item, done := h.service.Wait(id, h.config.AddWait); done && item.Stage != nzbservice.StageCompleted {
+			// A release that was added with some files dropped is still added:
+			// the history entry says what happened and a client's own failed-
+			// download policy decides what to do with it, so it is not archived
+			// or refused
+			if strings.Contains(item.Err, nzbservice.ErrHealthCheckFailed.Error()) {
+				break // answer the add as accepted
+			}
 			if err := h.service.Archive(id, true); err != nil {
 				slog.Error("Failed archiving an add answered as failed", "id", id, "error", err)
 			}

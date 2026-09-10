@@ -1,4 +1,4 @@
-package filehealth_test
+package filehealth
 
 import (
 	"errors"
@@ -7,23 +7,17 @@ import (
 	"sync"
 	"testing"
 
-	"git.ruekov.eu/ruakij/nzbStreamer/internal/filehealth"
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
 
-// config is the default probe setup, minus the percentages a test cares about
-func config(initialPercent, extensivePercent float64) filehealth.CheckerConfig {
-	return filehealth.CheckerConfig{
-		InitialFilePercent:       initialPercent,
-		InitialFileMinSegments:   2,
-		InitialFileMaxSegments:   8,
-		ExtensiveFilePercent:     extensivePercent,
-		ExtensiveFileMaxSegments: 512,
-		MaxMissingPercent:        100,
-		Par2Safety:               0.9,
-		UndecidedAccept:          true,
-		Confidence:               0.95,
-		MaxParallel:              4,
+// config is the default probe setup, plus the confidence a test cares about
+func config(confidence float64) CheckerConfig {
+	return CheckerConfig{
+		AddConfidence:     confidence,
+		MaxMissingPercent: 100,
+		Par2Safety:        0.9,
+		UndecidedAccept:   true,
+		MaxParallel:       4,
 	}
 }
 
@@ -49,7 +43,7 @@ func fileOf(name, prefix string, count int) nzbparser.File {
 }
 
 // recorder tracks which segment-ids were checked, and reports the given ones missing
-func recorder(missing ...string) (filehealth.SegmentExistsFunc, *[]string) {
+func recorder(missing ...string) (SegmentExistsFunc, *[]string) {
 	var (
 		mu      sync.Mutex
 		checked []string
@@ -62,130 +56,152 @@ func recorder(missing ...string) (filehealth.SegmentExistsFunc, *[]string) {
 	}, &checked
 }
 
-func TestChecksOnlyFirstAndLastSegmentOfContent(t *testing.T) {
-	exists, checked := recorder()
-	checker := filehealth.NewDefaultChecker(config(0.5, 1), exists)
+func failedNames(groups []FailedGroup) [][]string {
+	names := make([][]string, len(groups))
+	for i, g := range groups {
+		names[i] = g.Files
+	}
+	return names
+}
 
-	errs := checker.CheckFiles(t.Context(), nzbWith(
+func TestGroupedVolumeSetIsProbedAsOneUnit(t *testing.T) {
+	exists, _ := recorder("s8") // a segment of a.r00 is lost
+	checker := NewDefaultChecker(config(1), exists)
+
+	failed := checker.CheckFiles(t.Context(), nzbWith(
 		fileWith("a.rar", "s1", "s2", "s3", "s4"),
-		fileWith("a.vol00+01.par2", "p1", "p2"),
-		fileWith("a.nfo", "n1"),
+		fileWith("a.r00", "s5", "s6", "s7", "s8"),
+		fileWith("a.r01", "s9", "s10", "s11", "s12"),
+		fileWith("b.mkv", "m1", "m2", "m3", "m4"),
 	), nil)
-	if len(errs) != 0 {
-		t.Fatalf("got errors %v, want none", errs)
-	}
 
-	slices.Sort(*checked)
-	if want := []string{"s1", "s4"}; !slices.Equal(*checked, want) {
-		t.Errorf("checked %v, want %v", *checked, want)
+	if len(failed) != 1 {
+		t.Fatalf("got %d failed groups, want 1: %v", len(failed), failedNames(failed))
+	}
+	if failed[0].Name != "a.rar" {
+		t.Errorf("failed group name = %q, want a.rar", failed[0].Name)
+	}
+	if want := []string{"a.rar", "a.r00", "a.r01"}; !slices.Equal(failed[0].Files, want) {
+		t.Errorf("failed group files = %v, want %v", failed[0].Files, want)
 	}
 }
 
-func TestMissingSegmentWithoutPar2ReportsFile(t *testing.T) {
-	exists, _ := recorder("b1")
-	checker := filehealth.NewDefaultChecker(config(100, 100), exists)
+func TestMissingSegmentFailsTheGroupAndStopsEarly(t *testing.T) {
+	// probeOrder(8) = [0,4,2,6,1,5,3,7]; position 1 is segment index 4 (s5)
+	exists, checked := recorder("s5")
+	checker := NewDefaultChecker(config(1), exists)
 
-	errs := checker.CheckFiles(t.Context(), nzbWith(
-		fileWith("a.rar", "a1", "a2"),
-		fileWith("b.rar", "b1", "b2"),
+	checker.config.MaxParallel = 1
+	failed := checker.CheckFiles(t.Context(), nzbWith(
+		fileWith("a.rar", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"),
 	), nil)
-	if len(errs) != 1 {
-		t.Fatalf("got %d errors, want 1: %v", len(errs), errs)
-	}
-	if !errors.Is(errs[0], filehealth.ErrSegmentsMissing) {
-		t.Errorf("got %v, want ErrSegmentsMissing", errs[0])
-	}
 
-	var healthErr *filehealth.FileHealthError
-	if !errors.As(errs[0], &healthErr) || healthErr.Path != "b.rar" {
-		t.Errorf("got error for %v, want b.rar", errs[0])
+	if len(failed) != 1 {
+		t.Fatalf("got %d failed groups, want 1", len(failed))
+	}
+	// One present probe, then the miss ends the scan; nothing else is asked.
+	if want := []string{"s1", "s5"}; !slices.Equal(*checked, want) {
+		t.Errorf("checked %v, want %v (stopped at the miss)", *checked, want)
 	}
 }
 
-func TestDamageWithinPar2CapacityIsAccepted(t *testing.T) {
-	exists, _ := recorder("a7")
-	checker := filehealth.NewDefaultChecker(filehealth.CheckerConfig{
-		InitialFilePercent:     100,
-		InitialFileMinSegments: 2,
-		InitialFileMaxSegments: 40,
-		MaxMissingPercent:      100,
-		Par2Safety:             0.9,
-		Confidence:             0.95,
-		MaxParallel:            4,
-	}, exists)
+func TestCleanGroupIsProbedToTheConfidence(t *testing.T) {
+	exists, checked := recorder()
+	checker := NewDefaultChecker(config(0.5), exists)
 
-	// Recovery as large as the content, so the limit is 90% missing
-	errs := checker.CheckFiles(t.Context(), nzbWith(
-		fileOf("a.rar", "a", 40),
-		fileOf("a.vol00+39.par2", "p", 40),
+	failed := checker.CheckFiles(t.Context(), nzbWith(
+		fileWith("a.rar", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"),
 	), nil)
-	if len(errs) != 0 {
-		t.Fatalf("got errors %v, want none", errs)
+
+	if len(failed) != 0 {
+		t.Fatalf("got failed groups %v, want none", failedNames(failed))
 	}
-}
-
-// halfGone reports the ids of every second segment of a 100-segment file, so
-// any evenly spread sample of it comes back about half missing
-func halfGone() []string {
-	var missing []string
-	for i := 2; i <= 100; i += 2 {
-		missing = append(missing, fmt.Sprintf("a%d", i))
-	}
-	return missing
-}
-
-// A sample of two, half of it missing, cannot tell 50% damage from 90% damage,
-// and 90% is what the par2 here could repair
-func TestUndecidedFileIsProbedAgain(t *testing.T) {
-	exists, checked := recorder(halfGone()...)
-	checker := filehealth.NewDefaultChecker(config(0.5, 100), exists)
-
-	errs := checker.CheckFiles(t.Context(), nzbWith(
-		fileOf("a.rar", "a", 100),
-		fileOf("a.vol00+99.par2", "p", 100),
-	), nil)
-	if len(errs) != 0 {
-		t.Fatalf("got errors %v, want none", errs)
-	}
-	if len(*checked) <= 2 {
-		t.Errorf("checked %d segments, want the initial sample plus a widened one", len(*checked))
-	}
-}
-
-func TestUndecidedFileIsReportedWhenNotAccepted(t *testing.T) {
-	exists, _ := recorder(halfGone()...)
-	// A cap too small for the widened sample to settle it either
-	config := config(0.5, 100)
-	config.ExtensiveFileMaxSegments = 3
-	config.UndecidedAccept = false
-	checker := filehealth.NewDefaultChecker(config, exists)
-
-	errs := checker.CheckFiles(t.Context(), nzbWith(
-		fileOf("a.rar", "a", 100),
-		fileOf("a.vol00+99.par2", "p", 100),
-	), nil)
-	if len(errs) != 1 {
-		t.Fatalf("got %d errors, want 1: %v", len(errs), errs)
+	// 0.5 * 8 = 4 distinct probes, none repeated.
+	if want := 4; len(*checked) != want {
+		t.Errorf("probed %d segments, want %d", len(*checked), want)
 	}
 }
 
 func TestDisabledCheckDoesNothing(t *testing.T) {
 	exists, checked := recorder("s1")
-	checker := filehealth.NewDefaultChecker(config(0, 0), exists)
+	checker := NewDefaultChecker(config(0), exists)
 
-	if errs := checker.CheckFiles(t.Context(), nzbWith(fileWith("a.rar", "s1")), nil); errs != nil {
-		t.Fatalf("got errors %v, want none", errs)
+	if failed := checker.CheckFiles(t.Context(), nzbWith(fileWith("a.rar", "s1")), nil); len(failed) != 0 {
+		t.Fatalf("got failed groups %v, want none", failedNames(failed))
 	}
 	if len(*checked) != 0 {
 		t.Errorf("checked %v, want nothing", *checked)
 	}
 }
 
-// The escalation of an undecided file is what makes this worth checking: it
-// widens the total after the reports have already started
+func TestFailedGroupCarriesItsFiles(t *testing.T) {
+	// The whole a.r01 volume is lost; every member filename must be reported.
+	exists, _ := recorder("s9", "s10", "s11", "s12")
+	checker := NewDefaultChecker(config(0.25), exists)
+
+	failed := checker.CheckFiles(t.Context(), nzbWith(
+		fileWith("a.rar", "s1", "s2", "s3", "s4"),
+		fileWith("a.r00", "s5", "s6", "s7", "s8"),
+		fileWith("a.r01", "s9", "s10", "s11", "s12"),
+	), nil)
+
+	if len(failed) != 1 {
+		t.Fatalf("got %d failed groups, want 1: %v", len(failed), failedNames(failed))
+	}
+	if want := []string{"a.rar", "a.r00", "a.r01"}; !slices.Equal(failed[0].Files, want) {
+		t.Errorf("failed group files = %v, want %v", failed[0].Files, want)
+	}
+}
+
+func TestProbeOrderIsABitReversalPermutation(t *testing.T) {
+	order := probeOrder(16)
+	if len(order) != 16 {
+		t.Fatalf("probeOrder(16) has %d entries, want 16", len(order))
+	}
+	seen := make([]bool, 16)
+	for _, v := range order {
+		if v < 0 || v >= 16 || seen[v] {
+			t.Fatalf("probeOrder(16) is not a permutation of 0..15: %v", order)
+		}
+		seen[v] = true
+	}
+	if want := []int{0, 8, 4, 12}; !slices.Equal(order[:4], want) {
+		t.Errorf("first 4 = %v, want %v", order[:4], want)
+	}
+	if want := []int{0, 8, 4, 12, 2, 10, 6, 14}; !slices.Equal(order[:8], want) {
+		t.Errorf("first 8 = %v, want %v", order[:8], want)
+	}
+}
+
+func TestScanCountsKnownPositionsWithoutProbing(t *testing.T) {
+	// probeOrder(8) = [0,4,2,6,1,5,3,7]; position 0 is already known.
+	exists, checked := recorder()
+	checker := NewDefaultChecker(config(1), exists)
+
+	file := fileWith("a.rar", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8")
+	g := group{Name: "a.rar", Files: []*nzbparser.File{&file}, Segments: 8}
+
+	covered, err := checker.scan(t.Context(), g, []int{0}, 4, nil)
+	if err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+	// order[:4] = [0,4,2,6]; position 0 is skipped, so 3 are probed plus the
+	// known one counts -> 4 covered.
+	if covered != 4 {
+		t.Errorf("covered = %d, want 4", covered)
+	}
+	// s1 (position 0) must not be asked of the exists func.
+	if slices.Contains(*checked, "s1") {
+		t.Errorf("known segment s1 was probed: %v", *checked)
+	}
+	if want := 3; len(*checked) != want {
+		t.Errorf("probed %d segments, want %d", len(*checked), want)
+	}
+}
+
 func TestProgressEndsAtEverythingItProbed(t *testing.T) {
-	exists, checked := recorder(halfGone()...)
-	checker := filehealth.NewDefaultChecker(config(0.5, 100), exists)
+	exists, checked := recorder()
+	checker := NewDefaultChecker(config(0.5), exists)
 
 	var (
 		mu           sync.Mutex
@@ -203,11 +219,11 @@ func TestProgressEndsAtEverythingItProbed(t *testing.T) {
 		reports++
 	}
 
-	if errs := checker.CheckFiles(t.Context(), nzbWith(
-		fileOf("a.rar", "a", 100),
-		fileOf("a.vol00+99.par2", "p", 100),
-	), progress); len(errs) != 0 {
-		t.Fatalf("got errors %v, want none", errs)
+	failed := checker.CheckFiles(t.Context(), nzbWith(
+		fileOf("a.rar", "s", 8),
+	), progress)
+	if len(failed) != 0 {
+		t.Fatalf("got failed groups %v, want none", failedNames(failed))
 	}
 
 	if wentBackward {
@@ -217,6 +233,38 @@ func TestProgressEndsAtEverythingItProbed(t *testing.T) {
 		t.Errorf("ended at %d of %d, want %d of the same", last[0], last[1], len(*checked))
 	}
 	if reports <= 2 {
-		t.Errorf("got %d reports, want one per probe plus the planning of each pass", reports)
+		t.Errorf("got %d reports, want the planning plus one per probe", reports)
+	}
+}
+
+func TestUnhealthyGroup(t *testing.T) {
+	// b.mkv lost a segment, a.rar is healthy: only b.mkv is a failed group.
+	exists, _ := recorder("m1")
+	checker := NewDefaultChecker(config(1), exists)
+
+	failed := checker.CheckFiles(t.Context(), nzbWith(
+		fileWith("a.rar", "s1", "s2", "s3", "s4"),
+		fileWith("b.mkv", "m1", "m2", "m3", "m4"),
+	), nil)
+
+	if len(failed) != 1 {
+		t.Fatalf("got %d failed groups, want 1: %v", len(failed), failedNames(failed))
+	}
+	if failed[0].Name != "b.mkv" || !slices.Equal(failed[0].Files, []string{"b.mkv"}) {
+		t.Errorf("failed group = %+v, want b.mkv", failed[0])
+	}
+}
+
+func TestScanStopsEarlyOnMissing(t *testing.T) {
+	file := fileWith("a.rar", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8")
+	g := group{Name: "a.rar", Files: []*nzbparser.File{&file}, Segments: 8}
+
+	exists, _ := recorder("s5")
+	checker := NewDefaultChecker(config(1), exists)
+	checker.config.MaxParallel = 1
+
+	_, err := checker.scan(t.Context(), g, nil, 8, nil)
+	if !errors.Is(err, ErrSegmentsMissing) {
+		t.Errorf("scan err = %v, want ErrSegmentsMissing", err)
 	}
 }

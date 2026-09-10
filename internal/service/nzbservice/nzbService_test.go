@@ -64,11 +64,41 @@ func (fakeFile) Open() (io.ReadSeekCloser, error) { return nil, errNoBytes }
 
 type healthyChecker struct{}
 
-func (healthyChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, _ filehealth.ProgressFunc) []error {
+func (healthyChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, _ filehealth.ProgressFunc) []filehealth.FailedGroup {
 	return nil
 }
 
 func (healthyChecker) PlannedProbes(_ *nzbparser.NzbData) int { return 0 }
+
+// unhealthyChecker reports the groups the test says failed, so the add drops
+// exactly those files and carries on with the rest.
+type unhealthyChecker struct {
+	groups []filehealth.FailedGroup
+}
+
+func (c unhealthyChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, _ filehealth.ProgressFunc) []filehealth.FailedGroup {
+	return c.groups
+}
+
+func (unhealthyChecker) PlannedProbes(_ *nzbparser.NzbData) int { return 0 }
+
+// filesFactory presents every file the nzb still names, by its own filename, so
+// a health-drop test can tell which of them made it into the tree.
+type filesFactory struct {
+	discarded []string
+}
+
+func (f *filesFactory) DiscardSegmentStackFromNzbData(nzbData *nzbparser.NzbData) {
+	f.discarded = append(f.discarded, nzbData.MetaName)
+}
+
+func (f *filesFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData, _ nzbrecordfactory.ProgressFunc) (map[string]presentation.Openable, error) {
+	tree := map[string]presentation.Openable{}
+	for _, file := range nzbData.Files {
+		tree[file.Filename] = fakeFile{}
+	}
+	return tree, nil
+}
 
 // fakeStore keeps what the real one keeps, in a map. Locked because an add runs
 // in the background and the test reads the store while it does.
@@ -191,7 +221,7 @@ type blockingChecker struct {
 	release chan struct{}
 }
 
-func (c blockingChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, progress filehealth.ProgressFunc) []error {
+func (c blockingChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, progress filehealth.ProgressFunc) []filehealth.FailedGroup {
 	progress(1, 2)
 	close(c.entered)
 	<-c.release
@@ -527,6 +557,87 @@ func TestFailedAddLeavesTheNzbAddable(t *testing.T) {
 	}
 	if got := store.stage(nzbData.MetaName); got != string(nzbservice.StageCompleted) {
 		t.Errorf("the rejected add changed the record of the one that succeeded to %q", got)
+	}
+}
+
+// A check that fails one group drops that group's files and presents the rest.
+// The add is still an add: AddNzb swallows the sentinel so the caller is not
+// refused the file, but the record ends failed with the count in Err.
+func TestABeyondRepairGroupIsDroppedAndTheRestPresented(t *testing.T) {
+	presenter := &fakePresenter{files: map[string]presentation.Openable{}}
+	store := newFakeStore()
+	checker := unhealthyChecker{groups: []filehealth.FailedGroup{{Name: "a.rar", Files: []string{"a.rar"}}}}
+	service := nzbservice.NewService(store, &filesFactory{}, []presentation.Presenter{presenter}, nil, checker)
+
+	nzbData := &nzbparser.NzbData{
+		MetaName: "Some.Release",
+		Files: []nzbparser.File{
+			{Filename: "a.rar", Segments: []nzbparser.Segment{{ID: "a1"}}},
+			{Filename: "b.mkv", Segments: []nzbparser.Segment{{ID: "b1"}}},
+		},
+	}
+
+	if err := service.AddNzb(nzbData); err != nil {
+		t.Fatalf("AddNzb returned %v, a partial add is still an add", err)
+	}
+
+	history := service.History()
+	if len(history) != 1 || history[0].Stage != nzbservice.StageFailed {
+		t.Fatalf("the partial add was recorded as %+v", history)
+	}
+	if !strings.Contains(history[0].Err, "beyond repair") {
+		t.Errorf("the partial add reported %q, want it to mention beyond repair", history[0].Err)
+	}
+	if got := store.stage(nzbData.MetaName); got != string(nzbservice.StageFailed) {
+		t.Errorf("the partial add is recorded in the store as %q", got)
+	}
+
+	if len(presenter.files) != 1 {
+		t.Fatalf("presented %v, want only the surviving file", presenter.files)
+	}
+	for fullPath := range presenter.files {
+		if strings.HasSuffix(fullPath, ".rar") {
+			t.Errorf("the dropped group is still presented as %s", fullPath)
+		}
+	}
+}
+
+// When every file is beyond repair nothing is presented, the name is freed, and
+// a later add of the same name succeeds - the same re-add pattern a failed build
+// leaves behind.
+func TestOnlyFailingFilesLeaveNothingPresentedAndTheNameFree(t *testing.T) {
+	presenter := &fakePresenter{files: map[string]presentation.Openable{}}
+	store := newFakeStore()
+	checker := unhealthyChecker{groups: []filehealth.FailedGroup{{Name: "a.rar", Files: []string{"a.rar"}}}}
+	service := nzbservice.NewService(store, &filesFactory{}, []presentation.Presenter{presenter}, nil, checker)
+
+	nzbData := &nzbparser.NzbData{
+		MetaName: "Some.Release",
+		Files:    []nzbparser.File{{Filename: "a.rar", Segments: []nzbparser.Segment{{ID: "a1"}}}},
+	}
+
+	if err := service.AddNzb(nzbData); err != nil {
+		t.Fatalf("AddNzb returned %v, the sentinel is swallowed", err)
+	}
+
+	if got := store.stage(nzbData.MetaName); got != string(nzbservice.StageFailed) {
+		t.Errorf("the failed add is recorded in the store as %q", got)
+	}
+	if len(service.Files()) != 0 || len(presenter.files) != 0 {
+		t.Errorf("nothing should have been presented, got %v", presenter.files)
+	}
+	history := service.History()
+	if len(history) != 1 || history[0].Stage != nzbservice.StageFailed {
+		t.Fatalf("the failed add was recorded as %+v", history)
+	}
+
+	// The name was freed, so the same add succeeds
+	checker.groups = nil
+	if err := service.AddNzb(nzbData); err != nil {
+		t.Fatalf("re-adding after nothing was presented returned %v", err)
+	}
+	if got := store.stage(nzbData.MetaName); got != string(nzbservice.StageCompleted) {
+		t.Errorf("a successful re-add is recorded in the store as %q", got)
 	}
 }
 

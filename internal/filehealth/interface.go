@@ -6,18 +6,23 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
 
-// ProgressFunc reports segments probed against segments meant to be probed. The
-// total grows while the check runs, since a file that cannot be decided is
-// probed again with a wider sample.
+// ProgressFunc reports segments probed against segments meant to be probed.
 type ProgressFunc func(done, total int)
 
-// Checker defines the interface for file health checking
+// FailedGroup is one verdict: a group that lost a segment. Files are the nzb's
+// own filenames the group is made of, which is what a caller drops from the
+// presented tree.
+type FailedGroup struct {
+	Name  string
+	Files []string
+}
+
 type Checker interface {
-	// CheckFiles returns one error per file that is not fully retrievable.
-	// progress may be nil. A cancelled ctx stops it probing; what it reports of
-	// the files it got to is then nobodys answer, since whoever asked has gone.
-	CheckFiles(ctx context.Context, nzbData *nzbparser.NzbData, progress ProgressFunc) []error
+	// CheckFiles scans every content group to the add-time confidence and
+	// returns the groups that lost a segment. progress may be nil. An
+	// AddConfidence of 0 disables checking. A cancelled ctx stops it probing.
+	CheckFiles(ctx context.Context, nzbData *nzbparser.NzbData, progress ProgressFunc) []FailedGroup
 	// PlannedProbes is the work a check of this nzb would be, in segments it
-	// would ask the server about, without asking about any of them
+	// would ask the server about, without asking about any of them.
 	PlannedProbes(nzbData *nzbparser.NzbData) int
 }

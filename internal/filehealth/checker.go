@@ -1,12 +1,10 @@
-// Package filehealth probes a sample of a file's segments on the server and
-// reports the files that look too incomplete to serve.
+// Package filehealth probes a sample of a group's segments on the server and
+// reports the groups that lost a segment.
 package filehealth
 
 import (
 	"context"
 	"errors"
-	"fmt"
-	"log/slog"
 	"math"
 	"sync"
 	"time"
@@ -21,36 +19,25 @@ var ErrSegmentsMissing = errors.New("segments missing on server")
 type SegmentExistsFunc func(id string) (bool, error)
 
 type CheckerConfig struct {
-	// Sample size of the first pass, as a percentage of a content files
-	// segments; 0 disables checking entirely
-	InitialFilePercent float64
-	// Floor and cap on that sample, so a short file is not rounded to nothing
-	// and a huge one does not turn the add into a download
-	InitialFileMinSegments int
-	InitialFileMaxSegments int
-
-	// Ceiling on the widened sample a file gets when the first pass cannot
-	// decide it, as a percentage of its segments; 0 skips the second pass
-	ExtensiveFilePercent     float64
-	ExtensiveFileMaxSegments int
-
-	// Ceiling on accepted damage regardless of what par2 could repair
-	MaxMissingPercent float64
-	// Fraction of the estimated par2 capacity to trust, since it is estimated
-	Par2Safety float64
-	// Whether a file the second pass still cannot decide is accepted
-	UndecidedAccept bool
-	// Confidence of the interval the verdict is taken from
-	Confidence float64
-
-	// Maximum concurrent segment-checks
+	// AddConfidence is the fraction of a group's segments probed at add time.
+	// With the tolerance at zero it is also the covered fraction: being c sure
+	// that nothing is missing means probing c of the segments. 0 disables
+	// checking.
+	AddConfidence float64
+	// Maximum concurrent segment-checks.
 	MaxParallel int
+
+	// Reserved for a nonzero tolerance (par2 repair), and unused while the
+	// tolerance is zero:
+	MaxMissingPercent float64
+	Par2Safety        float64
+	UndecidedAccept   bool
 }
 
 // Ensure DefaultChecker implements Checker interface
 var _ Checker = (*DefaultChecker)(nil)
 
-// DefaultChecker verifies that a files segments are still present on the server.
+// DefaultChecker verifies that a groups segments are still present on the server.
 type DefaultChecker struct {
 	config CheckerConfig
 	exists SegmentExistsFunc
@@ -63,23 +50,108 @@ func NewDefaultChecker(config CheckerConfig, exists SegmentExistsFunc) *DefaultC
 	return &DefaultChecker{config: config, exists: exists}
 }
 
-// FileHealthError represents a file health check error
-type FileHealthError struct {
-	Path string
-	Err  error
+// group is what a verdict attaches to: an archive's volumes together, and every
+// other content file on its own.
+type group struct {
+	Name     string // grouped filename, as filenameops.GroupPartFilenames names it
+	Files    []*nzbparser.File
+	Segments int // across all files, the population N
 }
 
-func (e *FileHealthError) Error() string {
-	return fmt.Sprintf("health check failed for %s: %v", e.Path, e.Err)
+// groups splits the nzb's content files into their units. Volume sets are
+// grouped with the same function the build uses, so the check and the tree
+// cannot disagree about what a unit is. The nzb's own file order is the walk
+// order, so the groups come back in a stable order.
+func groups(nzbData *nzbparser.NzbData) []group {
+	content := contentFiles(nzbData)
+
+	grouped := filenameops.GroupPartFilenames(groupedNames(content))
+	filenameops.SortGroupedFilenames(grouped)
+
+	// Map each filename back to its group name, so the nzb's file order can
+	// supply the group order and a stable first-encounter grouping.
+	fileToGroup := make(map[string]string, len(content))
+	for name, files := range grouped {
+		for _, f := range files {
+			fileToGroup[f] = name
+		}
+	}
+	byFile := make(map[string]*nzbparser.File, len(content))
+	for _, file := range content {
+		byFile[file.Filename] = file
+	}
+
+	// Walk content in the nzb's own order, creating a group on first encounter.
+	order := make([]string, 0, len(grouped))
+	seen := make(map[string]bool, len(grouped))
+	for _, file := range content {
+		name := fileToGroup[file.Filename]
+		if !seen[name] {
+			seen[name] = true
+			order = append(order, name)
+		}
+	}
+
+	result := make([]group, 0, len(order))
+	for _, name := range order {
+		g := group{Name: name}
+		for _, filename := range grouped[name] {
+			file := byFile[filename]
+			g.Files = append(g.Files, file)
+			g.Segments += len(file.Segments)
+		}
+		result = append(result, g)
+	}
+	return result
 }
 
-func (e *FileHealthError) Unwrap() error {
-	return e.Err
+// groupedNames returns the filenames of content as a fresh slice, which
+// GroupPartFilenames consumes.
+func groupedNames(content []*nzbparser.File) []string {
+	names := make([]string, len(content))
+	for i, file := range content {
+		names[i] = file.Filename
+	}
+	return names
 }
 
-// progressReporter counts the probes of every pass of one check against the
-// probes those passes planned, and hands both to whoever asked. A nil report is
-// the caller that does not want to know.
+// probeOrder is the order the segments of a group are probed in, such that any
+// prefix of it is spread evenly over the whole: 0, N/2, N/4, 3N/4, ...
+// Bit-reversal gives that for free, so stopping anywhere leaves a sample with no
+// gap larger than twice the smallest, and resuming is an index into it.
+// length<=1 returns {0} or the single index; length==0 returns nil.
+func probeOrder(length int) []int {
+	if length <= 1 {
+		if length == 0 {
+			return nil
+		}
+		return []int{0}
+	}
+
+	// smallest power of two >= length
+	size := 1
+	for size < length {
+		size <<= 1
+	}
+
+	order := make([]int, 0, length)
+	for i := 0; i < size; i++ {
+		// bit-reverse i over log2(size) bits
+		rev := 0
+		for x, b := i, size>>1; b > 0; b >>= 1 {
+			rev = rev<<1 | x&1
+			x >>= 1
+		}
+		if rev < length {
+			order = append(order, rev)
+		}
+	}
+	return order
+}
+
+// progressReporter counts the probes of one group against the probes that group
+// planned, and hands both to whoever asked. A nil report is the caller that
+// does not want to know.
 type progressReporter struct {
 	report ProgressFunc
 
@@ -110,247 +182,157 @@ func (p *progressReporter) update(done, total int) {
 	p.report(p.done, p.total)
 }
 
-type fileResult struct {
-	checked int
-	missing int
-	err     error
-}
-
-// CheckFiles samples the content files of an nzb and reports the ones whose
-// damage is worse than its par2 could repair.
-//
-// A cheap pass covers every content file, which settles a dead post on its first
-// probe and a healthy one for the price of that pass. Only a file whose sample
-// leaves the answer genuinely open is probed again, harder.
-func (c *DefaultChecker) CheckFiles(ctx context.Context, nzbData *nzbparser.NzbData, progress ProgressFunc) []error {
-	if c.config.InitialFilePercent <= 0 {
+// CheckFiles scans every content group to the add-time confidence and returns
+// the groups that lost a segment.
+func (c *DefaultChecker) CheckFiles(ctx context.Context, nzbData *nzbparser.NzbData, progress ProgressFunc) []FailedGroup {
+	if c.config.AddConfidence <= 0 {
 		return nil
 	}
-
-	content := contentFiles(nzbData)
-	if len(content) == 0 {
-		return nil
-	}
-
 	started := time.Now()
-	limit := c.limit(nzbData)
-	counts := c.sampleCounts(content)
-	segments := 0
-	for _, file := range content {
-		segments += len(file.Segments)
-	}
-
-	reporter := &progressReporter{report: progress}
-	results := c.probe(ctx, content, counts, reporter)
-	c.escalate(ctx, content, results, limit, reporter)
-	recordCheck(ctx, started, segments)
-
-	var errs []error
-	for i, result := range results {
-		var err error
-		switch {
-		case result.err != nil:
-			err = result.err
-		case decide(result.missing, result.checked, limit, c.config.Confidence) == verdictDiscard:
-			err = fmt.Errorf("%w: %d of %d checked", ErrSegmentsMissing, result.missing, result.checked)
-		case result.missing > 0:
-			slog.Warn("File has missing segments, but within what par2 could repair",
-				"file", content[i].Filename,
-				"missing", result.missing,
-				"checked", result.checked,
-				"limit", limit)
-			continue
-		default:
-			continue
+	var (
+		failed        []FailedGroup
+		totalSegments int
+	)
+	for _, g := range groups(nzbData) {
+		totalSegments += g.Segments
+		target := int(math.Round(c.config.AddConfidence * float64(g.Segments)))
+		if target < 1 {
+			target = 1
 		}
-
-		errs = append(errs, &FileHealthError{Path: content[i].Filename, Err: err})
+		if target > g.Segments {
+			target = g.Segments
+		}
+		if _, err := c.scan(ctx, g, nil, target, progress); err != nil {
+			files := make([]string, len(g.Files))
+			for i, f := range g.Files {
+				files[i] = f.Filename
+			}
+			failed = append(failed, FailedGroup{Name: g.Name, Files: files})
+		}
 	}
-	return errs
+	recordCheck(ctx, started, totalSegments)
+	return failed
 }
 
-// sampleCounts is how many segments of each file the first pass probes: the
-// configured share of it, never below the floor and never above the cap or the
-// file itself.
-func (c *DefaultChecker) sampleCounts(content []*nzbparser.File) []int {
-	counts := make([]int, len(content))
-	for i, file := range content {
-		counts[i] = clamp(
-			int(math.Round(float64(len(file.Segments))*c.config.InitialFilePercent/100)),
-			c.config.InitialFileMinSegments,
-			min(c.config.InitialFileMaxSegments, len(file.Segments)),
-		)
-	}
-	return counts
-}
-
-// PlannedProbes is how many segments a check of this nzb would ask the server
-// about, worked out without asking about any of them. It is a floor: a file the
-// first pass cannot decide is probed again, and how many of those there are is
-// what the first pass is for.
+// PlannedProbes is the work a check of this nzb would be, in segments it would
+// ask the server about, worked out without asking about any of them.
 func (c *DefaultChecker) PlannedProbes(nzbData *nzbparser.NzbData) int {
-	if c.config.InitialFilePercent <= 0 {
+	if c.config.AddConfidence <= 0 {
 		return 0
 	}
-
-	content := contentFiles(nzbData)
 	planned := 0
-	for i, count := range c.sampleCounts(content) {
-		planned += len(sampleIndices(len(content[i].Segments), count))
+	for _, g := range groups(nzbData) {
+		target := int(math.Round(c.config.AddConfidence * float64(g.Segments)))
+		if target < 1 {
+			target = 1
+		}
+		if target > g.Segments {
+			target = g.Segments
+		}
+		planned += target
 	}
 	return planned
 }
 
-// escalate re-probes, with a sample wide enough to resolve it, every file the
-// first pass could not decide, and replaces its result. A widened sample is read
-// on its own rather than added to the first: what it measures is the same
-// fraction, only more precisely.
-func (c *DefaultChecker) escalate(ctx context.Context, content []*nzbparser.File, results []fileResult, limit float64, reporter *progressReporter) {
-	if c.config.ExtensiveFilePercent <= 0 {
-		return
+// scan probes the order over g's segments until target of them count as present
+// or one is missing. known holds the positions that already count and are
+// skipped. It returns how many count as present and stops early on a missing
+// segment, because at zero tolerance there is nothing further to learn.
+func (c *DefaultChecker) scan(ctx context.Context, g group, known []int, target int, progress ProgressFunc) (covered int, err error) {
+	if g.Segments == 0 || target <= 0 {
+		return 0, nil
+	}
+	if target > g.Segments {
+		target = g.Segments
 	}
 
+	order := probeOrder(g.Segments)
+
+	knownSet := make(map[int]bool, len(known))
+	for _, pos := range known {
+		knownSet[pos] = true
+	}
+
+	// Positions known to be present already count.
+	for _, pos := range known {
+		if pos >= 0 && pos < g.Segments {
+			covered++
+		}
+	}
+
+	reporter := &progressReporter{report: progress}
+	reporter.plan(target)
+
+	// Flatten the files' segments into one index space, so the order walks the
+	// group end to end. Positions below the known coverage are skipped.
 	var (
-		files  []*nzbparser.File
-		counts []int
-		at     []int
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+		sem     = make(chan struct{}, c.config.MaxParallel)
+		missing bool
 	)
-	for i, result := range results {
-		if result.err != nil || decide(result.missing, result.checked, limit, c.config.Confidence) != verdictUndecided {
+	gctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for i := 0; i < target && i < len(order); i++ {
+		if knownSet[order[i]] {
 			continue
 		}
 
-		segments := len(content[i].Segments)
-		count := clamp(
-			requiredSamples(result.missing, result.checked, limit, c.config.Confidence),
-			result.checked,
-			min(int(math.Round(float64(segments)*c.config.ExtensiveFilePercent/100)), c.config.ExtensiveFileMaxSegments, segments),
-		)
-		if count <= result.checked {
-			continue
-		}
+		id := segmentAt(g, order[i])
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		files = append(files, content[i])
-		counts = append(counts, count)
-		at = append(at, i)
-	}
-	if len(files) == 0 {
-		return
-	}
+			if gctx.Err() != nil {
+				return
+			}
 
-	for i, result := range c.probe(ctx, files, counts, reporter) {
-		if !c.config.UndecidedAccept && decide(result.missing, result.checked, limit, c.config.Confidence) == verdictUndecided {
-			result.err = fmt.Errorf("%w: %d of %d checked, still undecided", ErrSegmentsMissing, result.missing, result.checked)
-		}
-		results[at[i]] = result
-	}
-}
+			exists, err := c.exists(id)
 
-// probe checks counts[i] segments of files[i], spread evenly.
-func (c *DefaultChecker) probe(ctx context.Context, files []*nzbparser.File, counts []int, reporter *progressReporter) []fileResult {
-	results := make([]fileResult, len(files))
+			reporter.step()
 
-	var (
-		mu  sync.Mutex
-		wg  sync.WaitGroup
-		sem = make(chan struct{}, c.config.MaxParallel)
-	)
-
-	// The whole pass is planned before any of it runs, so the fraction reported
-	// does not fall back while the pass is still being spread out
-	indices := make([][]int, len(files))
-	planned := 0
-	for i, file := range files {
-		indices[i] = sampleIndices(len(file.Segments), counts[i])
-		planned += len(indices[i])
-	}
-	reporter.plan(planned)
-
-	for fileIndex, file := range files {
-		for _, segmentIndex := range indices[fileIndex] {
-			id := file.Segments[segmentIndex].ID
-
-			wg.Add(1)
-			sem <- struct{}{}
-			go func() {
-				defer wg.Done()
-				defer func() { <-sem }()
-
-				// The add this belongs to was taken back, so the answer is not
-				// worth the request
-				if ctx.Err() != nil {
-					return
-				}
-
-				exists, err := c.exists(id)
-
-				reporter.step()
-
-				mu.Lock()
-				defer mu.Unlock()
-				result := &results[fileIndex]
-				result.checked++
-				switch {
-				case err != nil:
-					recordProbe(ctx, "error")
-					if result.err == nil {
-						result.err = err
-					}
-				case !exists:
-					recordProbe(ctx, "missing")
-					result.missing++
-				default:
-					recordProbe(ctx, "present")
-				}
-			}()
-		}
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err != nil:
+				recordProbe(gctx, "error")
+				missing = true
+			case !exists:
+				recordProbe(gctx, "missing")
+				missing = true
+				cancel()
+			default:
+				recordProbe(gctx, "present")
+				covered++
+			}
+		}()
 	}
 	wg.Wait()
 
-	return results
+	if missing {
+		return covered, ErrSegmentsMissing
+	}
+	return covered, nil
 }
 
-// limit is the missing fraction a file may still be accepted with: what the
-// nzbs par2 could repair, under the configured ceiling. Without par2 it is zero,
-// and a single missing segment is a failure - which is the right answer, since
-// nothing will make that file whole.
-func (c *DefaultChecker) limit(nzbData *nzbparser.NzbData) float64 {
-	return math.Min(c.config.MaxMissingPercent/100, par2Capacity(nzbData)*c.config.Par2Safety)
-}
-
-// par2Capacity estimates the fraction of the content an nzbs recovery files
-// could rebuild, as the ratio of the bytes each carries. Recovery blocks rebuild
-// an equal number of lost source blocks, so the byte ratio approximates the
-// block ratio without reading anything; the index packet holds the real counts
-// and costs a fetch.
-func par2Capacity(nzbData *nzbparser.NzbData) float64 {
-	var recovery, content int64
-	for i := range nzbData.Files {
-		file := &nzbData.Files[i]
-
-		var bytes int64
-		for _, segment := range file.Segments {
-			bytes += int64(segment.BytesHint)
+// segmentAt resolves a group-index position to the message-id of the segment
+// that holds it.
+func segmentAt(g group, pos int) string {
+	for _, file := range g.Files {
+		if pos < len(file.Segments) {
+			return file.Segments[pos].ID
 		}
-
-		switch filenameops.Classify(file.Filename) {
-		case filenameops.ClassRecovery:
-			recovery += bytes
-		case filenameops.ClassContent:
-			content += bytes
-		case filenameops.ClassOther:
-		}
+		pos -= len(file.Segments)
 	}
-
-	if content == 0 {
-		return 0
-	}
-	return float64(recovery) / float64(content)
+	return ""
 }
 
 // contentFiles picks the files whose loss would make the release unusable. They
-// are the only ones probed: a missing par2 or nfo costs nothing being measured
-// here.
+// are the only ones grouped and probed: a missing par2 or nfo costs nothing
+// being measured here.
 func contentFiles(nzbData *nzbparser.NzbData) []*nzbparser.File {
 	var files []*nzbparser.File
 	for i := range nzbData.Files {
@@ -359,32 +341,4 @@ func contentFiles(nzbData *nzbparser.NzbData) []*nzbparser.File {
 		}
 	}
 	return files
-}
-
-func clamp(value, low, high int) int {
-	return min(max(value, low), max(high, 0))
-}
-
-// sampleIndices picks count indices spread evenly over [0, length), always
-// including the first and last one. A negative count selects everything.
-func sampleIndices(length, count int) []int {
-	if length == 0 {
-		return nil
-	}
-	if count < 0 || count >= length {
-		indices := make([]int, length)
-		for i := range indices {
-			indices[i] = i
-		}
-		return indices
-	}
-	if count == 1 {
-		return []int{0}
-	}
-
-	indices := make([]int, count)
-	for i := range indices {
-		indices[i] = i * (length - 1) / (count - 1)
-	}
-	return indices
 }

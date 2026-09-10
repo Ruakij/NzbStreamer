@@ -269,8 +269,12 @@ func (s *Service) Init() error {
 }
 
 var (
-	ErrNzbAlreadyExists  = errors.New("nzb already exists")
-	ErrNzbNotFound       = errors.New("nzb not found")
+	ErrNzbAlreadyExists = errors.New("nzb already exists")
+	ErrNzbNotFound      = errors.New("nzb not found")
+	// ErrHealthCheckFailed marks an add whose check found groups beyond repair:
+	// those files were dropped, whatever could be presented was, and the record
+	// ends failed. Only AddNzb swallows it, so a caller that hands an nzb over
+	// still consumes it; the client apis report the failed record.
 	ErrHealthCheckFailed = errors.New("health check failed")
 )
 
@@ -283,6 +287,13 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 
 	err := s.addNzb(nzbData, true)
 	s.finish(nzbData.MetaName, err)
+
+	// A release added with some files dropped is still added: the record says
+	// what happened, so a caller that hands nzbs over (e.g. the watch folder) is
+	// not refused the file and consumes it.
+	if errors.Is(err, ErrHealthCheckFailed) {
+		return nil
+	}
 
 	return err
 }
@@ -319,10 +330,17 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	//
 	// An archive left packed is the exception: the volumes it presented are the
 	// point of reporting it that way, so it keeps them and the name, and is
-	// removed like a completed one
+	// removed like a completed one. So is an add that dropped a failed group:
+	// whatever survived was presented and stays.
+	var droppedTree bool
+	var droppedGroupNames []string
+	var droppedCount int
 	defer func() {
 		switch {
 		case err == nil || errors.Is(err, nzbrecordfactory.ErrArchiveLeftPacked):
+		// A dropped-groups add keeps whatever it presented: the record ends
+		// failed but the files stay, for a client whose policy keeps them
+		case errors.Is(err, ErrHealthCheckFailed) && droppedTree:
 		// One taken back gives up the segment stack as well: nothing is going to
 		// read it, and the cancel has already been answered
 		case errors.Is(err, ErrAddCancelled):
@@ -348,13 +366,35 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 			return err
 		}
 
-		if healthErrors := s.healthChecker.CheckFiles(ctx, nzbData, progress); len(healthErrors) > 0 {
-			for _, err := range healthErrors {
-				slog.Warn("Unhealthy file detected",
-					"nzb", nzbData.MetaName,
-					"error", err)
+		failed := s.healthChecker.CheckFiles(ctx, nzbData, progress)
+		if len(failed) > 0 {
+			droppedSet := make(map[string]struct{})
+			for _, group := range failed {
+				droppedGroupNames = append(droppedGroupNames, group.Name)
+				slog.Warn("Unhealthy file dropped", "nzb", nzbData.MetaName, "group", group.Name)
+				for _, file := range group.Files {
+					droppedSet[file] = struct{}{}
+				}
 			}
-			return fmt.Errorf("%w: %d files beyond repair", ErrHealthCheckFailed, len(healthErrors))
+
+			files := nzbData.Files[:0]
+			for _, file := range nzbData.Files {
+				if _, droppedFile := droppedSet[file.Filename]; droppedFile {
+					droppedCount++
+					continue
+				}
+				files = append(files, file)
+			}
+			nzbData.Files = files
+
+			if len(nzbData.Files) == 0 {
+				s.mutex.Lock()
+				s.unregister(nzbData.MetaName)
+				s.mutex.Unlock()
+				return fmt.Errorf("%w: %d files beyond repair, nothing to present", ErrHealthCheckFailed, droppedCount)
+			}
+
+			droppedTree = true
 		}
 	}
 
@@ -387,6 +427,14 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	// The record already holds it: enqueue wrote it there when the add was
 	// accepted, and finish records how this ends
 
+	// A check that found groups beyond repair ends the add failed even though
+	// the tree was presented: the client is told what happened, and its own
+	// failed-download policy decides what to do with the release it still has
+	if droppedTree {
+		return fmt.Errorf("%w: %d files beyond repair and not presented: %s",
+			ErrHealthCheckFailed, droppedCount, strings.Join(droppedGroupNames, ", "))
+	}
+
 	// An archive that stayed packed is a release nothing can play, so the add
 	// ends failed and a client moves on to the next one. The volumes are
 	// presented all the same, for whoever wants to look at what was posted
@@ -401,9 +449,7 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 }
 
 // filterNzbFiles drops what the early blacklist matches. A file dropped here is
-// not built, not presented and not health-checked; the par2 files the check
-// needs for its verdict are hidden by FILESYSTEM_BLACKLIST instead, which drops
-// them after they have been counted.
+// not built, not presented and not health-checked.
 func (s *Service) filterNzbFiles(nzbData *nzbparser.NzbData) {
 	for i := len(nzbData.Files) - 1; i >= 0; i-- {
 		if s.isBlacklistedNzbFile(nzbData.Files[i].Filename) {

@@ -191,21 +191,16 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager, c Config) {
 	folderTrigger := folderwatcher.NewFolderWatcher(c.FolderWatcher.Path, c.FolderWatcher.Consume)
 
 	// Setup health checker
-	probeParallel := c.Probe.Parallel
-	if probeParallel <= 0 {
-		probeParallel = totalConns
+	addParallel := c.Probe.AddParallelism
+	if addParallel <= 0 {
+		addParallel = totalConns
 	}
 	healthChecker := filehealth.NewDefaultChecker(filehealth.CheckerConfig{
-		InitialFilePercent:       c.Probe.InitialFilePercent,
-		InitialFileMinSegments:   c.Probe.InitialFileMinSegments,
-		InitialFileMaxSegments:   c.Probe.InitialFileMaxSegments,
-		ExtensiveFilePercent:     c.Probe.ExtensiveFilePercent,
-		ExtensiveFileMaxSegments: c.Probe.ExtensiveFileMaxSegments,
-		MaxMissingPercent:        c.Probe.MaxMissingPercent,
-		Par2Safety:               c.Probe.Par2Safety,
-		UndecidedAccept:          c.Probe.UndecidedAccept,
-		Confidence:               c.Probe.Confidence,
-		MaxParallel:              probeParallel,
+		AddConfidence:     c.Probe.AddConfidence,
+		MaxParallel:       addParallel,
+		MaxMissingPercent: c.Probe.MaxMissingPercent,
+		Par2Safety:        c.Probe.Par2Safety,
+		UndecidedAccept:   c.Probe.UndecidedAccept,
 	}, nntpPool.SegmentExists)
 
 	service := nzbservice.NewService(store, factory, presenters, []trigger.Trigger{folderTrigger}, healthChecker)

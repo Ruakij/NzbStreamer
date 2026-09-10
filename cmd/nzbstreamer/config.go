@@ -132,16 +132,20 @@ type NzbConfig struct {
 }
 
 type ProbeConfig struct {
-	InitialFilePercent       float64 `env:"PROBE_INITIAL_FILE_PERCENT, default=0.5"`        // Segments checked per content file on the first pass, as a percentage of its segments, spread evenly; 0 disables checking
-	InitialFileMinSegments   int     `env:"PROBE_INITIAL_FILE_MIN_SEGMENTS, default=2"`     // Floor on that sample, so a short file is not rounded down to nothing
-	InitialFileMaxSegments   int     `env:"PROBE_INITIAL_FILE_MAX_SEGMENTS, default=8"`     // Cap on that sample, so a huge file does not turn the add into a download
-	ExtensiveFilePercent     float64 `env:"PROBE_EXTENSIVE_FILE_PERCENT, default=1.0"`      // Ceiling on the widened sample a file gets when the first pass cannot decide it; 0 skips the second pass
-	ExtensiveFileMaxSegments int     `env:"PROBE_EXTENSIVE_FILE_MAX_SEGMENTS, default=512"` // Absolute cap on that widened sample
-	MaxMissingPercent        float64 `env:"PROBE_MAX_MISSING_PERCENT, default=100"`         // Ceiling on accepted damage regardless of par2; 100 lets par2 capacity govern on its own
-	Par2Safety               float64 `env:"PROBE_PAR2_SAFETY, default=0.9"`                 // Fraction of the estimated par2 capacity to trust, since the capacity is itself estimated
-	UndecidedAccept          bool    `env:"PROBE_UNDECIDED_ACCEPT, default=true"`           // Accept a file the second pass still cannot decide
-	Confidence               float64 `env:"PROBE_CONFIDENCE, default=0.95"`                 // Confidence of the interval the verdict is taken from; lower means fewer escalations and more wrong calls
-	Parallel                 int     `env:"PROBE_PARALLEL, default=0"`                      // Concurrent segment-checks; defaults to the sum of the servers connections when 0
+	// AddConfidence is the fraction of each group's segments probed at add
+	// time; with the tolerance at zero it is also the covered fraction, so
+	// 0.25 probes a quarter of every group. Probes are spread evenly, so only
+	// a missing run a few segments long can hide; a single lost article is
+	// missed three times in four. 0 disables checking.
+	AddConfidence float64 `env:"PROBE_ADD_CONFIDENCE, default=0.25"`
+	// AddParallelism bounds concurrent segment-checks during an add; defaults
+	// to the sum of the servers connections when 0 or less
+	AddParallelism int `env:"PROBE_ADD_PARALLELISM, default=0"`
+
+	// Reserved for a future repair tolerance, and unused while it is zero:
+	MaxMissingPercent float64 `env:"PROBE_MAX_MISSING_PERCENT, default=100"`
+	Par2Safety        float64 `env:"PROBE_PAR2_SAFETY, default=0.9"`
+	UndecidedAccept   bool    `env:"PROBE_UNDECIDED_ACCEPT, default=true"`
 }
 
 type FilesystemConfig struct {
