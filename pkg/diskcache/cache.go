@@ -21,7 +21,7 @@ import (
 var ErrInvalidCacheOptions = errors.New("invalid cache settings")
 
 func NewCache(options *CacheOptions) (*Cache, error) {
-	if options.MaxSize < 0 || options.ItemMaxSize < 0 || options.CacheDir == "" {
+	if options.MaxSize < 0 || options.ItemMaxSize < 0 || options.WriteBackSize < 0 || options.CacheDir == "" {
 		return nil, ErrInvalidCacheOptions
 	}
 
@@ -48,6 +48,13 @@ func NewCache(options *CacheOptions) (*Cache, error) {
 		options: options,
 		items:   make(map[string]CacheItemHeader),
 		indexed: make(chan struct{}),
+	}
+
+	if options.WriteBackSize > 0 {
+		cache.writeBack = make(map[string]pendingEntry)
+		cache.writeBackCond = sync.NewCond(cache.mu)
+		cache.writeWG.Add(1)
+		go cache.writeBackLoop()
 	}
 
 	go cache.index()
@@ -115,8 +122,12 @@ func (c *Cache) loadExistingItems() error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
-		// One written while the walk runs is already counted
+		// One written while the walk runs is already counted, and one still
+		// pending is counted by the finalize that will rename over this file
 		if _, exists := c.items[key]; exists {
+			return nil
+		}
+		if _, pending := c.writeBack[key]; pending {
 			return nil
 		}
 		c.items[key] = CacheItemHeader{
@@ -136,6 +147,7 @@ func (c *Cache) loadExistingItems() error {
 var (
 	ErrCouldNotMakeEnoughSpace = errors.New("could not make required space")
 	ErrItemNotFound            = errors.New("item not found")
+	ErrNegativeOffset          = errors.New("negative offset")
 )
 
 // maxSizeEvict frees requiredSpace. One new item usually displaces one old one,
@@ -176,10 +188,12 @@ func (c *Cache) maxSizeEvict(requiredSpace int64) error {
 // evict removes an item to make room, which is the removal worth counting: a
 // caller dropping what it stored itself is not the cache running out of space.
 func (c *Cache) evict(key string) error {
+	evicted := c.items[key].Size
 	if err := c.removeFile(key); err != nil {
 		return err
 	}
 	c.evictions.Add(1)
+	c.evictedBytes.Add(evicted)
 	return nil
 }
 
@@ -189,7 +203,7 @@ func (c *Cache) evictFor(size int64) error {
 	if c.options.MaxSize <= 0 {
 		return nil
 	}
-	if !defaultCacheOptions.MaxSizeEvictBlocking {
+	if !c.options.MaxSizeEvictBlocking {
 		go func() {
 			c.mu.Lock()
 			err := c.maxSizeEvict(size)
@@ -209,8 +223,16 @@ func (c *Cache) evictFor(size int64) error {
 }
 
 // Set stores data as it is, so a caller that already holds the whole item does
-// not copy it through a read buffer first.
+// not copy it through a read buffer first. With write-back enabled it admits
+// the segment into memory and returns immediately; otherwise it writes to disk
+// synchronously.
+//
+// data belongs to the cache from here on: until it reaches disk it is what
+// Open serves, so a caller must not write to the buffer it passed.
 func (c *Cache) Set(key Key, data []byte) (int64, error) {
+	if c.options.WriteBackSize > 0 {
+		return c.admit(key, data)
+	}
 	return c.store(key, func(file *os.File) (int64, error) {
 		if err := c.evictFor(int64(len(data))); err != nil {
 			return 0, err
@@ -286,11 +308,18 @@ func (c *Cache) Remove(key Key) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, exists := c.items[key.String()]; !exists {
+	keyStr := key.String()
+	if pending, exists := c.writeBack[keyStr]; exists {
+		c.dropPendingLocked(keyStr, pending)
+		return nil
+	}
+
+	header, exists := c.items[keyStr]
+	if !exists {
 		return ErrItemNotFound
 	}
 
-	return c.removeFile(key.String())
+	return c.removeFileLocked(keyStr, header)
 }
 
 // RemoveAll drops every item whose key sits under prefix
@@ -303,6 +332,10 @@ func (c *Cache) RemoveAll(prefix Key) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// os.RemoveAll on a path that does not exist is not an error, so a prefix
+	// that has only pending (never yet written) entries still succeeds; it has
+	// already removed every disk file, so the loop only has to drop the index
+	// and any pending copies
 	if err := os.RemoveAll(dirPath); err != nil {
 		return fmt.Errorf("removing dir failed: %w", err)
 	}
@@ -313,6 +346,11 @@ func (c *Cache) RemoveAll(prefix Key) error {
 			delete(c.items, key)
 		}
 	}
+	for key, pending := range c.writeBack {
+		if strings.HasPrefix(key, prefix.String()+"/") {
+			c.dropPendingLocked(key, pending)
+		}
+	}
 
 	return nil
 }
@@ -320,31 +358,49 @@ func (c *Cache) RemoveAll(prefix Key) error {
 // removeFile takes the joined key of the items map, which is what the eviction
 // policy hook picks from.
 func (c *Cache) removeFile(key string) error {
+	header, exists := c.items[key]
+	if !exists {
+		return nil
+	}
+	return c.removeFileLocked(key, header)
+}
+
+// removeFileLocked drops a known disk-resident item. It must hold c.mu.
+func (c *Cache) removeFileLocked(key string, header CacheItemHeader) error {
 	filePath, err := Key(strings.Split(key, "/")).path(c.options.CacheDir)
 	if err != nil {
 		return err
 	}
 
-	if _, exists := c.items[key]; exists {
-		if err := os.Remove(filePath); err != nil {
-			return fmt.Errorf("removing file failed: %w", err)
-		}
-		c.currentSize -= c.items[key].Size
-		delete(c.items, key)
+	if err := os.Remove(filePath); err != nil {
+		return fmt.Errorf("removing file failed: %w", err)
+	}
+	c.currentSize -= header.Size
+	delete(c.items, key)
 
-		// The last item leaves its directory behind; a directory still
-		// holding items fails this and stays
-		if dir := filepath.Dir(filePath); dir != c.options.CacheDir {
-			os.Remove(dir)
-		}
+	// The last item leaves its directory behind; a directory still
+	// holding items fails this and stays
+	if dir := filepath.Dir(filePath); dir != c.options.CacheDir {
+		os.Remove(dir)
 	}
 	return nil
 }
 
-// Open returns the item's file and size. Callers may hold the file for as long as
-// they like: eviction only unlinks, so an open descriptor keeps working.
-func (c *Cache) Open(key Key) (*os.File, int64, error) {
+// Open returns a handle on the item and its size. Callers may hold the handle
+// for as long as they like: eviction only unlinks, so an open descriptor keeps
+// working, and a pending entry is served from its immutable in-memory copy.
+func (c *Cache) Open(key Key) (*Item, int64, error) {
 	c.mu.Lock()
+	// A pending entry carries its own header, which the finalize that puts it
+	// on disk hands on, so this read counts for its LRU standing there too
+	if pending, exists := c.writeBack[key.String()]; exists {
+		c.hits.Add(1)
+		pending.modTime = time.Now()
+		c.writeBack[key.String()] = pending
+		c.mu.Unlock()
+		return &Item{data: pending.data}, int64(len(pending.data)), nil
+	}
+
 	header, exists := c.items[key.String()]
 	if !exists {
 		c.mu.Unlock()
@@ -371,7 +427,7 @@ func (c *Cache) Open(key Key) (*os.File, int64, error) {
 		return nil, 0, fmt.Errorf("failed opening file for item '%s': %w", key, err)
 	}
 
-	return file, header.Size, nil
+	return &Item{file: file}, header.Size, nil
 }
 
 // Stats reports what the cache holds against what it may hold. Every number is
@@ -381,18 +437,58 @@ func (c *Cache) Stats() Stats {
 	defer c.mu.RUnlock()
 
 	return Stats{
-		Items:     len(c.items),
-		Bytes:     c.currentSize,
-		MaxBytes:  c.options.MaxSize,
-		Hits:      c.hits.Load(),
-		Misses:    c.misses.Load(),
-		Evictions: c.evictions.Load(),
+		Items:    len(c.items),
+		Bytes:    c.currentSize,
+		MaxBytes: c.options.MaxSize,
+
+		WriteBackItems: len(c.writeBack),
+		WriteBackBytes: c.writeBackBytes,
+
+		WriteBytes: c.writeBytes.Load(),
+		Writes:     c.writes.Load(),
+
+		Hits:         c.hits.Load(),
+		Misses:       c.misses.Load(),
+		Evictions:    c.evictions.Load(),
+		EvictedBytes: c.evictedBytes.Load(),
 	}
 }
 
+// Close stops the writer, drains any remaining write-back entries to disk, and
+// waits for the writer goroutine to finish, so a caller can rely on a
+// deterministic disk state and no leaked goroutines. It is a no-op when
+// write-back is disabled.
+func (c *Cache) Close() error {
+	if c.writeBackCond == nil {
+		return nil
+	}
+
+	c.writeBackCond.L.Lock()
+	c.closed = true
+	c.writeBackCond.Broadcast()
+	c.writeBackCond.L.Unlock()
+
+	c.writeWG.Wait()
+
+	// Anything the writer did not drain before stopping is written now
+	c.mu.Lock()
+	remaining := make(map[string]pendingEntry, len(c.writeBack))
+	for k, entry := range c.writeBack {
+		remaining[k] = entry
+	}
+	c.mu.Unlock()
+
+	for k, entry := range remaining {
+		c.writePending(k, entry)
+	}
+
+	return nil
+}
+
 // Groups reports what the cache holds per first key part, which is one entry
-// per nzb given a key of {nzb, message-id}. There is no index by prefix, so it
-// is one pass for every group rather than a pass per group.
+// per nzb given a key of {nzb, message-id}. A segment awaiting its write is
+// held for that nzb as much as one on disk, so both count. There is no index by
+// prefix, so it is one pass for every group rather than a pass per group.
 //
 // ponytail: O(items) per call, which is a poll of a page against a map of
 // segments; an index per prefix if that ever shows up in a profile
@@ -401,10 +497,10 @@ func (c *Cache) Groups() map[string]GroupStats {
 	defer c.mu.RUnlock()
 
 	groups := make(map[string]GroupStats)
-	for key, header := range c.items {
+	count := func(key string, header CacheItemHeader) {
 		prefix, _, isGrouped := strings.Cut(key, "/")
 		if !isGrouped {
-			continue
+			return
 		}
 
 		group := groups[prefix]
@@ -416,13 +512,26 @@ func (c *Cache) Groups() map[string]GroupStats {
 		groups[prefix] = group
 	}
 
+	for key, header := range c.items {
+		count(key, header)
+	}
+	for key, pending := range c.writeBack {
+		count(key, pending.header())
+	}
+
 	return groups
 }
 
+// Exists reports whether the cache holds the key, whether on disk or still
+// awaiting its write.
 func (c *Cache) Exists(key Key) (bool, CacheItemHeader) {
 	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if pending, exists := c.writeBack[key.String()]; exists {
+		return true, pending.header()
+	}
 	header, exists := c.items[key.String()]
-	c.mu.RUnlock()
 
 	return exists, header
 }

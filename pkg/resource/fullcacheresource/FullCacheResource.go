@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"sync/atomic"
 
@@ -106,9 +105,9 @@ func NewFullCacheResource(underlyingResource resource.ReadCloseableResource, cac
 type FullCacheResourceReader struct {
 	resource         *FullCacheResource
 	underlyingReader io.ReadCloser
-	// Cache-file kept open for the readers lifetime; reads are positional, so no seeking
+	// Cache-item kept open for the readers lifetime; reads are positional, so no seeking
 	fileMutex sync.Mutex
-	cacheFile *os.File
+	cacheItem *diskcache.Item
 	// data is what this reader fetched, where it did; a loaded reader has one of
 	// the two and an empty segment neither
 	data   []byte
@@ -190,13 +189,13 @@ func (r *FullCacheResource) setExactSize(size int64) {
 
 func (r *FullCacheResourceReader) Close() error {
 	r.fileMutex.Lock()
-	cacheFile := r.cacheFile
-	r.cacheFile, r.data, r.loaded = nil, nil, false
+	cacheItem := r.cacheItem
+	r.cacheItem, r.data, r.loaded = nil, nil, false
 	r.fileMutex.Unlock()
 
-	if cacheFile != nil {
-		if err := cacheFile.Close(); err != nil {
-			return fmt.Errorf("failed closing cache-file: %w", err)
+	if cacheItem != nil {
+		if err := cacheItem.Close(); err != nil {
+			return fmt.Errorf("failed closing cache-item: %w", err)
 		}
 	}
 	if r.underlyingReader != nil {
@@ -277,12 +276,12 @@ func (r *FullCacheResourceReader) ReadAt(p []byte, off int64) (int, error) {
 		}
 		r.loaded = true
 	}
-	data, cacheFile := r.data, r.cacheFile
+	data, cacheItem := r.data, r.cacheItem
 	r.fileMutex.Unlock()
 
-	if cacheFile != nil {
+	if cacheItem != nil {
 		//nolint:wrapcheck // io.EOF has to reach the caller unwrapped
-		return cacheFile.ReadAt(p, off)
+		return cacheItem.ReadAt(p, off)
 	}
 
 	if off >= int64(len(data)) {
@@ -309,9 +308,9 @@ func (r *FullCacheResourceReader) load() (err error) {
 		}
 	}()
 
-	file, size, err := r.resource.Cache.Open(r.resource.CacheKey)
+	item, size, err := r.resource.Cache.Open(r.resource.CacheKey)
 	if err == nil {
-		r.cacheFile = file
+		r.cacheItem = item
 		r.resource.setExactSize(size)
 
 		return nil

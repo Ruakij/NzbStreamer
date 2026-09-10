@@ -155,11 +155,22 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager, c Config) {
 		CacheDir:             c.Cache.Path,
 		MaxSize:              int64(c.Cache.MaxSize),
 		MaxSizeEvictBlocking: false,
+		WriteBackSize:        int64(c.Cache.WriteBackSize),
 	})
 	if err != nil {
 		slog.Error("Cache creation failed", "error", err)
 		os.Exit(1)
 	}
+	// Close drains the write-back buffer to disk, so what a shutdown interrupts
+	// in memory is not lost with it
+	sm.AddService()
+	go func() {
+		defer sm.ServiceDone()
+		<-ctx.Done()
+		if err := segmentCache.Close(); err != nil {
+			slog.Error("Failed closing cache", "error", err)
+		}
+	}()
 
 	// Setup Presenters
 	var presenters []presentation.Presenter

@@ -13,16 +13,31 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource/fullcacheresource"
 )
 
-// countingResource serves fixed content and counts how often it was opened,
-// which tells us how often the segment had to be fetched.
+// countingResource serves fixed content and counts how often it was opened and
+// how many bytes were read from it, which tells us how often the segment had to
+// be fetched. opens counts every reader handle handed out (FullCacheResource
+// opens the underlying resource for every reader, cached or not); bytesRead
+// counts only the body actually pulled, so it is the refetch signal.
 type countingResource struct {
-	content []byte
-	opens   atomic.Int64
+	content   []byte
+	opens     atomic.Int64
+	bytesRead atomic.Int64
 }
 
 func (r *countingResource) Open() (io.ReadCloser, error) {
 	r.opens.Add(1)
-	return io.NopCloser(bytes.NewReader(r.content)), nil
+	return io.NopCloser(&countingReader{res: r, r: bytes.NewReader(r.content)}), nil
+}
+
+type countingReader struct {
+	res *countingResource
+	r   *bytes.Reader
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.res.bytesRead.Add(int64(n))
+	return n, err
 }
 
 func (r *countingResource) SizeHint() (int64, error) { return int64(len(r.content)), nil }
@@ -236,5 +251,58 @@ func TestOnReadIsReportedAfterTheFetch(t *testing.T) {
 	// The fetch is the open of the underlying resource
 	if opens := underlying.opens.Load(); opens != 1 || len(events) != 1 {
 		t.Fatalf("opens %d, events %v, want one fetch reported before one read", opens, events)
+	}
+}
+
+// With a write-back cache, the segment a first reader fetched is served to a
+// second reader from the cache - whether it drained to disk or is still the
+// in-memory write-back copy - so the underlying resource is not reopened.
+func TestReadThroughWithWriteBack(t *testing.T) {
+	content := []byte("0123456789abcdefghij")
+	cache, err := diskcache.NewCache(&diskcache.CacheOptions{
+		CacheDir:      t.TempDir(),
+		WriteBackSize: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("failed creating cache: %v", err)
+	}
+
+	underlying := &countingResource{content: content}
+	res := fullcacheresource.NewFullCacheResource(underlying, diskcache.Key{"segment-wb"}, cache, &fullcacheresource.FullCacheResourceOptions{})
+
+	// First reader fetches from the underlying resource and caches the content
+	// into write-back, which drains to disk behind the scenes.
+	reader, err := res.Open()
+	if err != nil {
+		t.Fatalf("failed opening: %v", err)
+	}
+	got, err := io.ReadAll(reader)
+	if closeErr := reader.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("failed reading: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("got %q, want %q", got, content)
+	}
+
+	// Second reader is served from the cache, write-back copy or disk file, so
+	// the underlying body is still read exactly once across both readers, even
+	// though each FullCacheResource.Open also handed out a fresh reader handle.
+	reader2, err := res.Open()
+	if err != nil {
+		t.Fatalf("failed reopening: %v", err)
+	}
+	defer reader2.Close()
+	got, err = io.ReadAll(reader2)
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("failed reading: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("got %q, want %q", got, content)
+	}
+	if read := underlying.bytesRead.Load(); read != int64(len(content)) {
+		t.Errorf("underlying body read %d bytes, want %d (fetched once)", read, len(content))
 	}
 }

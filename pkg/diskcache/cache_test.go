@@ -1,6 +1,7 @@
 package diskcache_test
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,6 +15,24 @@ func newCache(t *testing.T, dir string) *diskcache.Cache {
 	t.Helper()
 
 	cache, err := diskcache.NewCache(&diskcache.CacheOptions{CacheDir: dir})
+	if err != nil {
+		t.Fatalf("failed creating cache: %v", err)
+	}
+
+	select {
+	case <-cache.Indexed():
+	case <-time.After(10 * time.Second):
+		t.Fatal("cache did not finish indexing")
+	}
+
+	return cache
+}
+
+// newWriteBackCache builds a cache with write-back enabled
+func newWriteBackCache(t *testing.T, dir string, writeBackSize int64) *diskcache.Cache {
+	t.Helper()
+
+	cache, err := diskcache.NewCache(&diskcache.CacheOptions{CacheDir: dir, WriteBackSize: writeBackSize})
 	if err != nil {
 		t.Fatalf("failed creating cache: %v", err)
 	}
@@ -195,5 +214,260 @@ func TestAKeyCannotEscapeTheCacheDir(t *testing.T) {
 		if _, err := cache.Set(key, []byte("payload")); !errors.Is(err, diskcache.ErrInvalidKey) {
 			t.Errorf("key %v: got %v, want ErrInvalidKey", key, err)
 		}
+	}
+}
+
+// A segment admitted to write-back is served correctly before it has drained
+// (from memory or from a just-written file, whichever the eager writer reached
+// first), and drains to disk on Close.
+func TestWriteBackServesFromMemoryAndDrainsOnClose(t *testing.T) {
+	dir := t.TempDir()
+	cache := newWriteBackCache(t, dir, 1<<20)
+	defer cache.Close()
+
+	data := []byte("payload data")
+	key := diskcache.Key{"an-nzb", "segment-a"}
+	if _, err := cache.Set(key, data); err != nil {
+		t.Fatalf("failed storing: %v", err)
+	}
+
+	// Immediately after Set the item is visible and returns the exact data,
+	// whether the eager writer has drained it to disk or it is still in memory
+	if exists, _ := cache.Exists(key); !exists {
+		t.Error("segment is not visible")
+	}
+	item, size, err := cache.Open(key)
+	if err != nil {
+		t.Fatalf("failed opening segment: %v", err)
+	}
+	if size != int64(len(data)) {
+		t.Errorf("got size %d, want %d", size, len(data))
+	}
+	buf := make([]byte, len(data))
+	if _, err := item.ReadAt(buf, 0); err != nil && !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("failed reading segment: %v", err)
+	}
+	if !bytes.Equal(buf, data) {
+		t.Errorf("read = %q, want %q", buf, data)
+	}
+
+	if err := cache.Close(); err != nil {
+		t.Fatalf("failed closing cache: %v", err)
+	}
+
+	// Drained: on disk, indexed, nothing left pending
+	stats := cache.Stats()
+	if stats.Items != 1 || stats.Bytes != int64(len(data)) || stats.WriteBackBytes != 0 || stats.WriteBackItems != 0 {
+		t.Errorf("after close got items=%d bytes=%d write-back bytes=%d items=%d, want 1 of %d and 0", stats.Items, stats.Bytes, stats.WriteBackBytes, stats.WriteBackItems, len(data))
+	}
+	item, size, err = cache.Open(key)
+	if err != nil {
+		t.Fatalf("failed reopening drained segment: %v", err)
+	}
+	defer item.Close()
+	if size != int64(len(data)) {
+		t.Errorf("after close got size %d, want %d", size, len(data))
+	}
+	buf = make([]byte, len(data))
+	if _, err := item.ReadAt(buf, 0); err != nil && !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("failed reading drained segment: %v", err)
+	}
+	if !bytes.Equal(buf, data) {
+		t.Errorf("drained read = %q, want %q", buf, data)
+	}
+}
+
+// A Set that would overflow the buffer blocks until the writer frees room.
+// This uses an oversized first segment so draining it takes long enough to
+// observe the second Set waiting.
+func TestWriteBackAdmissionBackpressure(t *testing.T) {
+	dir := t.TempDir()
+	cache := newWriteBackCache(t, dir, 64)
+	defer cache.Close()
+
+	// Oversized admits on an empty buffer and keeps the writer draining long
+	// enough to observe the second Set waiting
+	big := bytes.Repeat([]byte{7}, 256<<20)
+	if _, err := cache.Set(diskcache.Key{"nzb", "big"}, big); err != nil {
+		t.Fatalf("failed storing big segment: %v", err)
+	}
+
+	entered := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(entered)
+		if _, err := cache.Set(diskcache.Key{"nzb", "small"}, []byte("small payload")); err != nil {
+			t.Errorf("failed storing small segment: %v", err)
+		}
+		close(done)
+	}()
+
+	<-entered
+	// The small Set must be blocked on admission while the buffer is full
+	select {
+	case <-done:
+		t.Fatal("second Set returned while the buffer was still full")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// Freeing room lets it admit
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("second Set never returned after room was made")
+	}
+
+	// The small one may still be pending, so both counts together hold it
+	stats := cache.Stats()
+	if held := stats.Items + stats.WriteBackItems; held != 2 {
+		t.Errorf("got %d items, want 2", held)
+	}
+}
+
+// A segment larger than the whole limit still admits (oversized) instead of
+// deadlocking on an empty buffer, and is still served once drained.
+func TestWriteBackOversizedSegmentAdmits(t *testing.T) {
+	dir := t.TempDir()
+	cache := newWriteBackCache(t, dir, 64)
+	defer cache.Close()
+
+	data := bytes.Repeat([]byte{1}, 1024)
+	key := diskcache.Key{"nzb", "big"}
+	if _, err := cache.Set(key, data); err != nil {
+		t.Fatalf("oversized segment did not admit: %v", err)
+	}
+	if err := cache.Close(); err != nil {
+		t.Fatalf("failed closing: %v", err)
+	}
+
+	item, size, err := cache.Open(key)
+	if err != nil {
+		t.Fatalf("failed opening oversized segment: %v", err)
+	}
+	defer item.Close()
+	if size != int64(len(data)) {
+		t.Errorf("got size %d, want %d", size, len(data))
+	}
+	buf := make([]byte, len(data))
+	if _, err := item.ReadAt(buf, 0); err != nil && !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("failed reading oversized segment: %v", err)
+	}
+	if !bytes.Equal(buf, data) {
+		t.Errorf("read = %q, want %q", buf, data)
+	}
+}
+
+// Removing a segment while its write-back write may be in flight must leave
+// the cache without the item and without a file, whatever the timing: if it
+// drained before Remove the file is unlinked, otherwise the pending entry is
+// dropped and the in-flight write is aborted at finalize.
+func TestRemoveWhilePendingLeavesNoFile(t *testing.T) {
+	dir := t.TempDir()
+	cache := newWriteBackCache(t, dir, 1<<20)
+
+	key := diskcache.Key{"an-nzb", "segment-a"}
+	if _, err := cache.Set(key, []byte("payload")); err != nil {
+		t.Fatalf("failed storing: %v", err)
+	}
+	if err := cache.Remove(key); err != nil {
+		t.Fatalf("failed removing pending: %v", err)
+	}
+	if err := cache.Close(); err != nil {
+		t.Fatalf("failed closing: %v", err)
+	}
+
+	if exists, _ := cache.Exists(key); exists {
+		t.Error("removed pending segment still present")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "an-nzb", "segment-a")); !os.IsNotExist(err) {
+		t.Errorf("file exists for removed pending segment: %v", err)
+	}
+	if stats := cache.Stats(); stats.Items != 0 || stats.Bytes != 0 {
+		t.Errorf("got %d items of %d bytes, want 0 of 0", stats.Items, stats.Bytes)
+	}
+}
+
+// RemoveAll must drop pending entries too, including an nzb that has only
+// pending segments and thus no on-disk directory.
+func TestRemoveAllWhilePending(t *testing.T) {
+	dir := t.TempDir()
+	cache := newWriteBackCache(t, dir, 1<<20)
+
+	for _, key := range []diskcache.Key{{"n", "a"}, {"n", "b"}, {"other", "c"}} {
+		if _, err := cache.Set(key, []byte("payload")); err != nil {
+			t.Fatalf("failed storing: %v", err)
+		}
+	}
+	if err := cache.RemoveAll(diskcache.Key{"n"}); err != nil {
+		t.Fatalf("failed removing all pending: %v", err)
+	}
+	if err := cache.Close(); err != nil {
+		t.Fatalf("failed closing: %v", err)
+	}
+
+	stats := cache.Stats()
+	if stats.Items != 1 || stats.Bytes != int64(len("payload")) {
+		t.Errorf("got %d items of %d bytes, want the one remaining item", stats.Items, stats.Bytes)
+	}
+	if exists, _ := cache.Exists(diskcache.Key{"n", "a"}); exists {
+		t.Error("pending entry under the removed prefix still present")
+	}
+}
+
+// Re-setting a still-pending key must leave the latest data in effect, whether
+// the writer flushed the older copy or aborted it.
+func TestReSetWhilePendingWinsLatest(t *testing.T) {
+	dir := t.TempDir()
+	cache := newWriteBackCache(t, dir, 1<<20)
+
+	key := diskcache.Key{"an-nzb", "segment-a"}
+	if _, err := cache.Set(key, []byte("aaa")); err != nil {
+		t.Fatalf("failed storing: %v", err)
+	}
+	if _, err := cache.Set(key, []byte("bbb")); err != nil {
+		t.Fatalf("failed re-storing: %v", err)
+	}
+	if err := cache.Close(); err != nil {
+		t.Fatalf("failed closing: %v", err)
+	}
+
+	stats := cache.Stats()
+	if stats.Items != 1 {
+		t.Errorf("got %d items, want 1", stats.Items)
+	}
+	item, _, err := cache.Open(key)
+	if err != nil {
+		t.Fatalf("failed opening: %v", err)
+	}
+	defer item.Close()
+	buf := make([]byte, 3)
+	if _, err := item.ReadAt(buf, 0); err != nil && !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("failed reading: %v", err)
+	}
+	if string(buf) != "bbb" {
+		t.Errorf("got %q, want %q", buf, "bbb")
+	}
+}
+
+// A Set after Close falls back to the synchronous store, so nothing is left
+// pending behind a cache that stopped draining.
+func TestWriteBackSetAfterCloseWritesThrough(t *testing.T) {
+	dir := t.TempDir()
+	cache := newWriteBackCache(t, dir, 1<<20)
+	if err := cache.Close(); err != nil {
+		t.Fatalf("failed closing: %v", err)
+	}
+
+	key := diskcache.Key{"an-nzb", "segment-a"}
+	if _, err := cache.Set(key, []byte("payload")); err != nil {
+		t.Fatalf("failed storing after close: %v", err)
+	}
+
+	stats := cache.Stats()
+	if stats.WriteBackItems != 0 || stats.Bytes != int64(len("payload")) {
+		t.Errorf("after-close set got write-back items %d and %d on-disk bytes, want 0 and %d", stats.WriteBackItems, stats.Bytes, len("payload"))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "an-nzb", "segment-a")); err != nil {
+		t.Errorf("file was not written through on after-close set: %v", err)
 	}
 }

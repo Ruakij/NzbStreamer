@@ -365,6 +365,18 @@ func observeCache(cache *diskcache.Cache) error {
 	hits := counter("cache.hits", metric.WithDescription("Reads served from the disk cache"))
 	misses := counter("cache.misses", metric.WithDescription("Reads the disk cache did not hold"))
 	evictions := counter("cache.evictions", metric.WithDescription("Items dropped to make room"))
+	writebackBytes := gauge("cache.writeback.bytes",
+		metric.WithDescription("Bytes the write-back buffer holds in memory, awaiting the disk write"),
+		metric.WithUnit("By"))
+	writebackItems := gauge("cache.writeback.items",
+		metric.WithDescription("Segments among them"))
+	writeBytes := counter("cache.write.bytes",
+		metric.WithDescription("Bytes the write-back writer has drained to disk since the process started"),
+		metric.WithUnit("By"))
+	writeItems := counter("cache.write.items",
+		metric.WithDescription("Segments among them"))
+	evictedBytes := counter("cache.evicted.bytes",
+		metric.WithDescription("Bytes dropped to make room, against cache.evictions which counts the items"))
 
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("failed creating the cache instruments: %w", err)
@@ -379,8 +391,13 @@ func observeCache(cache *diskcache.Cache) error {
 		observer.ObserveInt64(hits, stats.Hits)
 		observer.ObserveInt64(misses, stats.Misses)
 		observer.ObserveInt64(evictions, stats.Evictions)
+		observer.ObserveInt64(writebackBytes, stats.WriteBackBytes)
+		observer.ObserveInt64(writebackItems, int64(stats.WriteBackItems))
+		observer.ObserveInt64(writeBytes, stats.WriteBytes)
+		observer.ObserveInt64(writeItems, stats.Writes)
+		observer.ObserveInt64(evictedBytes, stats.EvictedBytes)
 		return nil
-	}, items, bytes, maxBytes, hits, misses, evictions)
+	}, items, bytes, maxBytes, hits, misses, evictions, writebackBytes, writebackItems, writeBytes, writeItems, evictedBytes)
 	if err != nil {
 		return fmt.Errorf("failed registering the cache metrics callback: %w", err)
 	}

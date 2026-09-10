@@ -86,8 +86,9 @@ type ShutdownConfig struct {
 }
 
 type CacheConfig struct {
-	Path    string `env:"CACHE_PATH, default=.cache"` // Path for segment-cache
-	MaxSize Bytes  `env:"CACHE_MAX_SIZE, default=0"`  // Maximum cache size, if unset allows unlimited size (not recommended)
+	Path          string `env:"CACHE_PATH, default=.cache"`      // Path for segment-cache
+	MaxSize       Bytes  `env:"CACHE_MAX_SIZE, default=0"`       // Maximum cache size, if unset allows unlimited size (not recommended)
+	WriteBackSize Bytes  `env:"CACHE_WRITEBACK_SIZE, default=0"` // Bytes the write-back buffer may hold in memory before draining to disk; 0 writes through synchronously
 }
 
 type LibraryConfig struct {

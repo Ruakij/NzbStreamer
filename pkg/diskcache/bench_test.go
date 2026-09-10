@@ -52,21 +52,17 @@ func BenchmarkCacheGet(b *testing.B) {
 	b.ReportAllocs()
 	b.SetBytes(int64(len(blob)))
 	for b.Loop() {
-		f, size, err := cache.Open(diskcache.Key{"bench", "seg"})
+		item, size, err := cache.Open(diskcache.Key{"bench", "seg"})
 		if err != nil {
 			b.Fatal(err)
 		}
-		var read int64
-		for {
-			n, err := f.Read(buf)
-			read += int64(n)
-			if err != nil {
-				break
-			}
+		n, rerr := item.ReadAt(buf, 0)
+		item.Close()
+		if rerr != nil {
+			b.Fatal(rerr)
 		}
-		f.Close()
-		if size != int64(len(blob)) || read != int64(len(blob)) {
-			b.Fatalf("read %d of %d, metadata says %d", read, len(blob), size)
+		if size != int64(len(blob)) || int64(n) != int64(len(blob)) {
+			b.Fatalf("read %d of %d, metadata says %d", n, len(blob), size)
 		}
 	}
 }
