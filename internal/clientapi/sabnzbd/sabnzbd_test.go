@@ -210,6 +210,30 @@ func TestAddingAnNzbThatFailsWhileWaitingIsAnsweredAsAFailedGrab(t *testing.T) {
 	}
 }
 
+// A release whose check dropped some files but presented the rest is still
+// added: the failed record says what happened, and the client's own
+// failed-download policy decides what to do with it, so it is not refused.
+func TestAddingAnNzbWhoseCheckDroppedFilesIsAnsweredAsAccepted(t *testing.T) {
+	service := &fakeService{
+		waitDone: true,
+		waited: nzbservice.QueueItem{
+			ID:                "Some.Release",
+			Stage:             nzbservice.StageFailed,
+			Err:               "health check failed: 1 files beyond repair and not presented: a.rar",
+			HealthCheckFailed: true,
+		},
+	}
+	handler := sabnzbd.NewHandler(service, sabnzbd.Config{AddWait: time.Second})
+
+	status, ids := addfile(t, handler)
+	if !status || len(ids) != 1 || ids[0] != "Some.Release" {
+		t.Fatalf("addfile answered %v %v for a dropped-files add", status, ids)
+	}
+	if len(service.archived) != 0 {
+		t.Errorf("a still-added release was archived: %v", service.archived)
+	}
+}
+
 // One still running when the wait is up is the accepted add it was before, and
 // the client polls for it as usual.
 func TestAddingAnNzbThatOutlastsTheWaitIsAccepted(t *testing.T) {
@@ -286,6 +310,28 @@ func TestQueueAndHistoryCarryWhatAClientReads(t *testing.T) {
 	// skip over rather than blacklisting the release
 	if items["Gone.Release"]["status"] != "Deleted" {
 		t.Errorf("a cancelled add reported %v", items["Gone.Release"]["status"])
+	}
+}
+
+// A scan is work against something already delivered, so the history reports
+// the record completed with its storage while it runs: a client polling for the
+// import gets its answer without waiting for the scan.
+func TestAScanIsReportedAsACompletedDownload(t *testing.T) {
+	service := &fakeService{
+		history: []nzbservice.QueueItem{
+			{ID: "Scanned.Release", Category: "tv", Stage: nzbservice.StageScanning, Bytes: 700},
+		},
+	}
+	handler := sabnzbd.NewHandler(service, sabnzbd.Config{CompleteDir: "/mnt/nzb"})
+
+	history, _ := call(t, handler, "mode=history")["history"].(map[string]any)
+	slot, _ := history["slots"].([]any)
+	item, _ := slot[0].(map[string]any)
+	if item["status"] != "Completed" {
+		t.Errorf("a scanned record reported %v", item["status"])
+	}
+	if item["storage"] != "/mnt/nzb/Scanned.Release" {
+		t.Errorf("a scanned record reported storage %v", item["storage"])
 	}
 }
 

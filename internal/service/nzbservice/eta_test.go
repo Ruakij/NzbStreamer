@@ -51,6 +51,27 @@ func TestABuildCountsTheVolumesItHasOpened(t *testing.T) {
 	}
 }
 
+// A scan is the work of a finished add: the download no longer counts, and the
+// bar is how far the settling has got against the probes it plans.
+func TestAScanReportsItsOwnProgressAgainstTheAddItFinished(t *testing.T) {
+	scanning := &QueueItem{
+		Stage:      StageScanning,
+		probeOps:   100,
+		buildOps:   40,
+		stageDone:  400,
+		stageTotal: 800,
+	}
+	if left, total := remainingOps(scanning); left != 400 || total != 800 {
+		t.Errorf("a half-done scan has %v of %v left, want 400 of 800", left, total)
+	}
+	if progress := progressOf(scanning, 400, 800); progress != 0.5 {
+		t.Errorf("a scanning item reported progress %v, want the scan's share", progress)
+	}
+	if !scanning.Done() {
+		t.Errorf("a scanning item is not in the history")
+	}
+}
+
 func TestAQueuedAddWaitsForTheOnesAheadOfIt(t *testing.T) {
 	service := &Service{rate: func() float64 { return 10 }}
 	service.slots.setLimit(1)

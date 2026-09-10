@@ -263,7 +263,7 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request, query map[stri
 			// the history entry says what happened and a client's own failed-
 			// download policy decides what to do with it, so it is not archived
 			// or refused
-			if strings.Contains(item.Err, nzbservice.ErrHealthCheckFailed.Error()) {
+			if item.HealthCheckFailed {
 				break // answer the add as accepted
 			}
 			if err := h.service.Archive(id, true); err != nil {
@@ -351,8 +351,10 @@ func (h *Handler) history(w http.ResponseWriter, query map[string][]string) {
 			"storage":       "",
 		}
 		// The path the client imports from. Only a completed add has one, and it
-		// is the folder every file of the nzb is presented under.
-		if item.Stage == nzbservice.StageCompleted {
+		// is the folder every file of the nzb is presented under. A scan is
+		// work against that folder, not a stage of the download, so it has one
+		// while it runs
+		if item.Stage == nzbservice.StageCompleted || item.Stage == nzbservice.StageScanning {
 			slot["storage"] = filepath.Join(h.config.CompleteDir, item.ID)
 		}
 		slots = append(slots, slot)
@@ -402,12 +404,19 @@ func (h *Handler) delete(w http.ResponseWriter, query map[string][]string, remov
 // queueStatus and historyStatus name a stage the way a client reads it. A
 // cancelled add is reported as `Deleted`, which both *arrs skip over: the cancel
 // was their own doing or the user's, and it is not a release to blacklist.
+//
+// StageScanning is the download being settled by the background pass. It never
+// reaches the queue listing - the item is history by then - and the history
+// reports it completed, since a client polling for the import must not wait for
+// a scan or read it as deleted.
 func queueStatus(stage nzbservice.Stage) string {
 	switch stage {
 	case nzbservice.StageQueued:
 		return "Queued"
 	case nzbservice.StageChecking:
 		return "Verifying"
+	case nzbservice.StageScanning:
+		return "Completed"
 	default:
 		return "Downloading"
 	}
@@ -415,7 +424,7 @@ func queueStatus(stage nzbservice.Stage) string {
 
 func historyStatus(stage nzbservice.Stage) string {
 	switch stage {
-	case nzbservice.StageCompleted:
+	case nzbservice.StageCompleted, nzbservice.StageScanning:
 		return "Completed"
 	case nzbservice.StageFailed:
 		return "Failed"

@@ -42,16 +42,19 @@ func (f *fakeFactory) DiscardSegmentStackFromNzbData(nzbData *nzbparser.NzbData)
 	f.discarded = append(f.discarded, nzbData.MetaName)
 }
 
-func (f *fakeFactory) BuildSegmentStackFromNzbData(_ *nzbparser.NzbData, _ nzbrecordfactory.ProgressFunc) (map[string]presentation.Openable, error) {
+func (f *fakeFactory) BuildSegmentStackFromNzbData(_ *nzbparser.NzbData, _ nzbrecordfactory.ProgressFunc) (nzbrecordfactory.BuildResult, error) {
 	if f.entered != nil {
 		close(f.entered)
 		<-f.release
 	}
 	if f.err != nil {
-		return nil, f.err
+		return nzbrecordfactory.BuildResult{}, f.err
 	}
 	f.builds.Add(1)
-	return map[string]presentation.Openable{"file.mkv": fakeFile{}}, f.packedErr
+	return nzbrecordfactory.BuildResult{
+		Presented: map[string]presentation.Openable{"file.mkv": fakeFile{}},
+		SourceOf:  map[string]string{"file.mkv": "some.release.rar"},
+	}, f.packedErr
 }
 
 // fakeFile is a file with nothing behind it: a tree is what these tests look at,
@@ -64,7 +67,11 @@ func (fakeFile) Open() (io.ReadSeekCloser, error) { return nil, errNoBytes }
 
 type healthyChecker struct{}
 
-func (healthyChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, _ filehealth.ProgressFunc) []filehealth.FailedGroup {
+func (healthyChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, _ filehealth.VerdictReport, _ filehealth.ProgressFunc) []filehealth.FailedGroup {
+	return nil
+}
+
+func (healthyChecker) Scan(_ context.Context, _ *nzbparser.NzbData, _ float64, _ map[string][]int, _ filehealth.VerdictReport, _ filehealth.ProgressFunc) []filehealth.FailedGroup {
 	return nil
 }
 
@@ -76,11 +83,39 @@ type unhealthyChecker struct {
 	groups []filehealth.FailedGroup
 }
 
-func (c unhealthyChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, _ filehealth.ProgressFunc) []filehealth.FailedGroup {
+func (c unhealthyChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, _ filehealth.VerdictReport, _ filehealth.ProgressFunc) []filehealth.FailedGroup {
+	return c.groups
+}
+
+func (c unhealthyChecker) Scan(_ context.Context, _ *nzbparser.NzbData, _ float64, _ map[string][]int, _ filehealth.VerdictReport, _ filehealth.ProgressFunc) []filehealth.FailedGroup {
 	return c.groups
 }
 
 func (unhealthyChecker) PlannedProbes(_ *nzbparser.NzbData) int { return 0 }
+
+// verdictChecker answers a check by reporting the verdicts the test says, then
+// failing the groups the test says, which is the shape a real check's answer
+// takes: verdicts on the way, failed groups at the end.
+type verdictChecker struct {
+	report func(report filehealth.VerdictReport)
+	groups []filehealth.FailedGroup
+}
+
+func (c verdictChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, report filehealth.VerdictReport, _ filehealth.ProgressFunc) []filehealth.FailedGroup {
+	if c.report != nil {
+		c.report(report)
+	}
+	return c.groups
+}
+
+func (c verdictChecker) Scan(_ context.Context, _ *nzbparser.NzbData, _ float64, _ map[string][]int, report filehealth.VerdictReport, _ filehealth.ProgressFunc) []filehealth.FailedGroup {
+	if c.report != nil {
+		c.report(report)
+	}
+	return c.groups
+}
+
+func (verdictChecker) PlannedProbes(_ *nzbparser.NzbData) int { return 0 }
 
 // filesFactory presents every file the nzb still names, by its own filename, so
 // a health-drop test can tell which of them made it into the tree.
@@ -92,12 +127,16 @@ func (f *filesFactory) DiscardSegmentStackFromNzbData(nzbData *nzbparser.NzbData
 	f.discarded = append(f.discarded, nzbData.MetaName)
 }
 
-func (f *filesFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData, _ nzbrecordfactory.ProgressFunc) (map[string]presentation.Openable, error) {
-	tree := map[string]presentation.Openable{}
-	for _, file := range nzbData.Files {
-		tree[file.Filename] = fakeFile{}
+func (f *filesFactory) BuildSegmentStackFromNzbData(nzbData *nzbparser.NzbData, _ nzbrecordfactory.ProgressFunc) (nzbrecordfactory.BuildResult, error) {
+	result := nzbrecordfactory.BuildResult{
+		Presented: map[string]presentation.Openable{},
+		SourceOf:  map[string]string{},
 	}
-	return tree, nil
+	for _, file := range nzbData.Files {
+		result.Presented[file.Filename] = fakeFile{}
+		result.SourceOf[file.Filename] = file.Filename
+	}
+	return result, nil
 }
 
 // fakeStore keeps what the real one keeps, in a map. Locked because an add runs
@@ -107,12 +146,20 @@ type fakeStore struct {
 	records   map[string]nzbstore.Record
 	presented map[string][]nzbstore.File
 	order     []string
+	// What the health rows hold, so a verdict recorded by the add path and a
+	// rescan the test triggers read back through the same interface
+	sourceFiles map[string]map[string]nzbstore.SourceFile
+	retryAfter  map[string]map[string]time.Time
+	verdicts    map[string]map[string]map[int]nzbstore.SegmentVerdict
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		records:   map[string]nzbstore.Record{},
-		presented: map[string][]nzbstore.File{},
+		records:     map[string]nzbstore.Record{},
+		presented:   map[string][]nzbstore.File{},
+		sourceFiles: map[string]map[string]nzbstore.SourceFile{},
+		retryAfter:  map[string]map[string]time.Time{},
+		verdicts:    map[string]map[string]map[int]nzbstore.SegmentVerdict{},
 	}
 }
 
@@ -207,6 +254,100 @@ func (s *fakeStore) Delete(name string) error {
 	return nil
 }
 
+func (s *fakeStore) EnsureSourceFiles(nzbName string, files []nzbstore.SourceFile) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	if s.sourceFiles[nzbName] == nil {
+		s.sourceFiles[nzbName] = map[string]nzbstore.SourceFile{}
+	}
+	for _, file := range files {
+		if _, ok := s.sourceFiles[nzbName][file.Filename]; !ok {
+			s.sourceFiles[nzbName][file.Filename] = file
+		}
+	}
+	return nil
+}
+
+func (s *fakeStore) SetRetryAfter(nzbName, filename string, after time.Time) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	if s.retryAfter[nzbName] == nil {
+		s.retryAfter[nzbName] = map[string]time.Time{}
+	}
+	s.retryAfter[nzbName][filename] = after
+	return nil
+}
+
+func (s *fakeStore) SegmentVerdicts(nzbName string, filenames []string) (map[string]map[int]nzbstore.SegmentVerdict, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	verdicts := make(map[string]map[int]nzbstore.SegmentVerdict, len(filenames))
+	for _, filename := range filenames {
+		if index := s.verdicts[nzbName][filename]; len(index) > 0 {
+			verdicts[filename] = index
+		}
+	}
+	return verdicts, nil
+}
+
+func (s *fakeStore) RecordProbes(nzbName string, probes []nzbstore.ProbeResult) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	for _, probe := range probes {
+		if s.verdicts[nzbName] == nil {
+			s.verdicts[nzbName] = map[string]map[int]nzbstore.SegmentVerdict{}
+		}
+		if s.verdicts[nzbName][probe.Filename] == nil {
+			s.verdicts[nzbName][probe.Filename] = map[int]nzbstore.SegmentVerdict{}
+		}
+		s.verdicts[nzbName][probe.Filename][probe.Index] = nzbstore.SegmentVerdict{
+			Filename: probe.Filename, Index: probe.Index,
+			MessageID: probe.MessageID, Present: probe.Present,
+			CheckedAt: time.Now(),
+		}
+	}
+	return nil
+}
+
+func (s *fakeStore) RemoveFiles(name string, paths []string) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	removed := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		removed[path] = true
+	}
+	kept := s.presented[name][:0]
+	for _, file := range s.presented[name] {
+		if !removed[file.Path] {
+			kept = append(kept, file)
+		}
+	}
+	s.presented[name] = kept
+	return nil
+}
+
+// aVerdict writes what a scan would have, so a test can stage store state the
+// service did not produce in this run
+func (s *fakeStore) aVerdict(nzbName, filename string, index int, present bool) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	if s.verdicts[nzbName] == nil {
+		s.verdicts[nzbName] = map[string]map[int]nzbstore.SegmentVerdict{}
+	}
+	if s.verdicts[nzbName][filename] == nil {
+		s.verdicts[nzbName][filename] = map[int]nzbstore.SegmentVerdict{}
+	}
+	s.verdicts[nzbName][filename][index] = nzbstore.SegmentVerdict{
+		Filename: filename, Index: index, Present: present, CheckedAt: time.Now(),
+	}
+}
+
 func (s *fakeStore) stage(name string) string {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -221,7 +362,14 @@ type blockingChecker struct {
 	release chan struct{}
 }
 
-func (c blockingChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, progress filehealth.ProgressFunc) []filehealth.FailedGroup {
+func (c blockingChecker) CheckFiles(_ context.Context, _ *nzbparser.NzbData, _ filehealth.VerdictReport, progress filehealth.ProgressFunc) []filehealth.FailedGroup {
+	progress(1, 2)
+	close(c.entered)
+	<-c.release
+	return nil
+}
+
+func (c blockingChecker) Scan(_ context.Context, _ *nzbparser.NzbData, _ float64, _ map[string][]int, _ filehealth.VerdictReport, progress filehealth.ProgressFunc) []filehealth.FailedGroup {
 	progress(1, 2)
 	close(c.entered)
 	<-c.release
@@ -482,7 +630,7 @@ func TestARestartRestoresHistoryAndResumesAnInterruptedAdd(t *testing.T) {
 	}
 
 	service := nzbservice.NewService(store, &fakeFactory{}, nil, nil, healthyChecker{})
-	if err := service.Init(); err != nil {
+	if err := service.Init(context.Background()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
@@ -587,6 +735,9 @@ func TestABeyondRepairGroupIsDroppedAndTheRestPresented(t *testing.T) {
 	}
 	if !strings.Contains(history[0].Err, "beyond repair") {
 		t.Errorf("the partial add reported %q, want it to mention beyond repair", history[0].Err)
+	}
+	if !history[0].HealthCheckFailed {
+		t.Errorf("the partial add did not mark itself as health-check-failed")
 	}
 	if got := store.stage(nzbData.MetaName); got != string(nzbservice.StageFailed) {
 		t.Errorf("the partial add is recorded in the store as %q", got)
@@ -722,7 +873,7 @@ func TestARestoredTreeIsListedFromTheStoreAndBuiltOnTheFirstRead(t *testing.T) {
 				t.Fatalf("SetFiles: %v", err)
 			}
 
-			if err := service.Init(); err != nil {
+			if err := service.Init(context.Background()); err != nil {
 				t.Fatalf("Init: %v", err)
 			}
 
@@ -784,7 +935,7 @@ func TestArchivingKeepsTheFilesPresentedAndSurvivesARestart(t *testing.T) {
 	}
 
 	restarted := nzbservice.NewService(store, &fakeFactory{}, []presentation.Presenter{presenter}, nil, healthyChecker{})
-	if err := restarted.Init(); err != nil {
+	if err := restarted.Init(context.Background()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	if history := restarted.History(); len(history) != 1 || !history[0].Archived {
@@ -796,5 +947,136 @@ func TestArchivingKeepsTheFilesPresentedAndSurvivesARestart(t *testing.T) {
 	}
 	if history := service.History(); history[0].Archived {
 		t.Error("restoring left the item archived")
+	}
+}
+
+// A miss on a post younger than the minimum age still fails the group and
+// drops it, but settles nothing: it becomes a retry, which is what leaves the
+// background pass able to re-ask once the post is old enough.
+func TestAMissOnAYoungPostIsARetryNotAVerdict(t *testing.T) {
+	presenter := &fakePresenter{files: map[string]presentation.Openable{}}
+	store := newFakeStore()
+	young := time.Now().Add(-time.Hour)
+	nzbData := &nzbparser.NzbData{
+		MetaName: "Some.Release",
+		Files: []nzbparser.File{
+			{Filename: "a.rar", ParsedDate: young, Segments: []nzbparser.Segment{{ID: "a1"}, {ID: "a2"}}},
+			{Filename: "b.mkv", ParsedDate: young, Segments: []nzbparser.Segment{{ID: "b1"}}},
+		},
+	}
+	checker := verdictChecker{
+		report: func(report filehealth.VerdictReport) {
+			// One position of the a.rar group is present, one is missing
+			report(&nzbData.Files[0], 0, true)
+			report(&nzbData.Files[0], 1, false)
+		},
+		groups: []filehealth.FailedGroup{{Name: "a.rar", Files: []string{"a.rar"}}},
+	}
+	service := nzbservice.NewService(store, &filesFactory{}, []presentation.Presenter{presenter}, nil, checker)
+	service.SetPeriodicScan(checker, nzbservice.PeriodicScanConfig{Interval: time.Hour, MinAge: 24 * time.Hour, Confidence: 0.99})
+
+	if err := service.AddNzb(nzbData); err != nil {
+		t.Fatalf("AddNzb: %v", err)
+	}
+
+	history := service.History()
+	if len(history) != 1 || history[0].Stage != nzbservice.StageFailed || !history[0].HealthCheckFailed {
+		t.Fatalf("the partial add was recorded as %+v", history)
+	}
+	if _, presented := presenter.files["Some.Release/b.mkv"]; !presented {
+		t.Errorf("the surviving file was not presented, got %v", presenter.files)
+	}
+	if len(presenter.files) != 1 {
+		t.Errorf("the failed group was presented: %v", presenter.files)
+	}
+
+	// The miss on the young post is no verdict: it left a retry instead
+	if _, ok := store.verdicts["Some.Release"]["a.rar"][1]; ok {
+		t.Errorf("the young miss was recorded as a verdict")
+	}
+	if after := store.retryAfter["Some.Release"]["a.rar"]; after.IsZero() {
+		t.Errorf("the young miss recorded no retry")
+	} else if want := young.Add(24 * time.Hour); !after.Equal(want) {
+		t.Errorf("the young miss may be re-asked at %v, want %v", after, want)
+	}
+	// The present verdict stands whatever the post's age
+	if got, ok := store.verdicts["Some.Release"]["a.rar"][0]; !ok || !got.Present {
+		t.Errorf("the confirmed segment was recorded as %+v, want present=true", got)
+	}
+}
+
+// A miss on a post old enough is a verdict, so the loss is durable.
+func TestAMissOnAnOldPostIsAVerdict(t *testing.T) {
+	store := newFakeStore()
+	old := time.Now().Add(-48 * time.Hour)
+	nzbData := &nzbparser.NzbData{
+		MetaName: "Some.Release",
+		Files:    []nzbparser.File{{Filename: "a.rar", ParsedDate: old, Segments: []nzbparser.Segment{{ID: "a1"}}}},
+	}
+	checker := verdictChecker{
+		report: func(report filehealth.VerdictReport) { report(&nzbData.Files[0], 0, false) },
+		groups: []filehealth.FailedGroup{{Name: "a.rar", Files: []string{"a.rar"}}},
+	}
+	service := nzbservice.NewService(store, &filesFactory{}, nil, nil, checker)
+	service.SetPeriodicScan(checker, nzbservice.PeriodicScanConfig{Interval: time.Hour, MinAge: 24 * time.Hour, Confidence: 0.99})
+
+	if err := service.AddNzb(nzbData); err != nil {
+		t.Fatalf("AddNzb: %v", err)
+	}
+
+	verdict, ok := store.verdicts["Some.Release"]["a.rar"][0]
+	if !ok || verdict.Present {
+		t.Errorf("the settled miss was recorded as %+v, want a present=false verdict", verdict)
+	}
+	if after := store.retryAfter["Some.Release"]["a.rar"]; !after.IsZero() {
+		t.Errorf("a settled miss left a retry at %v", after)
+	}
+	if got := store.stage("Some.Release"); got != string(nzbservice.StageFailed) {
+		t.Errorf("the add is recorded as %q", got)
+	}
+}
+
+// A verdict that failed a group outlives the process that made it: a build
+// over the raw nzb drops the group's files again, so a restart or a rebuild
+// does not re-present what a scan pulled back.
+func TestARebuildDropsWhatAVerdictFailed(t *testing.T) {
+	presenter := &fakePresenter{files: map[string]presentation.Openable{}}
+	store := newFakeStore()
+	nzbData := &nzbparser.NzbData{
+		MetaName: "Some.Release",
+		Files: []nzbparser.File{
+			{Filename: "a.rar", Segments: []nzbparser.Segment{{ID: "a1"}}},
+			{Filename: "b.mkv", Segments: []nzbparser.Segment{{ID: "b1"}}},
+		},
+	}
+	if err := store.Add(nzbData, string(nzbservice.StageCompleted), "tv"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := store.SetFiles("Some.Release", "settings", []nzbstore.File{
+		{Path: "Some.Release/b.mkv", Size: 42, Exact: true, Source: "b.mkv"},
+	}); err != nil {
+		t.Fatalf("SetFiles: %v", err)
+	}
+	// A scan found a.rar's segment missing and pulled its path back; the
+	// verdict is what remains of it
+	store.aVerdict("Some.Release", "a.rar", 0, false)
+
+	service := nzbservice.NewService(store, &filesFactory{}, []presentation.Presenter{presenter}, nil, healthyChecker{})
+	service.SetTreeKey("settings")
+	if err := service.Init(context.Background()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Opening the surviving file builds the tree from the raw nzb, which the
+	// verdict keeps to the survivors
+	file, listed := presenter.files["Some.Release/b.mkv"]
+	if !listed {
+		t.Fatalf("the restored tree lists %v", presenter.files)
+	}
+	if _, err := file.Open(); !errors.Is(err, errNoBytes) {
+		t.Fatalf("opening the file returned %v", err)
+	}
+	if len(presenter.files) != 1 {
+		t.Errorf("the rebuild re-presented the failed group: %v", presenter.files)
 	}
 }

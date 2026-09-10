@@ -39,6 +39,12 @@ const (
 	// is what a settings change costs. The add is over and the item stays
 	// history; this says what is happening to the files it already has
 	StageRebuilding Stage = "rebuilding"
+	// StageScanning is a finished add whose background pass is settling it at
+	// the periodic confidence. Like a rebuilding one it sits in the history:
+	// the add is over and the tree is importable, and this says what is
+	// running against it. It is never written to the store - the scan state is
+	// the verdict rows, and the pass resumes on its own after a restart
+	StageScanning Stage = "scanning"
 )
 
 // QueueItem is one add, from accepted to finished. Its id is the nzbs name,
@@ -67,6 +73,11 @@ type QueueItem struct {
 	Added    time.Time `json:"added"`
 	Finished time.Time `json:"finished"`
 	Err      string    `json:"error"`
+	// HealthCheckFailed marks a failed add whose check dropped some files but
+	// presented the rest, the case a client api treats as still added. finish
+	// derives it from the error; the store keeps only the message, so an item
+	// restored from a restart does not carry it
+	HealthCheckFailed bool `json:"health_check_failed"`
 
 	// Cancelled by Cancel, watched by the add at its stage boundaries and by
 	// every request the add has in flight. done is closed by finish, for
@@ -90,22 +101,25 @@ type QueueItem struct {
 
 // Done reports whether the item belongs in the history rather than the queue.
 // A rebuilding one does: its add finished, and what is running is a rebuild of
-// what that add produced.
+// what that add produced. A scanning one does the same way: the download is
+// over and a client polling for the import must not wait for a scan.
 func (i QueueItem) Done() bool {
 	return i.Stage == StageCompleted || i.Stage == StageFailed ||
-		i.Stage == StageCancelled || i.Stage == StageRebuilding
+		i.Stage == StageCancelled || i.Stage == StageRebuilding ||
+		i.Stage == StageScanning
 }
 
 // Add accepts an nzb and returns the id to track it under. The work happens in
 // the background, which is the point of the queue: parsing, probing and reading
 // an archive header take seconds and a client wants the id now.
 func (s *Service) Add(nzbData *nzbparser.NzbData, category string) (string, error) {
-	if err := s.enqueue(nzbData, category); err != nil {
+	item, err := s.enqueue(nzbData, category)
+	if err != nil {
 		return "", err
 	}
 
 	go func() {
-		err := s.addNzb(nzbData, true)
+		err := s.addNzb(item.ctx, nzbData, true)
 		s.finish(nzbData.MetaName, err)
 		if err != nil {
 			slog.Error("Couldnt add nzb", "MetaName", nzbData.MetaName, "error", err)
@@ -289,8 +303,9 @@ func (s *Service) teardown(id string) {
 // interrupts is resumed and one that fails is still reportable. A name already
 // in flight is refused here rather than after the work; a finished one is
 // replaced, since an nzb that was removed or that failed may be added again and
-// the later attempt is the one worth reporting.
-func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
+// the later attempt is the one worth reporting. The item comes back with the
+// acceptance, since the context its work runs under is the item's own.
+func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) (*QueueItem, error) {
 	// An nzb that is already presented is refused before anything is written,
 	// since accepting it would replace the record of the add that built it and
 	// then fail on its own duplicate check
@@ -298,7 +313,7 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 	_, present := s.nzbFiledata[nzbData.MetaName]
 	s.mutex.Unlock()
 	if present {
-		return ErrNzbAlreadyExists
+		return nil, ErrNzbAlreadyExists
 	}
 
 	s.queueMutex.Lock()
@@ -308,7 +323,7 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 		// record would leave the rebuild writing into an add that replaced it
 		if !existing.Done() || existing.Stage == StageRebuilding {
 			s.queueMutex.Unlock()
-			return ErrNzbAlreadyExists
+			return nil, ErrNzbAlreadyExists
 		}
 		s.remove(nzbData.MetaName)
 	}
@@ -320,13 +335,13 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 	// growing past what the cache can keep warm is what nothing else stops
 	if lib := s.library(); lib.MaxBytes > 0 && lib.Bytes+bytes > lib.MaxBytes {
 		s.queueMutex.Unlock()
-		return fmt.Errorf("%w: %s would take it to %s of %s", ErrLibraryFull,
+		return nil, fmt.Errorf("%w: %s would take it to %s of %s", ErrLibraryFull,
 			nzbData.MetaName, bytesize.Bytes(lib.Bytes+bytes), bytesize.Bytes(lib.MaxBytes))
 	}
 
 	probeOps, buildOps := s.plannedOps(nzbData)
 	ctx, cancel := context.WithCancel(context.Background())
-	s.queue = append(s.queue, &QueueItem{
+	item := &QueueItem{
 		ctx:        ctx,
 		cancel:     cancel,
 		ID:         nzbData.MetaName,
@@ -338,16 +353,17 @@ func (s *Service) enqueue(nzbData *nzbparser.NzbData, category string) error {
 		done:       make(chan struct{}),
 		probeOps:   probeOps,
 		buildOps:   buildOps,
-	})
+	}
+	s.queue = append(s.queue, item)
 	s.queueMutex.Unlock()
 
 	// The nzb goes in with it, since what resumes an interrupted add is having
 	// the nzb to resume it from
 	if err := s.store.Add(nzbData, string(StageQueued), category); err != nil {
-		return fmt.Errorf("failed storing nzb %s: %w", nzbData.MetaName, err)
+		return nil, fmt.Errorf("failed storing nzb %s: %w", nzbData.MetaName, err)
 	}
 
-	return nil
+	return item, nil
 }
 
 // plannedOps is what the add will ask the news servers for: the segments the
@@ -453,17 +469,17 @@ func (s *Service) stage(id string, stage Stage) error {
 	return nil
 }
 
-// addContext is what the add of this nzb is cancelled by. Restoring the store
-// walks the same path over a record that already ended, and nothing is tracking
-// that, so nothing cancels it either.
-func (s *Service) addContext(id string) context.Context {
+// addContext is what the add of this nzb is cancelled by: the queue item's
+// context, which is what Cancel answers. The fallback is what an add without
+// an item runs on, since nothing is tracking that to cancel it.
+func (s *Service) addContext(fallback context.Context, id string) context.Context {
 	s.queueMutex.Lock()
 	defer s.queueMutex.Unlock()
 
 	if item := s.find(id); item != nil {
 		return item.ctx
 	}
-	return context.Background()
+	return fallback
 }
 
 // progress records how far the running stage of an add has got. It is called
@@ -497,6 +513,7 @@ func (s *Service) finish(id string, err error) {
 	case err != nil:
 		item.Stage = StageFailed
 		item.Err = err.Error()
+		item.HealthCheckFailed = errors.Is(err, ErrHealthCheckFailed)
 	default:
 		item.Stage = StageCompleted
 	}

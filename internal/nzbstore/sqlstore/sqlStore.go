@@ -23,6 +23,8 @@ import (
 //go:embed migrations/sqlite/*.sql
 var migrations embed.FS
 
+var _ nzbstore.NzbStore = (*Store)(nil)
+
 type Store struct {
 	db *sql.DB
 
@@ -30,7 +32,7 @@ type Store struct {
 	// it, so both are buffered here and written by flushLoop instead of by the
 	// read
 	pendingMutex sync.Mutex
-	pending      map[string]activity
+	pending      map[segmentKey]activity
 	pendingUsage map[string]usage
 	closing      chan struct{}
 	flusherDone  sync.WaitGroup
@@ -82,7 +84,7 @@ func New(path string) (*Store, error) {
 
 	store := &Store{
 		db:           db,
-		pending:      make(map[string]activity),
+		pending:      make(map[segmentKey]activity),
 		pendingUsage: make(map[string]usage),
 		closing:      make(chan struct{}),
 	}

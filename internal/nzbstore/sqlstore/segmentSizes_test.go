@@ -2,21 +2,64 @@ package sqlstore
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"git.ruekov.eu/ruakij/nzbStreamer/internal/nzbstore"
+	"git.ruekov.eu/ruakij/nzbStreamer/pkg/nzbparser"
 )
+
+var posted = time.Unix(1700000000, 0)
+
+// The nzb is named after the file it was read from, with the extension
+// resolved away, so the record key and the parsed name are the same constant.
+const (
+	nzbFilename = "Some.Release.nzb"
+	nzbName     = "Some.Release"
+)
+
+// withSourceFiles adds the nzb record the source files hang off, and records
+// the named files under it. A source file row references the nzb row, so
+// activity and verdicts have nothing to attach to until both exist.
+func withSourceFiles(t *testing.T, dir string, filenames ...string) *Store {
+	t.Helper()
+
+	store := storeAt(t, dir)
+	data, err := nzbparser.ParseNzb(strings.NewReader(nzbXML), nzbFilename)
+	if err != nil {
+		t.Fatalf("ParseNzb: %v", err)
+	}
+	if data.MetaName != nzbName {
+		t.Fatalf("parsed nzb is named %q, want %q", data.MetaName, nzbName)
+	}
+	if err := store.Add(data, "completed", ""); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	files := make([]nzbstore.SourceFile, len(filenames))
+	for i, filename := range filenames {
+		files[i] = nzbstore.SourceFile{Filename: filename, PostedAt: posted}
+	}
+	if err := store.EnsureSourceFiles(nzbName, files); err != nil {
+		t.Fatalf("EnsureSourceFiles: %v", err)
+	}
+
+	return store
+}
 
 func TestSegmentSizesSurviveReopening(t *testing.T) {
 	dir := t.TempDir()
 
-	store := storeAt(t, dir)
-	store.RecordSegmentSize("a@example.com", 716800)
-	store.RecordSegmentSize("b@example.com", 12345)
+	store := withSourceFiles(t, dir, "file.rar")
+	store.RecordSegmentSize(nzbName, "file.rar", "a@example.com", 1, 716800)
+	store.RecordSegmentSize(nzbName, "file.rar", "b@example.com", 2, 12345)
 	// The later value wins, so a re-measurement is not a conflict
-	store.RecordSegmentSize("b@example.com", 54321)
+	store.RecordSegmentSize(nzbName, "file.rar", "b@example.com", 2, 54321)
 	store.Close()
 
-	sizes, err := storeAt(t, dir).SegmentSizes([]string{"a@example.com", "b@example.com", "missing@example.com"})
+	sizes, err := storeAt(t, dir).SegmentSizes(nzbName,
+		[]string{"a@example.com", "b@example.com", "missing@example.com"})
 	if err != nil {
 		t.Fatalf("SegmentSizes: %v", err)
 	}
@@ -29,42 +72,49 @@ func TestSegmentSizesSurviveReopening(t *testing.T) {
 	}
 }
 
-func TestForgetSegments(t *testing.T) {
-	store := storeAt(t, t.TempDir())
-
-	store.RecordSegmentSize("a@example.com", 716800)
-	store.flushSegmentSizes()
-	// Still buffered, so forgetting has to reach the buffer as well as the table
-	store.RecordSegmentSize("b@example.com", 12345)
-
-	if err := store.ForgetSegments([]string{"a@example.com", "b@example.com"}); err != nil {
-		t.Fatalf("ForgetSegments: %v", err)
+// Sizes are learned per nzb now, so a message-id another nzb also names is not
+// answered out of that one's rows.
+func TestSegmentSizesOfOneNzbDoNotLeakIntoAnother(t *testing.T) {
+	store := withSourceFiles(t, t.TempDir(), "other.rar")
+	data, err := nzbparser.ParseNzb(strings.NewReader(nzbXML), "Other.Release.nzb")
+	if err != nil {
+		t.Fatalf("ParseNzb: %v", err)
 	}
+	if err := store.Add(data, "completed", ""); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := store.EnsureSourceFiles(data.MetaName, []nzbstore.SourceFile{
+		{Filename: "other.rar", PostedAt: posted},
+	}); err != nil {
+		t.Fatalf("EnsureSourceFiles: %v", err)
+	}
+
+	store.RecordSegmentSize(data.MetaName, "other.rar", "a@example.com", 1, 716800)
 	store.flushSegmentSizes()
 
-	sizes, err := store.SegmentSizes([]string{"a@example.com", "b@example.com"})
+	sizes, err := store.SegmentSizes(nzbName, []string{"a@example.com"})
 	if err != nil {
 		t.Fatalf("SegmentSizes: %v", err)
 	}
 	if len(sizes) != 0 {
-		t.Errorf("forgotten sizes came back: %v", sizes)
+		t.Errorf("another nzb's size leaked: %v", sizes)
 	}
 }
 
 func TestSegmentActivityCountsWhatWasReadAndWhatWasFetchedTwice(t *testing.T) {
-	store := storeAt(t, t.TempDir())
+	store := withSourceFiles(t, t.TempDir(), "file.rar")
 
-	store.RecordSegmentSize("a@example.com", 700)
-	store.RecordSegmentRead("a@example.com")
+	store.RecordSegmentSize(nzbName, "file.rar", "a@example.com", 1, 700)
+	store.RecordSegmentRead(nzbName, "file.rar", 1)
 	// Read from the cache, so it belongs to the working set without a fetch
-	store.RecordSegmentRead("b@example.com")
-	store.RecordSegmentSize("b@example.com", 300)
+	store.RecordSegmentRead(nzbName, "file.rar", 2)
+	store.RecordSegmentSize(nzbName, "file.rar", "b@example.com", 2, 300)
 	store.flushSegmentSizes()
 
 	// Evicted and read again, which is what the working set outgrowing the cache
 	// looks like
-	store.RecordSegmentSize("a@example.com", 700)
-	store.RecordSegmentRead("a@example.com")
+	store.RecordSegmentSize(nzbName, "file.rar", "a@example.com", 1, 700)
+	store.RecordSegmentRead(nzbName, "file.rar", 1)
 	store.flushSegmentSizes()
 
 	// Every window is answered off one scan, and one whose cutoff is in the
@@ -86,18 +136,40 @@ func TestSegmentActivityCountsWhatWasReadAndWhatWasFetchedTwice(t *testing.T) {
 	}
 }
 
-// More ids than fit in one statement, which is what the chunking is for
+// The same post can sit under two files of one nzb; it is one segment of the
+// working set and its bytes count once.
+func TestSegmentActivityCountsAPostOnceWhateverTheFilesSay(t *testing.T) {
+	store := withSourceFiles(t, t.TempDir(), "a.rar", "b.rar")
+
+	store.RecordSegmentSize(nzbName, "a.rar", "same@example.com", 1, 700)
+	store.RecordSegmentRead(nzbName, "a.rar", 1)
+	// Learned separately, and at a different length, by the file that names the
+	// same post again
+	store.RecordSegmentSize(nzbName, "b.rar", "same@example.com", 1, 300)
+	store.RecordSegmentRead(nzbName, "b.rar", 1)
+	store.flushSegmentSizes()
+
+	activity, err := store.SegmentActivitySince([]time.Time{time.Now().Add(-time.Hour)})
+	if err != nil {
+		t.Fatalf("SegmentActivitySince: %v", err)
+	}
+	if activity[0] != (SegmentActivity{WorkingSetBytes: 700, WorkingSetSegments: 1}) {
+		t.Errorf("activity: got %+v, want one segment of 700 bytes", activity[0])
+	}
+}
+
+// More segments than fit in one statement, which is what the chunking is for
 func TestSegmentSizesBeyondOneStatement(t *testing.T) {
-	store := storeAt(t, t.TempDir())
+	store := withSourceFiles(t, t.TempDir(), "file.rar")
 
 	ids := make([]string, 2000)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("%d@example.com", i)
-		store.RecordSegmentSize(ids[i], int64(i))
+		store.RecordSegmentSize(nzbName, "file.rar", ids[i], i, int64(i))
 	}
 	store.flushSegmentSizes()
 
-	sizes, err := store.SegmentSizes(ids)
+	sizes, err := store.SegmentSizes(nzbName, ids)
 	if err != nil {
 		t.Fatalf("SegmentSizes: %v", err)
 	}
@@ -106,5 +178,25 @@ func TestSegmentSizesBeyondOneStatement(t *testing.T) {
 	}
 	if sizes[ids[1999]] != 1999 {
 		t.Errorf("last size: got %d", sizes[ids[1999]])
+	}
+}
+
+// Activity whose source file has gone - an nzb deleted while its reads were
+// still buffered - is dropped at flush rather than written against nothing.
+func TestSegmentActivityForAForgottenFileIsDropped(t *testing.T) {
+	store := withSourceFiles(t, t.TempDir(), "file.rar")
+	store.RecordSegmentRead(nzbName, "gone.rar", 1)
+
+	if err := store.Delete(nzbName); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	store.flushSegmentSizes()
+
+	activity, err := store.SegmentActivitySince([]time.Time{time.Now().Add(-time.Hour)})
+	if err != nil {
+		t.Fatalf("SegmentActivitySince: %v", err)
+	}
+	if activity[0] != (SegmentActivity{}) {
+		t.Errorf("activity of a deleted nzb survived: %+v", activity[0])
 	}
 }

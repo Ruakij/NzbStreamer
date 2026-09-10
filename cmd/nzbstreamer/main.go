@@ -203,7 +203,26 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager, c Config) {
 		UndecidedAccept:   c.Probe.UndecidedAccept,
 	}, nntpPool.SegmentExists)
 
+	// The background pass probes against a mount clients are reading, so its
+	// parallelism is its own setting and falls back to the same connection sum
+	periodicParallel := c.Probe.PeriodicParallelism
+	if periodicParallel <= 0 {
+		periodicParallel = totalConns
+	}
+	periodicChecker := filehealth.NewDefaultChecker(filehealth.CheckerConfig{
+		AddConfidence:     c.Probe.PeriodicConfidence,
+		MaxParallel:       periodicParallel,
+		MaxMissingPercent: c.Probe.MaxMissingPercent,
+		Par2Safety:        c.Probe.Par2Safety,
+		UndecidedAccept:   c.Probe.UndecidedAccept,
+	}, nntpPool.SegmentExists)
+
 	service := nzbservice.NewService(store, factory, presenters, []trigger.Trigger{folderTrigger}, healthChecker)
+	service.SetPeriodicScan(periodicChecker, nzbservice.PeriodicScanConfig{
+		Interval:   c.Probe.PeriodicInterval,
+		MinAge:     c.Probe.MinAge,
+		Confidence: c.Probe.PeriodicConfidence,
+	})
 	service.SetBlacklist(c.Filesystem.Blacklist)
 	service.SetNzbFileBlacklist(c.NzbConfig.FileBlacklist)
 	service.SetPathFlatteningDepth(c.Filesystem.FlattenMaxDepth)
@@ -243,10 +262,10 @@ func start(ctx context.Context, sm *shutdownmanager.ShutdownManager, c Config) {
 	// must not read a half-restored library waits for service.Ready
 	// The nolint is the metrics the pool records on its own: a measurement is
 	// about the process, not about a request, so it takes no context from one
-	go func() { //nolint:contextcheck
-		nntpPool.Probe()
+	go func() {
+		nntpPool.Probe() //nolint:contextcheck
 
-		if err := service.Init(); err != nil {
+		if err := service.Init(ctx); err != nil {
 			slog.Error("Failed initializing service", "error", err)
 			os.Exit(1)
 		}

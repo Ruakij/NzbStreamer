@@ -41,6 +41,40 @@ type File struct {
 	Path  string
 	Size  int64
 	Exact bool
+	// Source is the nzb's own filename the presented path was built from, the
+	// volume-set member or raw content file a verdict on the source file
+	// reaches this path through
+	Source string
+}
+
+// SourceFile is one of the nzb's own files, the input to a check.
+type SourceFile struct {
+	Filename string
+	PostedAt time.Time
+}
+
+// SegmentVerdict is what is known about one segment of one source file. Sparse:
+// absent entries mean unknown. Size -1 means not measured.
+type SegmentVerdict struct {
+	Filename  string
+	Index     int
+	MessageID string
+	Size      int64
+	Present   bool
+	CheckedAt time.Time
+	FetchedAt time.Time
+	Fetches   int
+}
+
+// ProbeResult is one probe/fetch outcome to persist. Server "" writes no
+// segment_missing row, which is the shape of an answer that cannot name the
+// server that gave it.
+type ProbeResult struct {
+	Filename  string
+	Index     int
+	MessageID string
+	Present   bool
+	Server    string
 }
 
 // ErrNotFound reports a name no record is kept under.
@@ -64,5 +98,22 @@ type NzbStore interface {
 	SetFiles(name, treeKey string, files []File) error
 	// Files reads back what SetFiles recorded
 	Files(name string) ([]File, error)
+	// RemoveFiles deletes the given presented paths, the inverse of registering
+	// a subset of the tree
+	RemoveFiles(name string, paths []string) error
+	// EnsureSourceFiles records the nzb's own files a health verdict attaches
+	// to. Idempotent: an upsert that leaves an existing row's retry_after and
+	// posted_at alone
+	EnsureSourceFiles(nzbName string, files []SourceFile) error
+	// SetRetryAfter records that a file's posts are younger than the minimum
+	// age a miss counts as final from, and when it is worth asking again
+	SetRetryAfter(nzbName, filename string, after time.Time) error
+	// SegmentVerdicts answers, per filename, what is known about the segments
+	// of that source file. Only rows that exist come back; a segment nothing
+	// has touched has no verdict
+	SegmentVerdicts(nzbName string, filenames []string) (map[string]map[int]SegmentVerdict, error)
+	// RecordProbes persists probe and fetch outcomes against the source files
+	// of one nzb
+	RecordProbes(nzbName string, probes []ProbeResult) error
 	Delete(name string) error
 }

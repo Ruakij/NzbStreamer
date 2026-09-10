@@ -16,11 +16,11 @@ import (
 	"git.ruekov.eu/ruakij/nzbStreamer/pkg/resource"
 )
 
-// storeFiles records what an nzb presents, so the next start lists it from one
-// query instead of walking its archives over the network again. A size it could
-// not ask for leaves the whole tree unstored: a partial one would present fewer
-// files than the nzb has.
-func (s *Service) storeFiles(metaName string, tree map[string]presentation.Openable) {
+// storeFiles records what an nzb presents, and the nzb's own file each path
+// was built from, which is what a verdict on a source file reaches the path
+// through. A size it could not ask for leaves the whole tree unstored: a
+// partial one would present fewer files than the nzb has.
+func (s *Service) storeFiles(metaName string, tree map[string]presentation.Openable, sourceOf map[string]string) {
 	if s.treeKey == "" {
 		return
 	}
@@ -33,7 +33,7 @@ func (s *Service) storeFiles(metaName string, tree map[string]presentation.Opena
 				"nzb", metaName, "file", fullPath, "error", err)
 			return
 		}
-		files = append(files, nzbstore.File{Path: fullPath, Size: size, Exact: exact})
+		files = append(files, nzbstore.File{Path: fullPath, Size: size, Exact: exact, Source: sourceOf[fullPath]})
 	}
 
 	if err := s.store.SetFiles(metaName, s.treeKey, files); err != nil {
@@ -120,12 +120,12 @@ func (t *lazyTree) open(fullPath string) (presentation.Openable, error) {
 
 	if t.files == nil {
 		// An archive left packed still built the volumes this is asked for
-		files, err := t.service.buildTree(t.data, nil)
+		files, sourceOf, err := t.service.buildTree(t.data, nil)
 		if err != nil && !errors.Is(err, nzbrecordfactory.ErrArchiveLeftPacked) {
 			return nil, err
 		}
 		t.files = files
-		t.service.reconcile(t.data, files)
+		t.service.reconcile(t.data, files, sourceOf)
 	}
 
 	file, ok := t.files[fullPath]
@@ -141,7 +141,7 @@ func (t *lazyTree) open(fullPath string) (presentation.Openable, error) {
 //
 // It runs in the background because a presenter calls open with its own tree
 // locked, and re-registering takes that same lock.
-func (s *Service) reconcile(nzbData *nzbparser.NzbData, tree map[string]presentation.Openable) {
+func (s *Service) reconcile(nzbData *nzbparser.NzbData, tree map[string]presentation.Openable, sourceOf map[string]string) {
 	built := make([]string, 0, len(tree))
 	for fullPath := range tree {
 		built = append(built, fullPath)
@@ -170,7 +170,7 @@ func (s *Service) reconcile(nzbData *nzbparser.NzbData, tree map[string]presenta
 		s.mutex.Unlock()
 
 		s.register(nzbData, tree)
-		s.storeFiles(nzbData.MetaName, tree)
+		s.storeFiles(nzbData.MetaName, tree, sourceOf)
 	}()
 }
 

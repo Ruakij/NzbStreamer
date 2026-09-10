@@ -142,6 +142,25 @@ type ProbeConfig struct {
 	// to the sum of the servers connections when 0 or less
 	AddParallelism int `env:"PROBE_ADD_PARALLELISM, default=0"`
 
+	// PeriodicConfidence is the fraction of each group's segments the
+	// background pass settles at, which continues what the add covered. With
+	// the tolerance at zero it is also the covered fraction, so 0.99 is very
+	// nearly a census; STAT rides a pipelined connection, so a census is
+	// seconds, not a download. Raising it picks up where the add stopped,
+	// lowering it leaves groups above target and skipped.
+	PeriodicConfidence float64 `env:"PROBE_PERIODIC_CONFIDENCE, default=0.99"`
+	// PeriodicParallelism bounds concurrent segment-checks of the background
+	// pass, which competes with reads for the connections; defaults to the sum
+	// of the servers connections when 0 or less, and this is the first thing an
+	// operator turns down
+	PeriodicParallelism int           `env:"PROBE_PERIODIC_PARALLELISM, default=0"`
+	PeriodicInterval    time.Duration `env:"PROBE_PERIODIC_INTERVAL, default=168h"` // How often the background pass runs, and how long an answer counts as fresh; 0 or less disables the pass
+	// MinAge is how old a post must be for a missing article to count as gone
+	// rather than as not yet arrived. A miss on a younger post still fails the
+	// group, but records a retry instead of a verdict, so the background pass
+	// re-asks once the post is old enough
+	MinAge time.Duration `env:"PROBE_MIN_AGE, default=24h"`
+
 	// Reserved for a future repair tolerance, and unused while it is zero:
 	MaxMissingPercent float64 `env:"PROBE_MAX_MISSING_PERCENT, default=100"`
 	Par2Safety        float64 `env:"PROBE_PAR2_SAFETY, default=0.9"`

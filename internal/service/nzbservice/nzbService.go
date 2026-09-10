@@ -3,6 +3,7 @@
 package nzbservice
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -56,6 +57,14 @@ type Service struct {
 	filenameReplacementBelowLevensteinRatio float32
 	healthChecker                           filehealth.Checker
 	exactSizeClasses                        []filenameops.FileClass
+	// The background pass and its settings, wired by SetPeriodicScan. A nil
+	// checker means there is no pass
+	periodicChecker filehealth.Checker
+	periodicConfig  PeriodicScanConfig
+	// What this process asked the store to record for posts younger than
+	// MinAge, which is what lets the pass re-ask a failed group. The store
+	// keeps retry_after but answers no read for it
+	retryAfter map[string]map[string]time.Time
 	// treeKey identifies the settings above that decide what a tree looks like,
 	// so a stored one is only restored while they are unchanged. Empty stores
 	// and restores nothing.
@@ -170,10 +179,17 @@ func (s *Service) SetExactSizeClasses(classes []filenameops.FileClass) {
 
 // Initialize the service; Load NzbData from store; build filedata and add to filesystem; Register to triggers
 //
-// It runs in the background of a start, so the presenters are up while the trees
-// are rebuilt; Ready reports when it is done.
-func (s *Service) Init() error {
+// It runs in the background of a start, so the presenters are up while the
+// trees are rebuilt; Ready reports when it is done. The context is what the
+// background pass holds, which is cancelled on shutdown.
+func (s *Service) Init(ctx context.Context) error {
 	defer s.ready.Store(true)
+
+	// The periodic pass runs alongside the restore: it probes against releases
+	// clients can already read, on a schedule of its own
+	if s.periodicChecker != nil && s.periodicConfig.Interval > 0 {
+		go s.runPeriodicScans(ctx)
+	}
 
 	slog.Debug("Getting nzbData from store")
 	records, err := s.store.List()
@@ -195,7 +211,11 @@ func (s *Service) Init() error {
 		// so the health check does not happen again. How it ends is recorded, in
 		// the queue and in the store, since one that cannot be rebuilt is not a
 		// completed download any more
-		case StageCompleted:
+		//
+		// A scanning stage is never written to the store, so one in a record is
+		// a process that died mid-scan; nothing was running on its behalf but
+		// the pass, which resumes on its own
+		case StageCompleted, StageScanning:
 			s.restore(record)
 
 			// What it presents is a pure function of the nzb and the settings,
@@ -217,7 +237,7 @@ func (s *Service) Init() error {
 						"remaining", s.restoring.Add(-1))
 				}()
 
-				if err := s.addNzb(record.Data, false); err != nil {
+				if err := s.addNzb(ctx, record.Data, false); err != nil {
 					slog.Error("Couldnt rebuild nzb", "MetaName", record.Data.MetaName, "error", err)
 					s.failedRebuild(record.Data.MetaName, err)
 				}
@@ -281,11 +301,12 @@ var (
 // Add parsed nzb-data, and wait for it. Add() is the same thing without the
 // wait.
 func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
-	if err := s.enqueue(nzbData, ""); err != nil {
+	item, err := s.enqueue(nzbData, "")
+	if err != nil {
 		return err
 	}
 
-	err := s.addNzb(nzbData, true)
+	err = s.addNzb(item.ctx, nzbData, true)
 	s.finish(nzbData.MetaName, err)
 
 	// A release added with some files dropped is still added: the record says
@@ -299,19 +320,20 @@ func (s *Service) AddNzb(nzbData *nzbparser.NzbData) error {
 }
 
 // addNzb builds the tree for an nzb. isNew separates an add from restoring what
-// the store already holds.
-func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
+// the store already holds. The context the caller holds is what an add without
+// a queue item of its own runs under; one with an item is cancelled by it.
+func (s *Service) addNzb(ctx context.Context, nzbData *nzbparser.NzbData, isNew bool) (err error) {
 	started := time.Now()
 
 	release := s.slots.acquire()
 	defer release()
 
-	ctx := s.addContext(nzbData.MetaName)
+	ctx = s.addContext(ctx, nzbData.MetaName)
 
 	slog.Debug("Adding nzb", "MetaName", nzbData.MetaName)
 
 	defer func() {
-		recordAdd(started, err)
+		recordAdd(ctx, started, err)
 		slog.Debug("Add done", "MetaName", nzbData.MetaName, "error", err,
 			"took", took(started))
 	}()
@@ -366,7 +388,13 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 			return err
 		}
 
-		failed := s.healthChecker.CheckFiles(ctx, nzbData, progress)
+		// The rows a verdict hangs off are in place before the check reports
+		// against them, and what it reports is persisted as it lands
+		s.ensureSourceFiles(nzbData)
+		recorder := newProbeRecorder(s, nzbData.MetaName, s.probeMinAge(), offsetsOf(filehealth.Groups(nzbData)))
+
+		failed := s.healthChecker.CheckFiles(ctx, nzbData, recorder.report, progress)
+		recorder.flush()
 		if len(failed) > 0 {
 			droppedSet := make(map[string]struct{})
 			for _, group := range failed {
@@ -404,7 +432,7 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 		return err
 	}
 
-	tree, packed := s.buildTree(nzbData, progress)
+	tree, sourceOf, packed := s.buildTree(nzbData, progress)
 	if packed != nil && !errors.Is(packed, nzbrecordfactory.ErrArchiveLeftPacked) {
 		return packed
 	}
@@ -422,7 +450,7 @@ func (s *Service) addNzb(nzbData *nzbparser.NzbData, isNew bool) (err error) {
 
 	s.measure(nzbData.MetaName, tree)
 	s.register(nzbData, tree)
-	s.storeFiles(nzbData.MetaName, tree)
+	s.storeFiles(nzbData.MetaName, tree, sourceOf)
 
 	// The record already holds it: enqueue wrote it there when the add was
 	// accepted, and finish records how this ends
@@ -459,19 +487,28 @@ func (s *Service) filterNzbFiles(nzbData *nzbparser.NzbData) {
 }
 
 // buildTree turns an nzb into the files it presents, keyed by the path each is
-// presented under. It is the whole naming decision - the blacklists,
-// deobfuscation and flattening - and the stored tree is a cache of its answer,
-// which is why a restore that goes on to build runs exactly this.
+// presented under, and by the nzb's own file each was built from. It is the
+// whole naming decision - the blacklists, deobfuscation and flattening - and
+// the stored tree is a cache of its answer, which is why a restore that goes on
+// to build runs exactly this.
 //
 // A returned ErrArchiveLeftPacked comes with a usable tree, in which an archive
 // nothing could open is presented as the volumes it is; any other error does not.
-func (s *Service) buildTree(nzbData *nzbparser.NzbData, progress nzbrecordfactory.ProgressFunc) (map[string]presentation.Openable, error) {
+func (s *Service) buildTree(nzbData *nzbparser.NzbData, progress nzbrecordfactory.ProgressFunc) (map[string]presentation.Openable, map[string]string, error) {
 	s.filterNzbFiles(nzbData)
 
-	files, packed := s.factory.BuildSegmentStackFromNzbData(nzbData, progress)
+	// A group a persisted verdict has failed is not built again: the build
+	// would re-present what a scan pulled back, and a rebuild of a failed
+	// record would resurrect what its failure dropped
+	s.dropFailedGroups(nzbData)
+
+	result, packed := s.factory.BuildSegmentStackFromNzbData(nzbData, progress)
 	if packed != nil && !errors.Is(packed, nzbrecordfactory.ErrArchiveLeftPacked) {
-		return nil, fmt.Errorf("failed building segment-stack for %s: %w", nzbData.MetaName, packed)
+		return nil, nil, fmt.Errorf("failed building segment-stack for %s: %w", nzbData.MetaName, packed)
 	}
+
+	files := result.Presented
+	sourceOf := result.SourceOf
 
 	for name := range files {
 		if s.isBlacklistedFilename(name) {
@@ -485,13 +522,62 @@ func (s *Service) buildTree(nzbData *nzbparser.NzbData, progress nzbrecordfactor
 	}
 
 	tree := make(map[string]presentation.Openable, len(files))
-	for filepath, file := range files {
-		filepath = s.deobfuscateFilename(filepath, paths, nzbData)
+	treeSource := make(map[string]string, len(files))
+	for name, file := range files {
+		filepath := s.deobfuscateFilename(name, paths, nzbData)
 		filepath = s.flattenPath(filepath, paths)
-		tree[path.Join(nzbData.MetaName, filepath)] = file
+		fullPath := path.Join(nzbData.MetaName, filepath)
+		tree[fullPath] = file
+		treeSource[fullPath] = sourceOf[name]
 	}
 
-	return tree, packed
+	return tree, treeSource, packed
+}
+
+// dropFailedGroups removes the files of groups a persisted verdict has failed
+// from the nzb, the way the add path drops what its check found before it
+// builds. A failed group is hidden, not served with its holes filled, and a
+// verdict is what carries that across restarts.
+func (s *Service) dropFailedGroups(nzbData *nzbparser.NzbData) {
+	groups := filehealth.Groups(nzbData)
+	if len(groups) == 0 {
+		return
+	}
+
+	verdicts, err := s.store.SegmentVerdicts(nzbData.MetaName, contentFilenames(groups))
+	if err != nil {
+		slog.Warn("Failed reading segment verdicts, building what the nzb names",
+			"nzb", nzbData.MetaName, "error", err)
+		return
+	}
+
+	dropped := make(map[string]bool)
+	for _, g := range groups {
+		for _, file := range g.Files {
+			for local := range file.Segments {
+				if verdict, knownRow := verdicts[file.Filename][local]; knownRow && !verdict.Present {
+					slog.Warn("Not building a group a scan has failed",
+						"nzb", nzbData.MetaName, "group", g.Name)
+					for _, member := range g.Files {
+						dropped[member.Filename] = true
+					}
+					break
+				}
+			}
+		}
+	}
+	if len(dropped) == 0 {
+		return
+	}
+
+	filesLeft := nzbData.Files[:0]
+	for _, file := range nzbData.Files {
+		if dropped[file.Filename] {
+			continue
+		}
+		filesLeft = append(filesLeft, file)
+	}
+	nzbData.Files = filesLeft
 }
 
 // register presents a tree and records what it presents. Sizing happens outside

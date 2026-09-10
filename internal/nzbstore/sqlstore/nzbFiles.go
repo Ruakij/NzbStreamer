@@ -22,8 +22,8 @@ func (s *Store) SetFiles(name, treeKey string, files []nzbstore.File) error {
 
 	for _, file := range files {
 		if _, err := tx.Exec(
-			"INSERT INTO nzb_file (nzb_name, path, size, exact) VALUES (?, ?, ?, ?)",
-			name, file.Path, file.Size, file.Exact,
+			"INSERT INTO nzb_file (nzb_name, path, size, exact, source_file) VALUES (?, ?, ?, ?, ?)",
+			name, file.Path, file.Size, file.Exact, file.Source,
 		); err != nil {
 			return fmt.Errorf("failed storing file %s of %s: %w", file.Path, name, err)
 		}
@@ -40,7 +40,7 @@ func (s *Store) SetFiles(name, treeKey string, files []nzbstore.File) error {
 }
 
 func (s *Store) Files(name string) ([]nzbstore.File, error) {
-	rows, err := s.db.Query("SELECT path, size, exact FROM nzb_file WHERE nzb_name = ?", name)
+	rows, err := s.db.Query("SELECT path, size, exact, source_file FROM nzb_file WHERE nzb_name = ? ORDER BY path", name)
 	if err != nil {
 		return nil, fmt.Errorf("failed listing files of %s: %w", name, err)
 	}
@@ -49,7 +49,7 @@ func (s *Store) Files(name string) ([]nzbstore.File, error) {
 	var files []nzbstore.File
 	for rows.Next() {
 		var file nzbstore.File
-		if err := rows.Scan(&file.Path, &file.Size, &file.Exact); err != nil {
+		if err := rows.Scan(&file.Path, &file.Size, &file.Exact, &file.Source); err != nil {
 			return nil, fmt.Errorf("failed reading file row of %s: %w", name, err)
 		}
 		files = append(files, file)

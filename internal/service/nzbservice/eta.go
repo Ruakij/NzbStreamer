@@ -19,6 +19,11 @@ func remainingOps(item *QueueItem) (left, total float64) {
 	total = float64(item.probeOps + item.buildOps)
 
 	switch {
+	case item.Stage == StageScanning:
+		// The add is over; what is left is the scan settling it, and that is
+		// the whole of what the bar shows
+		total = float64(item.stageTotal)
+		return float64(item.stageTotal - item.stageDone), total
 	case item.Done() || item.Stage == StageCancelling:
 		return 0, total
 	case item.Stage == StageQueued:
@@ -45,7 +50,9 @@ func progressOf(item *QueueItem, left, total float64) float64 {
 	switch {
 	case item.Stage == StageCompleted:
 		return 1
-	case item.Done() || item.Stage == StageCancelling:
+	// A scanning item is finished as an add; its bar is the scan it is running,
+	// driven by the stage counters
+	case item.Done() && item.Stage != StageScanning, item.Stage == StageCancelling:
 		return 0
 	case total > 0:
 		return min(max(1-left/total, 0), 1)

@@ -37,13 +37,13 @@ var outcomeKey = attribute.Key("outcome")
 // series.
 var stageKey = attribute.Key("stage")
 
-func recordAdd(started time.Time, err error) {
+func recordAdd(ctx context.Context, started time.Time, err error) {
 	outcome := "ok"
 	if err != nil {
 		outcome = "error"
 	}
 
-	addDuration.Record(context.Background(), time.Since(started).Seconds(),
+	addDuration.Record(ctx, time.Since(started).Seconds(),
 		metric.WithAttributes(outcomeKey.String(outcome)))
 }
 

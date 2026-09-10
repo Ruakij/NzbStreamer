@@ -421,7 +421,7 @@ function strip(stats) {
 
 // The stage values are the api's; the column only has room for the short form
 // of the long ones.
-const stageLabels = { completed: "done", cancelled: "stop", cancelling: "stopping", rebuilding: "rebuild" };
+const stageLabels = { completed: "done", cancelled: "stop", cancelling: "stopping", rebuilding: "rebuild", scanning: "scan" };
 
 // An add still running carries how far it has got and what the api estimates is
 // left of it, the wait for a slot included, so a queued one reads as a wait

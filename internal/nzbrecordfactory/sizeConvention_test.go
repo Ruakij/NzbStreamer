@@ -60,7 +60,7 @@ func TestOnlyATailDecodedLeavesTheConventionUnknown(t *testing.T) {
 // With nothing decoded yet, one segment is fetched to settle the convention,
 // and its length is kept so no later build repeats the probe.
 func TestProbingSettlesTheConvention(t *testing.T) {
-	store := &fakeSizeStore{known: map[string]int64{}, recorded: map[string]int64{}}
+	store := newFakeSizeStore()
 
 	var fetched []string
 	getSegment := func(_, id string) ([]byte, error) {
@@ -80,7 +80,9 @@ func TestProbingSettlesTheConvention(t *testing.T) {
 	if len(fetched) != 1 || fetched[0] != "a@example.com" {
 		t.Errorf("probe fetched %v, want one full segment", fetched)
 	}
-	if store.recorded["a@example.com"] != 480000 {
+	// The length is kept at the segment's position in the file, the space the
+	// scan writes in, not at the nzb's 1-based number attribute
+	if store.recorded[segmentRef{index: 0}] != 480000 {
 		t.Errorf("the probed length was not kept: %v", store.recorded)
 	}
 }

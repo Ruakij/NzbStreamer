@@ -56,6 +56,19 @@ func recorder(missing ...string) (SegmentExistsFunc, *[]string) {
 	}, &checked
 }
 
+// verdicts collects what a VerdictReport was told, in probe order.
+type verdict struct {
+	file    string
+	index   int
+	present bool
+}
+
+func verdictReport(out *[]verdict) VerdictReport {
+	return func(file *nzbparser.File, index int, present bool) {
+		*out = append(*out, verdict{file.Filename, index, present})
+	}
+}
+
 func failedNames(groups []FailedGroup) [][]string {
 	names := make([][]string, len(groups))
 	for i, g := range groups {
@@ -73,7 +86,7 @@ func TestGroupedVolumeSetIsProbedAsOneUnit(t *testing.T) {
 		fileWith("a.r00", "s5", "s6", "s7", "s8"),
 		fileWith("a.r01", "s9", "s10", "s11", "s12"),
 		fileWith("b.mkv", "m1", "m2", "m3", "m4"),
-	), nil)
+	), nil, nil)
 
 	if len(failed) != 1 {
 		t.Fatalf("got %d failed groups, want 1: %v", len(failed), failedNames(failed))
@@ -90,11 +103,11 @@ func TestMissingSegmentFailsTheGroupAndStopsEarly(t *testing.T) {
 	// probeOrder(8) = [0,4,2,6,1,5,3,7]; position 1 is segment index 4 (s5)
 	exists, checked := recorder("s5")
 	checker := NewDefaultChecker(config(1), exists)
-
 	checker.config.MaxParallel = 1
+
 	failed := checker.CheckFiles(t.Context(), nzbWith(
 		fileWith("a.rar", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"),
-	), nil)
+	), nil, nil)
 
 	if len(failed) != 1 {
 		t.Fatalf("got %d failed groups, want 1", len(failed))
@@ -111,7 +124,7 @@ func TestCleanGroupIsProbedToTheConfidence(t *testing.T) {
 
 	failed := checker.CheckFiles(t.Context(), nzbWith(
 		fileWith("a.rar", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"),
-	), nil)
+	), nil, nil)
 
 	if len(failed) != 0 {
 		t.Fatalf("got failed groups %v, want none", failedNames(failed))
@@ -126,7 +139,7 @@ func TestDisabledCheckDoesNothing(t *testing.T) {
 	exists, checked := recorder("s1")
 	checker := NewDefaultChecker(config(0), exists)
 
-	if failed := checker.CheckFiles(t.Context(), nzbWith(fileWith("a.rar", "s1")), nil); len(failed) != 0 {
+	if failed := checker.CheckFiles(t.Context(), nzbWith(fileWith("a.rar", "s1")), nil, nil); len(failed) != 0 {
 		t.Fatalf("got failed groups %v, want none", failedNames(failed))
 	}
 	if len(*checked) != 0 {
@@ -143,7 +156,7 @@ func TestFailedGroupCarriesItsFiles(t *testing.T) {
 		fileWith("a.rar", "s1", "s2", "s3", "s4"),
 		fileWith("a.r00", "s5", "s6", "s7", "s8"),
 		fileWith("a.r01", "s9", "s10", "s11", "s12"),
-	), nil)
+	), nil, nil)
 
 	if len(failed) != 1 {
 		t.Fatalf("got %d failed groups, want 1: %v", len(failed), failedNames(failed))
@@ -179,14 +192,14 @@ func TestScanCountsKnownPositionsWithoutProbing(t *testing.T) {
 	checker := NewDefaultChecker(config(1), exists)
 
 	file := fileWith("a.rar", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8")
-	g := group{Name: "a.rar", Files: []*nzbparser.File{&file}, Segments: 8}
+	g := ContentGroup{Name: "a.rar", Files: []*nzbparser.File{&file}, Segments: 8}
 
-	covered, err := checker.scan(t.Context(), g, []int{0}, 4, nil)
+	covered, err := checker.scan(t.Context(), g, []int{0}, 4, nil, nil)
 	if err != nil {
 		t.Fatalf("scan error: %v", err)
 	}
-	// order[:4] = [0,4,2,6]; position 0 is skipped, so 3 are probed plus the
-	// known one counts -> 4 covered.
+	// The known position counts, so only the remaining 3 of the target are
+	// asked of the server.
 	if covered != 4 {
 		t.Errorf("covered = %d, want 4", covered)
 	}
@@ -221,7 +234,7 @@ func TestProgressEndsAtEverythingItProbed(t *testing.T) {
 
 	failed := checker.CheckFiles(t.Context(), nzbWith(
 		fileOf("a.rar", "s", 8),
-	), progress)
+	), nil, progress)
 	if len(failed) != 0 {
 		t.Fatalf("got failed groups %v, want none", failedNames(failed))
 	}
@@ -245,7 +258,7 @@ func TestUnhealthyGroup(t *testing.T) {
 	failed := checker.CheckFiles(t.Context(), nzbWith(
 		fileWith("a.rar", "s1", "s2", "s3", "s4"),
 		fileWith("b.mkv", "m1", "m2", "m3", "m4"),
-	), nil)
+	), nil, nil)
 
 	if len(failed) != 1 {
 		t.Fatalf("got %d failed groups, want 1: %v", len(failed), failedNames(failed))
@@ -257,14 +270,185 @@ func TestUnhealthyGroup(t *testing.T) {
 
 func TestScanStopsEarlyOnMissing(t *testing.T) {
 	file := fileWith("a.rar", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8")
-	g := group{Name: "a.rar", Files: []*nzbparser.File{&file}, Segments: 8}
+	g := ContentGroup{Name: "a.rar", Files: []*nzbparser.File{&file}, Segments: 8}
 
 	exists, _ := recorder("s5")
 	checker := NewDefaultChecker(config(1), exists)
 	checker.config.MaxParallel = 1
 
-	_, err := checker.scan(t.Context(), g, nil, 8, nil)
+	var got []verdict
+	_, err := checker.scan(t.Context(), g, nil, 8, verdictReport(&got), nil)
 	if !errors.Is(err, ErrSegmentsMissing) {
 		t.Errorf("scan err = %v, want ErrSegmentsMissing", err)
+	}
+	// The miss itself is a verdict and is reported; the probes after it never
+	// ran and so have nothing to report.
+	want := []verdict{{"a.rar", 0, true}, {"a.rar", 4, false}}
+	if !slices.Equal(got, want) {
+		t.Errorf("verdicts = %v, want %v", got, want)
+	}
+}
+
+func TestProbeErrorIsNoVerdict(t *testing.T) {
+	// One probe never gets an answer; that says nothing about the segments,
+	// so the group must come back neither failed nor missing, and the errored
+	// probe must reach no VerdictReport.
+	exists := func(id string) (bool, error) {
+		if id == "s1" {
+			return false, errors.New("connection refused")
+		}
+		return true, nil
+	}
+	checker := NewDefaultChecker(config(1), exists)
+
+	var got []verdict
+	failed := checker.CheckFiles(t.Context(), nzbWith(
+		fileWith("a.rar", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"),
+	), verdictReport(&got), nil)
+	if len(failed) != 0 {
+		t.Fatalf("got failed groups %v, want none", failedNames(failed))
+	}
+	// The seven answered probes are verdicts; the errored one is not.
+	if len(got) != 7 || slices.ContainsFunc(got, func(v verdict) bool { return v.index == 0 }) {
+		t.Errorf("verdicts = %v, want the 7 present ones and none for the error", got)
+	}
+
+	file := fileWith("a.rar", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8")
+	g := ContentGroup{Name: "a.rar", Files: []*nzbparser.File{&file}, Segments: 8}
+	if _, err := checker.scan(t.Context(), g, nil, 8, nil, nil); !errors.Is(err, ErrProbeFailed) {
+		t.Errorf("scan err = %v, want ErrProbeFailed", err)
+	}
+}
+
+func TestScanUsesTheConfidenceItIsGiven(t *testing.T) {
+	// AddConfidence is 0, which disables CheckFiles; Scan still runs to the
+	// confidence it is handed.
+	exists, checked := recorder()
+	checker := NewDefaultChecker(config(0), exists)
+
+	data := nzbWith(fileOf("a.rar", "s", 8))
+	if failed := checker.Scan(t.Context(), data, 0, nil, nil, nil); len(failed) != 0 {
+		t.Fatalf("got failed groups %v, want none", failedNames(failed))
+	}
+	if len(*checked) != 0 {
+		t.Errorf("a confidence of 0 probed %v, want nothing", *checked)
+	}
+
+	if failed := checker.Scan(t.Context(), data, 0.5, nil, nil, nil); len(failed) != 0 {
+		t.Fatalf("got failed groups %v, want none", failedNames(failed))
+	}
+	if want := 4; len(*checked) != want {
+		t.Errorf("probed %d segments, want %d", len(*checked), want)
+	}
+}
+
+func TestScanProbesOnlyWhatIsNotKnown(t *testing.T) {
+	// probeOrder(8) = [0,4,2,6,1,5,3,7]; positions 3, 5 and 7 count as present
+	// already, so reaching the target of 4 costs one probe, not a walk over
+	// order[:4]. Repeats and out-of-range entries add nothing.
+	exists, checked := recorder()
+	checker := NewDefaultChecker(config(1), exists)
+
+	var got []verdict
+	failed := checker.Scan(t.Context(), nzbWith(
+		fileWith("a.rar", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"),
+	), 0.5, map[string][]int{"a.rar": {3, 5, 7, 99, 3}}, verdictReport(&got), nil)
+
+	if len(failed) != 0 {
+		t.Fatalf("got failed groups %v, want none", failedNames(failed))
+	}
+	if want := []string{"s1"}; !slices.Equal(*checked, want) {
+		t.Errorf("probed %v, want %v", *checked, want)
+	}
+	if want := []verdict{{"a.rar", 0, true}}; !slices.Equal(got, want) {
+		t.Errorf("verdicts = %v, want %v", got, want)
+	}
+}
+
+func TestScanResumeWidensPastTheFirstPassPrefix(t *testing.T) {
+	// probeOrder(8) = [0,4,2,6,1,5,3,7]. A first pass to 0.5 covers order[:4];
+	// a second pass to 0.75 with those positions as known must walk on past
+	// them and probe exactly the two next positions, not re-walk the prefix.
+	// Regression for a loop bound that stopped at order[target-1] and skipped
+	// the known positions inside it.
+	exists1, _ := recorder()
+	checker := NewDefaultChecker(config(1), exists1)
+	checker.config.MaxParallel = 1
+
+	data := nzbWith(fileOf("a.rar", "s", 8))
+
+	var known []int
+	failed := checker.Scan(t.Context(), data, 0.5, nil, func(_ *nzbparser.File, index int, present bool) {
+		if present {
+			known = append(known, index)
+		}
+	}, nil)
+	if len(failed) != 0 {
+		t.Fatalf("first pass failed groups %v, want none", failedNames(failed))
+	}
+	if want := []int{0, 4, 2, 6}; !slices.Equal(known, want) {
+		t.Fatalf("first pass covered %v, want %v", known, want)
+	}
+
+	exists2, checked2 := recorder()
+	resume := NewDefaultChecker(config(1), exists2)
+	resume.config.MaxParallel = 1
+
+	failed = resume.Scan(t.Context(), data, 0.75, map[string][]int{"a.rar": known}, nil, nil)
+	if len(failed) != 0 {
+		t.Fatalf("resumed pass failed groups %v, want none", failedNames(failed))
+	}
+	// order[4:6] = positions 1 and 5, which the first pass never reached.
+	if want := []string{"s2", "s6"}; !slices.Equal(*checked2, want) {
+		t.Errorf("resumed pass probed %v, want %v", *checked2, want)
+	}
+}
+
+func TestScanVerdictsCarryFileAndFlattenedIndex(t *testing.T) {
+	exists, _ := recorder()
+	checker := NewDefaultChecker(config(1), exists)
+
+	data := nzbWith(
+		fileWith("a.rar", "s1", "s2"),
+		fileWith("a.r00", "s3", "s4"),
+	)
+	var got []verdict
+	failed := checker.Scan(t.Context(), data, 1, nil, verdictReport(&got), nil)
+	if len(failed) != 0 {
+		t.Fatalf("got failed groups %v, want none", failedNames(failed))
+	}
+
+	slices.SortFunc(got, func(a, b verdict) int { return a.index - b.index })
+	want := []verdict{
+		{"a.rar", 0, true},
+		{"a.rar", 1, true},
+		{"a.r00", 2, true},
+		{"a.r00", 3, true},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("verdicts = %v, want %v", got, want)
+	}
+}
+
+func TestScanWithNilKnownAndReportMatchesCheckFiles(t *testing.T) {
+	data := func() *nzbparser.NzbData {
+		return nzbWith(fileOf("a.rar", "s", 8), fileOf("b.mkv", "m", 4))
+	}
+
+	exists1, checked1 := recorder()
+	check1 := NewDefaultChecker(config(0.5), exists1)
+	check1.config.MaxParallel = 1
+	failed1 := check1.CheckFiles(t.Context(), data(), nil, nil)
+
+	exists2, checked2 := recorder()
+	check2 := NewDefaultChecker(config(0.5), exists2)
+	check2.config.MaxParallel = 1
+	failed2 := check2.Scan(t.Context(), data(), 0.5, nil, nil, nil)
+
+	if !slices.EqualFunc(failedNames(failed1), failedNames(failed2), slices.Equal) {
+		t.Errorf("CheckFiles failed %v, Scan failed %v", failedNames(failed1), failedNames(failed2))
+	}
+	if !slices.Equal(*checked1, *checked2) {
+		t.Errorf("CheckFiles probed %v, Scan probed %v", *checked1, *checked2)
 	}
 }
