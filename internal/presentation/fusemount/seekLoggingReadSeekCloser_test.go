@@ -44,7 +44,7 @@ type erroringReader struct {
 	io.ReadSeekCloser
 }
 
-func (erroringReader) Read(p []byte) (int, error) { return 0, errors.New("boom") }
+func (erroringReader) Read(_ []byte) (int, error) { return 0, errors.New("boom") }
 
 // captureSlog points slog at a buffer for assertion.
 func captureSlog(t *testing.T) (*bytes.Buffer, func()) {

@@ -199,12 +199,12 @@ func (fs *FS) cleanupEmptyDirs(node *Node) {
 	}
 }
 
-func (fs *FS) Mkdir(ctx context.Context, name string) error {
+func (fs *FS) Mkdir(_ context.Context, _ string) error {
 	return ErrReadOnlyFilesystem
 }
 
 // Implement Open from the interface (adjusted to match the signature)
-func (fs *FS) Open(ctx context.Context, name string) (io.ReadCloser, error) {
+func (fs *FS) Open(_ context.Context, name string) (io.ReadCloser, error) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
@@ -220,7 +220,7 @@ func (fs *FS) Open(ctx context.Context, name string) (io.ReadCloser, error) {
 }
 
 // Implement Stat from the interface
-func (fs *FS) Stat(ctx context.Context, name string) (*webdav.FileInfo, error) {
+func (fs *FS) Stat(_ context.Context, name string) (*webdav.FileInfo, error) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
@@ -284,22 +284,22 @@ func (fs *FS) ReadDir(ctx context.Context, name string, recursive bool) ([]webda
 }
 
 // Implement Create from the interface — note that it's read-only, hence no-op
-func (fs *FS) Create(ctx context.Context, name string, body io.ReadCloser, options *webdav.CreateOptions) (*webdav.FileInfo, bool, error) {
+func (fs *FS) Create(_ context.Context, _ string, _ io.ReadCloser, _ *webdav.CreateOptions) (*webdav.FileInfo, bool, error) {
 	return nil, false, ErrReadOnlyFilesystem
 }
 
 // Implement RemoveAll from the interface as no-op because it's read-only
-func (fs *FS) RemoveAll(ctx context.Context, name string, options *webdav.RemoveAllOptions) error {
+func (fs *FS) RemoveAll(_ context.Context, _ string, _ *webdav.RemoveAllOptions) error {
 	return ErrReadOnlyFilesystem
 }
 
 // Implement Copy from the interface as no-op because it's read-only
-func (fs *FS) Copy(ctx context.Context, name, dest string, options *webdav.CopyOptions) (bool, error) {
+func (fs *FS) Copy(_ context.Context, _, _ string, _ *webdav.CopyOptions) (bool, error) {
 	return false, ErrReadOnlyFilesystem
 }
 
 // Implement Move from the interface as no-op because it's read-only
-func (fs *FS) Move(ctx context.Context, name, dest string, options *webdav.MoveOptions) (bool, error) {
+func (fs *FS) Move(_ context.Context, _, _ string, _ *webdav.MoveOptions) (bool, error) {
 	return false, ErrReadOnlyFilesystem
 }
 
@@ -416,7 +416,7 @@ func (sf *simpleFileReader) end() (int64, error) {
 	return size, nil
 }
 
-func (sf *simpleFileReader) Write(p []byte) (n int, err error) {
+func (sf *simpleFileReader) Write(_ []byte) (n int, err error) {
 	return 0, ErrReadOnlyFilesystem
 }
 

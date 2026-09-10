@@ -95,7 +95,7 @@ var (
 )
 
 // ReadDir reads the directory and generates a directory stream.
-func (n *dirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+func (n *dirNode) Readdir(_ context.Context) (fs.DirStream, syscall.Errno) {
 	children := n.Children()
 	r := make([]fuse.DirEntry, 0, len(children))
 	for name, child := range children {
@@ -115,7 +115,7 @@ func (n *dirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 var _ = fs.NodeLookuper((*dirNode)(nil))
 
 // Lookup finds the child specified by name in the current directory node.
-func (n *dirNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+func (n *dirNode) Lookup(_ context.Context, name string, _ *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	if child := n.GetChild(name); child != nil {
 		return child, 0
 	}
@@ -124,7 +124,7 @@ func (n *dirNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 
 var _ = fs.NodeGetattrer((*dirNode)(nil))
 
-func (n *dirNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func (n *dirNode) Getattr(_ context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Ino = n.StableAttr().Ino
 
 	modTime, modTimeNs, err := convertTimeToFuseAttr(n.modTime)
@@ -143,7 +143,7 @@ func (n *dirNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOu
 
 var _ = fs.NodeGetattrer((*fileNode)(nil))
 
-func (n *fileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func (n *fileNode) Getattr(_ context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	size, err := n.openable.SizeHint()
 	if err != nil {
 		return syscall.EIO
@@ -191,7 +191,7 @@ func convertTimeToFuseAttr(t time.Time) (time uint64, timeNs uint32, err error) 
 
 var _ = fs.NodeOpener((*fileNode)(nil))
 
-func (n *fileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+func (n *fileNode) Open(_ context.Context, _ uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	id := nextFileHandle.Add(1)
 	name := n.EmbeddedInode().Path(nil)
 	start := time.Now()
@@ -230,7 +230,7 @@ type readResult struct {
 
 var _ = fuse.ReadResult((*readResult)(nil))
 
-func (r *readResult) Bytes(buf []byte) ([]byte, fuse.Status) {
+func (r *readResult) Bytes(_ []byte) ([]byte, fuse.Status) {
 	return r.buf, fuse.Status(r.err)
 }
 
@@ -254,7 +254,7 @@ var _ = fs.FileReleaser((*file)(nil))
 
 // Release closes the reader the handle was opened with, which is what returns
 // its descriptors and pooled readers.
-func (f *file) Release(ctx context.Context) syscall.Errno {
+func (f *file) Release(_ context.Context) syscall.Errno {
 	defer openFiles.Add(-1)
 	slog.Debug("Close start", "handle", f.id, "name", f.name)
 	start := time.Now()
@@ -270,7 +270,7 @@ func (f *file) Release(ctx context.Context) syscall.Errno {
 
 var _ = fs.FileReader((*file)(nil))
 
-func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+func (f *file) Read(_ context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	slog.Debug("Read start", "handle", f.id, "name", f.name, "offset", off, "len", len(dest))
 	start := time.Now()
 

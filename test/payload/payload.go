@@ -81,7 +81,7 @@ func Write(dir string) error {
 }
 
 // WriteSized puts every source file in dir, at the given size.
-func WriteSized(dir string, size int64) error {
+func WriteSized(dir string, _ int64) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

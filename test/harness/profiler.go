@@ -81,7 +81,7 @@ type cpuProfile struct {
 // startCPU begins sampling /debug/pprof/profile for the expected window. The
 // request is issued in a background goroutine, so it starts alongside the read
 // (right after the "before" snapshot) without blocking it.
-func (p *Profiler) startCPU(ctx context.Context, tag string) *cpuProfile {
+func (p *Profiler) startCPU(_ context.Context, tag string) *cpuProfile {
 	if p == nil {
 		return nil
 	}
@@ -129,7 +129,7 @@ func (cp *cpuProfile) stop() {
 
 // heapProfile fetches the RUNNING process heap snapshot (outside the measured
 // window) and writes it to dir.
-func (p *Profiler) heapProfile(ctx context.Context, tag string) {
+func (p *Profiler) heapProfile(_ context.Context, tag string) {
 	if p == nil {
 		return
 	}
