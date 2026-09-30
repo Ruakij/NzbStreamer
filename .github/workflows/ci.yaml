@@ -4,9 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  # A CVE published after a merge is still our problem, so rescan daily.
-  schedule:
-    - cron: "0 4 * * *"
   workflow_dispatch:
 
 permissions:
