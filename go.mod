@@ -4,13 +4,13 @@ go 1.27.0
 
 require (
 	astuart.co/nntp v0.0.0-20240124040759-4b834862a3f8
-	github.com/agnivade/levenshtein v1.2.1
+	github.com/agnivade/levenshtein v1.2.2
 	github.com/arl/statsviz v0.8.2
 	github.com/bodgit/sevenzip v1.6.5
 	github.com/emersion/go-webdav v0.7.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/hanwen/go-fuse/v2 v2.12.0
-	github.com/nwaples/rardecode/v2 v2.4.4
+	github.com/nwaples/rardecode/v2 v2.4.5
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/sethvargo/go-envconfig v1.4.3
